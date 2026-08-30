@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { redactSecrets, looksLikeGitRepo, walkProjects, getEnvironmentTools } = require('./scan');
+const { redactSecrets, looksLikeGitRepo, walkProjects, getEnvironmentTools } = require('./scan.cjs');
 
 test('redactSecrets masks token/key/secret values, leaves others alone', () => {
   const input = {
