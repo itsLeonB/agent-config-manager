@@ -1,4 +1,4 @@
-import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
+import { HeadContent, Link, Scripts, createRootRoute } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { TanStackDevtools } from '@tanstack/react-devtools'
 
@@ -23,6 +23,14 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body>
+        <nav className="nav">
+          <Link to="/" activeProps={{ className: 'active' }} activeOptions={{ exact: true }}>
+            Dashboard
+          </Link>
+          <Link to="/projects" activeProps={{ className: 'active' }}>
+            Project scope
+          </Link>
+        </nav>
         {children}
         <TanStackDevtools
           config={{ position: 'bottom-right' }}
