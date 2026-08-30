@@ -23,7 +23,7 @@ export function McpList({ userScope }: { userScope: UserScope }) {
         <tbody>
           {entries.length === 0 ? (
             <tr>
-              <td className="muted">none</td>
+              <td className="muted" colSpan={3}>none</td>
             </tr>
           ) : (
             entries.map(([name, cfg]) => (

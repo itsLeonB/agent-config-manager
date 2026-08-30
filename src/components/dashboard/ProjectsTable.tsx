@@ -31,7 +31,7 @@ export function ProjectsTable({ projects }: { projects: Project[] }) {
         <tbody id="projects-body">
           {projects.length === 0 ? (
             <tr>
-              <td className="muted">none</td>
+              <td className="muted" colSpan={6}>none</td>
             </tr>
           ) : (
             projects.map((p) => {

@@ -11,7 +11,7 @@ export function Dashboard({ local, cloud }: DashboardData) {
     return (
       <>
         <h1>Agent Config Manager</h1>
-        <div className="meta">database/local.json not found. Run: node scan.js</div>
+        <div className="meta">database/local.json not found. Run: node scan.cjs</div>
       </>
     )
   }

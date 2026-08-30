@@ -33,8 +33,11 @@ function groupByMarketplace<T>(items: T[], marketplaceOf: (item: T) => string) {
 export function PluginsCompare({ userScope, cloud }: { userScope: UserScope; cloud: CloudData | null }) {
   const cloudLoaded = !!cloud
   const cloudPlugins = cloud?.plugins || []
-  const cloudByMarketplace = new Map(cloudPlugins.map((p) => [p.marketplace, p]))
-  const matchedMarketplaces = new Set<string>()
+  // Keyed by name+marketplace, not marketplace alone — a marketplace can list
+  // more than one plugin, and a marketplace-only key would let one silently
+  // overwrite another's entry in the map.
+  const cloudByComposite = new Map(cloudPlugins.map((p) => [`${p.name}@${p.marketplace}`, p]))
+  const cloudMarketplaces = new Set(cloudPlugins.map((p) => p.marketplace))
 
   const skillsByUserPlugin = new Map<string, Skill[]>()
   for (const s of userScope.skills) {
@@ -44,12 +47,14 @@ export function PluginsCompare({ userScope, cloud }: { userScope: UserScope; clo
     skillsByUserPlugin.get(key)!.push(s)
   }
 
+  // Grouping by marketplace is presentation only — it decides which rows
+  // share a header, not which cloud entries count as matched.
   const groups = groupByMarketplace(userScope.plugins, (p) => p.marketplace)
 
-  for (const [marketplace] of groups) {
-    if (cloudByMarketplace.has(marketplace)) matchedMarketplaces.add(marketplace)
-  }
-  const cloudOnly = cloudPlugins.filter((p) => !matchedMarketplaces.has(p.marketplace))
+  const matchedMarketplaces = new Set(
+    groups.map(([marketplace]) => marketplace).filter((marketplace) => cloudMarketplaces.has(marketplace)),
+  )
+  const cloudOnly = [...cloudByComposite.values()].filter((p) => !matchedMarketplaces.has(p.marketplace))
 
   return (
     <>
@@ -74,8 +79,10 @@ export function PluginsCompare({ userScope, cloud }: { userScope: UserScope; clo
             </tr>
           )}
           {groups.map(([marketplace, plugins]) => {
-            const cloudPlugin = cloudByMarketplace.get(marketplace)
-            const groupMissing = !cloudPlugin
+            // Representative cloud entry for this marketplace's description —
+            // display only; matched/cloud-only status comes from cloudMarketplaces.
+            const cloudPlugin = cloudPlugins.find((p) => p.marketplace === marketplace)
+            const groupMissing = !cloudMarketplaces.has(marketplace)
 
             return (
               <PluginGroup
