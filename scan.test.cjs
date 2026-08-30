@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { redactSecrets, looksLikeGitRepo, walkProjects, getEnvironmentTools } = require('./scan');
+const { redactSecrets, looksLikeGitRepo, walkProjects, getEnvironmentTools } = require('./scan.cjs');
 
 test('redactSecrets masks token/key/secret values, leaves others alone', () => {
   const input = {
@@ -32,6 +32,25 @@ test('redactSecrets does not mutate the input object', () => {
   const input = { token: 'abcdefgh' };
   redactSecrets(input);
   assert.strictEqual(input.token, 'abcdefgh');
+});
+
+test('redactSecrets masks Cookie and session keys too', () => {
+  const out = redactSecrets({ Cookie: 'sid=abcdef1234', session: 'xyzxyzxyz9999' });
+  assert.strictEqual(out.Cookie, '****1234');
+  assert.strictEqual(out.session, '****9999');
+});
+
+test('redactSecrets masks inline "--token=value" args in an array', () => {
+  const out = redactSecrets({ args: ['-y', 'some-mcp', '--token=abcdefgh1234'] });
+  assert.strictEqual(out.args[2], '--token=****1234');
+  assert.strictEqual(out.args[0], '-y');
+});
+
+test('redactSecrets masks a "--token value" pair split across two array elements', () => {
+  const out = redactSecrets({ args: ['--api-key', 'abcdefgh5678', '--verbose'] });
+  assert.strictEqual(out.args[0], '--api-key');
+  assert.strictEqual(out.args[1], '****5678');
+  assert.strictEqual(out.args[2], '--verbose');
 });
 
 test('walkProjects stops at a repo boundary and does not recurse into it', () => {

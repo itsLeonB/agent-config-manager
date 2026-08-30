@@ -7,9 +7,17 @@ const { execSync } = require('child_process');
 
 const HOME = os.homedir();
 const DATABASE_DIR = path.join(__dirname, 'database');
-const SECRET_KEY_RE = /token|key|secret|authorization|password|credential|bearer/i;
+const SECRET_KEY_RE = /token|key|secret|authorization|password|credential|bearer|cookie|session/i;
 const ENV_VAR_PLACEHOLDER_RE = /^\$\{[^}]+\}$/;
 const SKIP_DIR_RE = /^node_modules$|^\.git$/;
+// Matches inline `--token=value` / `TOKEN=value` style assignments in a single string.
+const INLINE_ASSIGNMENT_RE = /^(-{0,2}[\w-]*(?:token|key|secret|authorization|password|credential|bearer|cookie|session)[\w-]*=)(.+)$/i;
+// Matches a bare `--token` / `--api-key` style flag, whose value is the next array element.
+const SECRET_FLAG_RE = /^-{1,2}[\w-]*(?:token|key|secret|authorization|password|credential|bearer|cookie|session)[\w-]*$/i;
+
+function maskValue(v) {
+  return v.length > 4 ? '****' + v.slice(-4) : '[REDACTED]';
+}
 
 function readJsonSafe(filePath) {
   try {
@@ -20,15 +28,38 @@ function readJsonSafe(filePath) {
   }
 }
 
-// ponytail: only walks env/headers-shaped objects; does not scan inline
-// secrets embedded in command/args strings (e.g. "--token=xxx").
+// ponytail: catches "--token=xxx" and "--token xxx" shapes in command/args
+// arrays via regex heuristics; does not parse full shell-quoting edge cases.
+function redactArgsArray(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const v = args[i];
+    if (typeof v !== 'string') {
+      out.push(redactSecrets(v));
+      continue;
+    }
+    const inline = v.match(INLINE_ASSIGNMENT_RE);
+    if (inline && !ENV_VAR_PLACEHOLDER_RE.test(inline[2])) {
+      out.push(inline[1] + maskValue(inline[2]));
+      continue;
+    }
+    if (SECRET_FLAG_RE.test(v) && typeof args[i + 1] === 'string' && !ENV_VAR_PLACEHOLDER_RE.test(args[i + 1])) {
+      out.push(v, maskValue(args[i + 1]));
+      i++;
+      continue;
+    }
+    out.push(v);
+  }
+  return out;
+}
+
 function redactSecrets(obj) {
   if (obj === null || typeof obj !== 'object') return obj;
-  if (Array.isArray(obj)) return obj.map(redactSecrets);
+  if (Array.isArray(obj)) return redactArgsArray(obj);
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
     if (typeof v === 'string' && SECRET_KEY_RE.test(k) && !ENV_VAR_PLACEHOLDER_RE.test(v)) {
-      out[k] = v.length > 4 ? '****' + v.slice(-4) : '[REDACTED]';
+      out[k] = maskValue(v);
     } else {
       out[k] = redactSecrets(v);
     }
