@@ -1,0 +1,105 @@
+<meta charset="utf-8">
+<title>Agent Config Manager</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2e38;
+    --text: #e6e8ec;
+    --muted: #8a90a0;
+    --accent: #5b8cff;
+    --warn-bg: #3a2c14;
+    --warn-border: #7a5a1e;
+    --warn-text: #e8c479;
+    --danger: #e0554f;
+    --danger-bg: rgba(224, 85, 79, 0.16);
+    --success: #3fb950;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --border: #dde1e8;
+      --text: #1a1d23;
+      --muted: #626878;
+      --accent: #3358cc;
+      --warn-bg: #fff6e0;
+      --warn-border: #e8c479;
+      --warn-text: #6b5300;
+      --danger: #c0392b;
+      --danger-bg: rgba(192, 57, 43, 0.1);
+      --success: #2a8a43;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  h3 { font-size: 13px; margin: 0 0 12px; color: var(--muted); font-weight: 600; }
+  .count { color: var(--muted); font-weight: normal; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: normal; }
+  tr:last-child td { border-bottom: none; }
+  tr.group-row td { font-weight: 600; background: var(--border); }
+  tr.group-row td.missing { background: var(--danger-bg); }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 10px; font-size: 11px; background: var(--border); color: var(--muted); }
+  .badge.on { background: var(--accent); color: #fff; }
+  .banner { background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); border-radius: 6px; padding: 10px 12px; font-size: 13px; margin-bottom: 12px; }
+  code { background: var(--border); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  input#filter { width: 100%; padding: 8px 10px; margin-bottom: 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; }
+  .muted { color: var(--muted); }
+  #projects tr.hidden { display: none; }
+  td.missing { background: var(--danger-bg); }
+  .badge.missing-badge { background: var(--danger); color: #fff; }
+  .comment-input { width: 100%; margin-top: 4px; padding: 4px 6px; border-radius: 4px; border: 1px solid var(--danger); background: var(--bg); color: var(--text); font-size: 12px; }
+  th.col-user, th.col-cloud { border-left: 1px solid var(--border); }
+  td.col-user, td.col-cloud { border-left: 1px solid var(--border); }
+  .check-yes { color: var(--success); font-weight: 700; }
+  .check-no { color: var(--muted); }
+  pre.install-cmd { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 0; font-size: 12px; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .section-header h2 { margin: 0; }
+  .copy-btn { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 12px; cursor: pointer; }
+  .copy-btn:hover { border-color: var(--accent); }
+</style>
+
+<h1>Agent Config Manager</h1>
+<div class="meta" id="meta">Loading…</div>
+<div id="cloud-banner"></div>
+
+<section>
+  <h2>Plugins <span class="count" id="plugins-count"></span></h2>
+  <div id="plugins-compare"></div>
+</section>
+
+<section>
+  <h2>MCP servers <span class="count" id="mcp-count"></span></h2>
+  <div id="mcp-compare"></div>
+</section>
+
+<section>
+  <h2>Skills (standalone) <span class="count" id="skills-count"></span></h2>
+  <div id="skills-compare"></div>
+</section>
+
+<section>
+  <div class="section-header">
+    <h2>Environment tools <span class="count" id="env-tools-count"></span></h2>
+    <button class="copy-btn" id="copy-env-tools">Copy install commands</button>
+  </div>
+  <div id="env-tools"></div>
+
+  <h3 style="margin-top:20px">npx skills (global, vercel-labs/skills) <span class="count" id="npx-count"></span></h3>
+  <div id="npx-skills"></div>
+</section>
+
+<section>
+  <h2>Project scope <span class="count" id="project-count"></span></h2>
+  <input id="filter" type="text" placeholder="Filter projects by name…">
+  <div id="projects"></div>
+</section>
+
+<script src="app.js"></script>

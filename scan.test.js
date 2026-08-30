@@ -1,0 +1,99 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { redactSecrets, looksLikeGitRepo, walkProjects, getEnvironmentTools } = require('./scan');
+
+test('redactSecrets masks token/key/secret values, leaves others alone', () => {
+  const input = {
+    GITHUB_PERSONAL_ACCESS_TOKEN: 'ghp_abcdefgh1234',
+    Authorization: 'Bearer abcd1234wxyz',
+    apiKey: 'sk-abcdef123456',
+    NODE_ENV: 'production',
+    nested: { password: 'hunter2222' },
+  };
+  const out = redactSecrets(input);
+  assert.strictEqual(out.GITHUB_PERSONAL_ACCESS_TOKEN, '****1234');
+  assert.strictEqual(out.Authorization, '****wxyz');
+  assert.strictEqual(out.apiKey, '****3456');
+  assert.strictEqual(out.NODE_ENV, 'production');
+  assert.strictEqual(out.nested.password, '****2222');
+});
+
+test('redactSecrets leaves ${VAR} placeholders unmasked', () => {
+  const out = redactSecrets({ GITHUB_TOKEN: '${GITHUB_TOKEN}' });
+  assert.strictEqual(out.GITHUB_TOKEN, '${GITHUB_TOKEN}');
+});
+
+test('redactSecrets does not mutate the input object', () => {
+  const input = { token: 'abcdefgh' };
+  redactSecrets(input);
+  assert.strictEqual(input.token, 'abcdefgh');
+});
+
+test('walkProjects stops at a repo boundary and does not recurse into it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  try {
+    const repoA = path.join(root, 'org', 'repoA');
+    fs.mkdirSync(path.join(repoA, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(repoA, 'nested-repo', '.git'), { recursive: true });
+
+    const repoB = path.join(root, 'org', 'repoB');
+    fs.mkdirSync(path.join(repoB, '.git'), { recursive: true });
+
+    assert.ok(looksLikeGitRepo(repoA));
+    assert.ok(!looksLikeGitRepo(root));
+
+    const found = walkProjects(root).sort();
+    assert.deepStrictEqual(found, [repoA, repoB].sort());
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('walkProjects skips paths in skipPaths without descending into them', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  try {
+    const repoA = path.join(root, 'org', 'repoA');
+    fs.mkdirSync(path.join(repoA, '.git'), { recursive: true });
+
+    const skipped = path.join(root, 'org', 'skipped');
+    fs.mkdirSync(path.join(skipped, 'nested-repo', '.git'), { recursive: true });
+
+    const found = walkProjects(root, new Set([skipped]));
+    assert.deepStrictEqual(found, [repoA]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('getEnvironmentTools reports installedLocally from checkCommand exit code', () => {
+  const configPath = path.join(__dirname, 'database', 'env-tools.json');
+  const backup = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null;
+  try {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        tools: [
+          { id: 'present', name: 'Present Tool', checkCommand: 'true', installCommand: 'install-present' },
+          { id: 'absent', name: 'Absent Tool', checkCommand: 'false', installCommand: 'install-absent' },
+        ],
+      })
+    );
+    const tools = getEnvironmentTools();
+    assert.deepStrictEqual(
+      tools.map((t) => [t.id, t.installedLocally, t.installCommand]),
+      [
+        ['present', true, 'install-present'],
+        ['absent', false, 'install-absent'],
+      ]
+    );
+  } finally {
+    if (backup === null) fs.rmSync(configPath, { force: true });
+    else fs.writeFileSync(configPath, backup);
+  }
+});

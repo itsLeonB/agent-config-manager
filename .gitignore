@@ -1,0 +1,3 @@
+database/
+.claude/settings.local.json
+node_modules/
