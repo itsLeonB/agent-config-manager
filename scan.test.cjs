@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { redactSecrets, looksLikeGitRepo, walkProjects, getEnvironmentTools } = require('./scan.cjs');
+const { redactSecrets, looksLikeGitRepo, walkProjects, getEnvironmentTools, getProjectNpxSkills } = require('./scan.cjs');
 
 test('redactSecrets masks token/key/secret values, leaves others alone', () => {
   const input = {
@@ -84,6 +84,28 @@ test('walkProjects skips paths in skipPaths without descending into them', () =>
 
     const found = walkProjects(root, new Set([skipped]));
     assert.deepStrictEqual(found, [repoA]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('getProjectNpxSkills reads skill names from a project-root skills-lock.json', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  try {
+    fs.writeFileSync(
+      path.join(root, 'skills-lock.json'),
+      JSON.stringify({ version: 1, skills: { 'tanstack-router': {}, 'tanstack-start': {} } })
+    );
+    assert.deepStrictEqual(getProjectNpxSkills(root).sort(), ['tanstack-router', 'tanstack-start']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('getProjectNpxSkills returns an empty array when there is no lock file', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  try {
+    assert.deepStrictEqual(getProjectNpxSkills(root), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

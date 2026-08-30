@@ -32,6 +32,10 @@
 }
 * { box-sizing: border-box; }
 body { background: var(--bg); color: var(--text); font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 24px; }
+.nav { display: flex; gap: 16px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.nav a { color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 500; }
+.nav a:hover { color: var(--text); }
+.nav a.active { color: var(--accent); }
 h1 { font-size: 20px; margin: 0 0 4px; }
 .meta { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
 section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
@@ -63,3 +67,8 @@ pre.install-cmd { background: var(--bg); border: 1px solid var(--border); border
 .section-header h2 { margin: 0; }
 .copy-btn { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 12px; cursor: pointer; }
 .copy-btn:hover { border-color: var(--accent); }
+.mode-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
+.mode-toggle button { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 12px; cursor: pointer; }
+.mode-toggle button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.compare-pickers { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.compare-picker { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; }

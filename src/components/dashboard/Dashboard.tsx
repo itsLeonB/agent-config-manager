@@ -4,7 +4,6 @@ import { PluginsCompare } from './PluginsCompare'
 import { McpList } from './McpList'
 import { SkillsCompare } from './SkillsCompare'
 import { EnvironmentTools } from './EnvironmentTools'
-import { ProjectsTable } from './ProjectsTable'
 
 export function Dashboard({ local, cloud }: DashboardData) {
   if (!local) {
@@ -36,10 +35,6 @@ export function Dashboard({ local, cloud }: DashboardData) {
 
       <section>
         <EnvironmentTools tools={local.environmentTools} npx={local.npxSkillsGlobal} />
-      </section>
-
-      <section>
-        <ProjectsTable projects={local.projects} />
       </section>
     </>
   )
