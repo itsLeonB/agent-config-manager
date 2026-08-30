@@ -249,6 +249,15 @@ function listSkillsDir(dir) {
   });
 }
 
+// A project-scoped `npx skills add` invocation writes its lock file at the
+// project root (unlike the global one at ~/.agents/.skill-lock.json), so a
+// project's skills can be cross-checked against it to tell npx-managed
+// skills apart from ones added by hand.
+function getProjectNpxSkills(projectPath) {
+  const lock = readJsonSafe(path.join(projectPath, 'skills-lock.json'));
+  return lock && lock.skills ? Object.keys(lock.skills) : [];
+}
+
 function scanProject(projectPath, allInstalledPlugins) {
   const claudeSettings = readJsonSafe(path.join(projectPath, '.claude/settings.json'));
   const claudeSettingsLocal = readJsonSafe(path.join(projectPath, '.claude/settings.local.json'));
@@ -297,6 +306,7 @@ function scanProject(projectPath, allInstalledPlugins) {
     docsFile,
     skills,
     agentsSkills,
+    npxSkills: getProjectNpxSkills(projectPath),
     pluginInstalls,
     projectOverrides,
   };
@@ -365,6 +375,7 @@ module.exports = {
   getEnvironmentTools,
   looksLikeGitRepo,
   walkProjects,
+  getProjectNpxSkills,
   scanProject,
   assembleLocal,
 };

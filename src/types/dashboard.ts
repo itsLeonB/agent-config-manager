@@ -62,6 +62,7 @@ export interface Project {
   pluginInstalls: ProjectPluginInstall[]
   skills: ProjectSkillEntry[]
   agentsSkills: { name: string; linkedIntoClaudeSkills: boolean }[]
+  npxSkills: string[]
 }
 
 export interface UserScope {

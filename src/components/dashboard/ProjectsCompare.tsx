@@ -137,20 +137,34 @@ export function ProjectsCompare({ projects }: { projects: Project[] }) {
               )}
             />
           </section>
-          <section>
-            <CompareTable
-              title="Skills"
-              leftName={left.name}
-              rightName={right.name}
-              rows={buildRows(
-                left.skills,
-                right.skills,
-                (s) => s.name,
-                (s) => s.name,
-                (s) => (s.isSymlink ? 'linked' : 'standalone'),
-              )}
-            />
-          </section>
+          {(() => {
+            const isNpxSkill = (name: string) => left.npxSkills.includes(name) || right.npxSkills.includes(name)
+            const leftSkills = left.skills.filter((s) => !isNpxSkill(s.name))
+            const rightSkills = right.skills.filter((s) => !isNpxSkill(s.name))
+            const leftNpxSkills = left.skills.filter((s) => isNpxSkill(s.name))
+            const rightNpxSkills = right.skills.filter((s) => isNpxSkill(s.name))
+            const skillValue = (s: (typeof left.skills)[number]) => (s.isSymlink ? 'linked' : 'standalone')
+            return (
+              <>
+                <section>
+                  <CompareTable
+                    title="Skills"
+                    leftName={left.name}
+                    rightName={right.name}
+                    rows={buildRows(leftSkills, rightSkills, (s) => s.name, (s) => s.name, skillValue)}
+                  />
+                </section>
+                <section>
+                  <CompareTable
+                    title="npx skills"
+                    leftName={left.name}
+                    rightName={right.name}
+                    rows={buildRows(leftNpxSkills, rightNpxSkills, (s) => s.name, (s) => s.name, skillValue)}
+                  />
+                </section>
+              </>
+            )
+          })()}
         </>
       )}
     </>
