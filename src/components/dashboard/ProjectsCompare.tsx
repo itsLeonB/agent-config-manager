@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useNavigate, useSearch } from '@tanstack/react-router'
 import type { Project } from '../../types/dashboard'
 
 interface CompareRow {
@@ -88,18 +88,26 @@ function ProjectPicker({
 }
 
 export function ProjectsCompare({ projects }: { projects: Project[] }) {
-  const [leftPath, setLeftPath] = useState('')
-  const [rightPath, setRightPath] = useState('')
+  const { lhs, rhs } = useSearch({ from: '/projects' })
+  const navigate = useNavigate({ from: '/projects' })
 
-  const left = projects.find((p) => p.path === leftPath)
-  const right = projects.find((p) => p.path === rightPath)
+  const left = projects.find((p) => p.path === lhs)
+  const right = projects.find((p) => p.path === rhs)
 
   return (
     <>
       <div className="compare-pickers">
-        <ProjectPicker projects={projects} value={leftPath} onChange={setLeftPath} />
+        <ProjectPicker
+          projects={projects}
+          value={lhs ?? ''}
+          onChange={(path) => navigate({ search: (prev) => ({ ...prev, lhs: path || undefined }) })}
+        />
         <span className="muted">vs</span>
-        <ProjectPicker projects={projects} value={rightPath} onChange={setRightPath} />
+        <ProjectPicker
+          projects={projects}
+          value={rhs ?? ''}
+          onChange={(path) => navigate({ search: (prev) => ({ ...prev, rhs: path || undefined }) })}
+        />
       </div>
 
       {!left || !right ? (
