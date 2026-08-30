@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { getDashboardData } from '../server/dashboard.functions'
 import { ProjectsTable } from '../components/dashboard/ProjectsTable'
+import { ProjectsCompare } from '../components/dashboard/ProjectsCompare'
 
 export const Route = createFileRoute('/projects')({
   loader: () => getDashboardData(),
@@ -9,6 +11,7 @@ export const Route = createFileRoute('/projects')({
 
 function Projects() {
   const { local } = Route.useLoaderData()
+  const [mode, setMode] = useState<'table' | 'compare'>('table')
 
   if (!local) {
     return (
@@ -19,5 +22,17 @@ function Projects() {
     )
   }
 
-  return <ProjectsTable projects={local.projects} />
+  return (
+    <>
+      <div className="mode-toggle">
+        <button className={mode === 'table' ? 'active' : ''} onClick={() => setMode('table')}>
+          Table
+        </button>
+        <button className={mode === 'compare' ? 'active' : ''} onClick={() => setMode('compare')}>
+          Compare
+        </button>
+      </div>
+      {mode === 'table' ? <ProjectsTable projects={local.projects} /> : <ProjectsCompare projects={local.projects} />}
+    </>
+  )
 }

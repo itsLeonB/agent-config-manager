@@ -42,13 +42,25 @@ export interface NpxSkillsGlobal {
   lastSelectedAgents: string[]
 }
 
+export interface ProjectSkillEntry {
+  name: string
+  isSymlink: boolean
+  symlinkTarget?: string
+}
+
+export interface ProjectPluginInstall {
+  plugin: string
+  marketplace: string
+  version?: string
+}
+
 export interface Project {
   name: string
   path: string
   docsFile: string | null
-  mcpJson: Json | null
-  pluginInstalls: Json[]
-  skills: Skill[]
+  mcpJson: { mcpServers?: Record<string, McpServerConfig> } | null
+  pluginInstalls: ProjectPluginInstall[]
+  skills: ProjectSkillEntry[]
   agentsSkills: { name: string; linkedIntoClaudeSkills: boolean }[]
 }
 
