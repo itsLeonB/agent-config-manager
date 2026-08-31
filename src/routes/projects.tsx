@@ -1,20 +1,17 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { z } from 'zod'
 import { getDashboardData } from '../server/dashboard.functions'
 import { ProjectsTable } from '../components/dashboard/ProjectsTable'
 import { ProjectsCompare } from '../components/dashboard/ProjectsCompare'
 
-interface ProjectsSearch {
-  mode?: 'table' | 'compare'
-  lhs?: string
-  rhs?: string
-}
+const projectsSearchSchema = z.object({
+  mode: z.literal('compare').optional().catch(undefined),
+  lhs: z.string().optional().catch(undefined),
+  rhs: z.string().optional().catch(undefined),
+})
 
 export const Route = createFileRoute('/projects')({
-  validateSearch: (search: Record<string, unknown>): ProjectsSearch => ({
-    mode: search.mode === 'compare' ? 'compare' : undefined,
-    lhs: typeof search.lhs === 'string' ? search.lhs : undefined,
-    rhs: typeof search.rhs === 'string' ? search.rhs : undefined,
-  }),
+  validateSearch: projectsSearchSchema,
   loader: () => getDashboardData(),
   component: Projects,
 })

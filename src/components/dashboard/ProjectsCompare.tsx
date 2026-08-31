@@ -202,7 +202,7 @@ function NpxSkillsCompare({ left, right }: { left: Project; right: Project }) {
   }
 
   const handleCheckboxClick = (side: 'left' | 'right', key: string, e: React.MouseEvent<HTMLInputElement>) => {
-    const checked = (e.target as HTMLInputElement).checked
+    const checked = e.currentTarget.checked
     const setter = side === 'left' ? setSelectedForLeft : setSelectedForRight
     if (e.shiftKey && anchor && anchor.side === side) {
       setRangeChecked(setter, side, anchor.key, key, checked)
