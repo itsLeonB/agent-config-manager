@@ -106,3 +106,13 @@ locally so far.
 - Decide a deployment target and how `database/*.json` reaches it there.
 - Consider whether `scan.cjs` should become a TanStack Start server route
   (triggerable from the UI) instead of a separate manually-run CLI script.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (`itsLeonB/agent-config-manager`), managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`, created lazily by `/domain-modeling`. See `docs/agents/domain.md`.

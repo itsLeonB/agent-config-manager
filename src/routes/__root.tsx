@@ -13,6 +13,12 @@ export const Route = createRootRoute({
     ],
     links: [{ rel: 'stylesheet', href: appCss }],
   }),
+  notFoundComponent: () => (
+    <div style={{ padding: '2rem' }}>
+      <p>Page not found.</p>
+      <Link to="/">Go home</Link>
+    </div>
+  ),
   shellComponent: RootDocument,
 })
 
