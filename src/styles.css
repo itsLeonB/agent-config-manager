@@ -46,6 +46,7 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--muted); font-weight: normal; }
 tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: var(--border); }
 tr.group-row td { font-weight: 600; background: var(--border); }
 tr.group-row td.missing { background: var(--danger-bg); }
 .badge { display: inline-block; padding: 1px 6px; border-radius: 10px; font-size: 11px; background: var(--border); color: var(--muted); }

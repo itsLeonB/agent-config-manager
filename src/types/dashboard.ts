@@ -54,6 +54,13 @@ export interface ProjectPluginInstall {
   version?: string
 }
 
+
+export interface ProjectNpxSkill {
+  name: string
+  source?: string
+  sourceType?: string
+}
+
 export interface Project {
   name: string
   path: string
@@ -62,7 +69,7 @@ export interface Project {
   pluginInstalls: ProjectPluginInstall[]
   skills: ProjectSkillEntry[]
   agentsSkills: { name: string; linkedIntoClaudeSkills: boolean }[]
-  npxSkills: string[]
+  npxSkills: ProjectNpxSkill[]
 }
 
 export interface UserScope {

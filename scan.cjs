@@ -255,7 +255,12 @@ function listSkillsDir(dir) {
 // skills apart from ones added by hand.
 function getProjectNpxSkills(projectPath) {
   const lock = readJsonSafe(path.join(projectPath, 'skills-lock.json'));
-  return lock && lock.skills ? Object.keys(lock.skills) : [];
+  if (!lock || !lock.skills) return [];
+  return Object.entries(lock.skills).map(([name, meta]) => ({
+    name,
+    source: meta.source,
+    sourceType: meta.sourceType,
+  }));
 }
 
 function scanProject(projectPath, allInstalledPlugins) {

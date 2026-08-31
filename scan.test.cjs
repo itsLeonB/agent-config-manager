@@ -89,14 +89,24 @@ test('walkProjects skips paths in skipPaths without descending into them', () =>
   }
 });
 
-test('getProjectNpxSkills reads skill names from a project-root skills-lock.json', () => {
+test('getProjectNpxSkills reads skill name + source metadata from a project-root skills-lock.json', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
   try {
     fs.writeFileSync(
       path.join(root, 'skills-lock.json'),
-      JSON.stringify({ version: 1, skills: { 'tanstack-router': {}, 'tanstack-start': {} } })
+      JSON.stringify({
+        version: 1,
+        skills: {
+          'tanstack-router': { source: 'tanstack-skills/tanstack-skills', sourceType: 'github' },
+          'tanstack-start': { source: 'tanstack-skills/tanstack-skills', sourceType: 'github' },
+        },
+      })
     );
-    assert.deepStrictEqual(getProjectNpxSkills(root).sort(), ['tanstack-router', 'tanstack-start']);
+    const skills = getProjectNpxSkills(root).sort((a, b) => a.name.localeCompare(b.name));
+    assert.deepStrictEqual(skills, [
+      { name: 'tanstack-router', source: 'tanstack-skills/tanstack-skills', sourceType: 'github' },
+      { name: 'tanstack-start', source: 'tanstack-skills/tanstack-skills', sourceType: 'github' },
+    ]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
