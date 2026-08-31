@@ -93,11 +93,6 @@ function CompareTable({
 }
 
 
-// Project-scoped install: dropping `npx skills add`'s `-g` flag installs the
-// canonical copy into `<project>/.agents/skills/<name>` and symlinks
-// `.claude/skills/<name>` to it for Claude Code (confirmed against the
-// vercel-labs/skills installer) — mirrors the `-g` global command built in
-// scan.cjs's getNpxSkillsGlobal.
 // `skill.source`/`skill.name` come from another project's skills-lock.json —
 // untrusted input, since it belongs to whichever project is being compared,
 // not necessarily one the user wrote. Allowlist both before they reach a
@@ -110,7 +105,14 @@ const shellQuote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`
 function buildNpxInstallCommand(skill: ProjectNpxSkill): string | null {
   if (skill.sourceType !== 'github' || !skill.source) return null
   if (!SAFE_SOURCE_RE.test(skill.source) || !SAFE_NAME_RE.test(skill.name)) return null
-  return `npx skills add ${shellQuote(skill.source)} --skill ${shellQuote(skill.name)} -a claude-code -y`
+  // `npx skills add` only symlinks into an agent's skills dir (canonical copy
+  // in .agents/skills/<name>) when installing to 2+ agents with distinct
+  // skillsDirs — with a single agent it silently falls back to a plain copy,
+  // no .agents/skills involved (confirmed by reading node_modules/skills'
+  // CLI source: `uniqueDirs.size <= 1` forces `installMode = 'copy'`).
+  // codex's skillsDir IS .agents/skills, so adding it as a second target
+  // costs nothing extra and reliably forces symlink mode for claude-code.
+  return `npx skills add ${shellQuote(skill.source)} --skill ${shellQuote(skill.name)} -a claude-code -a codex -y`
 }
 
 function NpxCopyButton({

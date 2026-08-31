@@ -175,9 +175,14 @@ function getNpxSkillsGlobal() {
     }
     // Non-interactive `npx skills add` invocation (see vercel-labs/skills CLI
     // docs) that reproduces this exact skill install in a fresh environment.
+    // `-a codex` is along for the ride: the CLI only symlinks into an agent's
+    // skills dir when 2+ agents with distinct skillsDirs are targeted (a
+    // single agent silently falls back to a plain copy, no ~/.agents/skills
+    // involved) — codex's skillsDir IS ~/.agents/skills, so adding it costs
+    // nothing extra and reliably forces symlink mode for claude-code.
     const installCommand =
       meta.sourceType === 'github' && meta.source
-        ? `npx skills add ${meta.source} --skill "${name}" -g -a claude-code -y`
+        ? `npx skills add ${meta.source} --skill "${name}" -g -a claude-code -a codex -y`
         : null;
     return { name, ...meta, linkedToClaudeUserSkills, installCommand };
   });
