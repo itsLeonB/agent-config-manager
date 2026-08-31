@@ -1,12 +1,5 @@
 {
   "mcpServers": {
-    "context7": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp"
-      ]
-    },
     "serena": {
       "type": "stdio",
       "command": "serena",
@@ -15,9 +8,16 @@
         "--context",
         "claude-code",
         "--project",
-        "/home/leon/Projects/itsLeonB/agent-config-manager"
+        "${pwd}"
       ],
       "env": {}
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CONTEXT7_API_KEY}"
+      }
     }
   }
 }
