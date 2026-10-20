@@ -35,6 +35,19 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   kept in sync by hand, not derived from it. `mcpJson` / `pluginInstalls` need
   the recursive `Json` type because a server function's return type must be
   provably serializable, so `unknown` will not do.
+- **Rescan is a POST server function** (`rescan` in
+  `src/server/dashboard.functions.ts`). It spawns `scan.cjs` with
+  `process.execPath` — Bun under `bun run dev`, Node in the container — so one
+  code path covers both, awaits exit, and returns the new counts; the button
+  then invalidates the route loader so the page re-renders with no reload. A
+  failed scan returns `ok: false` and is never invalidated, so the previous
+  snapshot stays on screen. Concurrent callers join the in-flight scan instead
+  of starting a second scanner.
+- **Mutating server functions check the request origin**
+  (`src/server/origin-guard.ts`, unit-tested in `origin-guard.test.ts`), because
+  the scanner runs the configured env tool check commands as shell commands.
+  TanStack's default CSRF middleware also runs; the explicit guard is
+deliberate and does not lean on framework defaults.
 - **`scan.cjs` / `scan.test.cjs`** is an offline CLI data generator, not part of
   the app. It stays `.cjs` because `package.json` sets `"type": "module"` and
   the script uses `require()`.
@@ -51,6 +64,9 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
 - `database/` is gitignored and holds real scanned config. A fresh clone has no
   data until `node scan.cjs` runs once; until then the UI reads
   "database/local.json not found. Run: node scan.cjs".
+- `scan.cjs` and `database/` are resolved from `process.cwd()`, so the server
+  must run with the repo root as its working directory (true for `bun run dev`
+  and for the container).
 - `cloud.json` comes from the `/refresh-cloud` slash command (browser automation
   against claude.ai), not from any code in this repo.
 - No environment variables are required.
