@@ -10,7 +10,9 @@
     "generate-routes": "tsr generate",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "oxlint"
+    "lint": "oxlint",
+    "test": "node --test",
+    "start": "node tools/entrypoint.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.18",
@@ -20,6 +22,7 @@
     "@tanstack/react-start": "latest",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "srvx": "^1.0.6",
     "tailwindcss": "^4.1.18",
     "zod": "4.5.4"
   },

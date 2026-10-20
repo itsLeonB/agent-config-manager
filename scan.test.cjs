@@ -5,7 +5,24 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { redactSecrets, looksLikeGitRepo, walkProjects, getEnvironmentTools, getProjectNpxSkills } = require('./scan.cjs');
+const {
+  redactSecrets,
+  looksLikeGitRepo,
+  walkProjects,
+  getEnvironmentTools,
+  getProjectNpxSkills,
+  resolveConfig,
+  loadConfig,
+  scanOnce,
+  resolveScanInterval,
+  createCloudSync,
+} = require('./scan.cjs');
+const { openStore } = require('./src/server/store.cjs');
+
+function tempStoreFile() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  return path.join(dir, 'dashboard.db');
+}
 
 test('redactSecrets masks token/key/secret values, leaves others alone', () => {
   const input = {
@@ -122,29 +139,260 @@ test('getProjectNpxSkills returns an empty array when there is no lock file', ()
 });
 
 test('getEnvironmentTools reports installedLocally from checkCommand exit code', () => {
-  const configPath = path.join(__dirname, 'database', 'env-tools.json');
-  const backup = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null;
+  const tools = getEnvironmentTools([
+    { id: 'present', name: 'Present Tool', checkCommand: 'true', installCommand: 'install-present' },
+    { id: 'absent', name: 'Absent Tool', checkCommand: 'false', installCommand: 'install-absent' },
+  ]);
+  assert.deepStrictEqual(
+    tools.map((t) => [t.id, t.installedLocally, t.installCommand]),
+    [
+      ['present', true, 'install-present'],
+      ['absent', false, 'install-absent'],
+    ]
+  );
+});
+
+test('resolveConfig prefers the stored value, then the environment, then the default', () => {
+  assert.deepStrictEqual(
+    resolveConfig(
+      { projectsRoot: '/stored/projects', scanIntervalMinutes: 30, skipPaths: ['/stored/skip'], environmentTools: [{ id: 'stored' }] },
+      { PROJECTS_ROOT: '/env/projects', SCAN_INTERVAL_MINUTES: '5' }
+    ),
+    {
+      projectsRoot: '/stored/projects',
+      scanIntervalMinutes: 30,
+      skipPaths: ['/stored/skip'],
+      environmentTools: [{ id: 'stored' }],
+    }
+  );
+
+  assert.deepStrictEqual(resolveConfig({}, { PROJECTS_ROOT: '/env/projects', SCAN_INTERVAL_MINUTES: '5' }), {
+    projectsRoot: '/env/projects',
+    scanIntervalMinutes: 5,
+    skipPaths: [],
+    environmentTools: [],
+  });
+});
+
+test('resolveConfig falls back to ~/Projects, 15 minutes and empty lists when nothing is configured', () => {
+  assert.deepStrictEqual(resolveConfig({}, {}), {
+    projectsRoot: path.join(os.homedir(), 'Projects'),
+    scanIntervalMinutes: 15,
+    skipPaths: [],
+    environmentTools: [],
+  });
+});
+
+test('loadConfig reads the four values a settings save writes', () => {
+  const db = tempStoreFile();
+  const writer = openStore(db);
+  writer.writeConfig('projectsRoot', '/stored/projects');
+  writer.writeConfig('scanIntervalMinutes', 3);
+  writer.writeConfig('skipPaths', ['/stored/skip']);
+  writer.writeConfig('environmentTools', [
+    { id: 'tool-a', name: 'Tool A', checkCommand: 'true', installCommand: 'install-a' },
+  ]);
+  writer.close();
+
+  assert.deepStrictEqual(loadConfig(db, { PROJECTS_ROOT: '/env/projects', SCAN_INTERVAL_MINUTES: '9' }), {
+    projectsRoot: '/stored/projects',
+    scanIntervalMinutes: 3,
+    skipPaths: ['/stored/skip'],
+    environmentTools: [{ id: 'tool-a', name: 'Tool A', checkCommand: 'true', installCommand: 'install-a' }],
+  });
+});
+
+test('an install that has never been configured scans with defaults against an empty store', () => {
+  const db = tempStoreFile();
+  const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
   try {
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        tools: [
-          { id: 'present', name: 'Present Tool', checkCommand: 'true', installCommand: 'install-present' },
-          { id: 'absent', name: 'Absent Tool', checkCommand: 'false', installCommand: 'install-absent' },
-        ],
-      })
-    );
-    const tools = getEnvironmentTools();
-    assert.deepStrictEqual(
-      tools.map((t) => [t.id, t.installedLocally, t.installCommand]),
-      [
-        ['present', true, 'install-present'],
-        ['absent', false, 'install-absent'],
-      ]
-    );
+    const config = loadConfig(db, {});
+    assert.deepStrictEqual(config, {
+      projectsRoot: path.join(os.homedir(), 'Projects'),
+      scanIntervalMinutes: 15,
+      skipPaths: [],
+      environmentTools: [],
+    });
+
+    // The temp root keeps the scan offline and fast; everything else is the default.
+    const result = scanOnce({ ...config, projectsRoot }, db);
+    assert.deepStrictEqual(result.projects, []);
+
+    const reader = openStore(db);
+    try {
+      assert.strictEqual(typeof reader.readLatestSnapshot('local').generatedAt, 'string');
+    } finally {
+      reader.close();
+    }
   } finally {
-    if (backup === null) fs.rmSync(configPath, { force: true });
-    else fs.writeFileSync(configPath, backup);
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
+  }
+});
+
+// A temp data directory plus its own database, so each test owns the cloud
+// file and the snapshots it produces.
+function cloudFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  const store = openStore(path.join(dir, 'dashboard.db'));
+  return {
+    dir,
+    store,
+    cloudPath: path.join(dir, 'cloud.json'),
+    sync: createCloudSync(dir),
+    writeCloud(value, mtimeMs) {
+      fs.writeFileSync(
+        path.join(dir, 'cloud.json'),
+        typeof value === 'string' ? value : JSON.stringify(value)
+      );
+      const seconds = mtimeMs / 1000;
+      fs.utimesSync(path.join(dir, 'cloud.json'), seconds, seconds);
+    },
+    cleanup() {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+const CLOUD = {
+  lastUpdated: '2026-01-01T00:00:00.000Z',
+  plugins: [{ name: 'code-review', marketplace: 'official' }],
+  skills: [{ name: 'grilling' }],
+};
+
+// The error log is expected here; silence it so a passing run stays readable.
+function withoutStderrLog(fn) {
+  const original = console.error;
+  console.error = () => {};
+  try {
+    return fn();
+  } finally {
+    console.error = original;
+  }
+}
+
+test('a cloud file already on disk at first scan is stored immediately', () => {
+  const f = cloudFixture();
+  try {
+    f.writeCloud(CLOUD, 1_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+    assert.deepStrictEqual(f.store.readLatestSnapshot('cloud'), CLOUD);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a missing cloud file stores nothing and is not an error', () => {
+  const f = cloudFixture();
+  try {
+    assert.strictEqual(f.sync(f.store), false);
+    assert.strictEqual(f.store.readLatestSnapshot('cloud'), null);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('an unchanged cloud file stores no new cloud snapshot', () => {
+  const f = cloudFixture();
+  try {
+    f.writeCloud(CLOUD, 1_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+
+    assert.strictEqual(f.sync(f.store), false);
+    // Rewritten with identical contents but a newer mtime: still no duplicate.
+    f.writeCloud(CLOUD, 2_000_000);
+    assert.strictEqual(f.sync(f.store), false);
+    assert.deepStrictEqual(f.store.readLatestSnapshot('cloud'), CLOUD);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a changed cloud file stores exactly one new cloud snapshot', () => {
+  const f = cloudFixture();
+  try {
+    f.writeCloud(CLOUD, 1_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+
+    const refreshed = { ...CLOUD, lastUpdated: '2026-02-02T00:00:00.000Z', skills: [] };
+    f.writeCloud(refreshed, 2_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+    assert.strictEqual(f.sync(f.store), false);
+    assert.deepStrictEqual(f.store.readLatestSnapshot('cloud'), refreshed);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a malformed cloud file keeps the previous cloud snapshot', () => {
+  const f = cloudFixture();
+  try {
+    f.writeCloud(CLOUD, 1_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+
+    withoutStderrLog(() => {
+      f.writeCloud('{"lastUpdated": "half-writ', 2_000_000);
+      assert.strictEqual(f.sync(f.store), false);
+
+      // Parseable JSON of the wrong shape is rejected the same way.
+      f.writeCloud({ lastUpdated: 42, plugins: 'nope' }, 3_000_000);
+      assert.strictEqual(f.sync(f.store), false);
+    });
+
+    assert.deepStrictEqual(f.store.readLatestSnapshot('cloud'), CLOUD);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('resolveScanInterval prefers the stored config over the environment variable', () => {
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 30 }, { SCAN_INTERVAL_MINUTES: '5' }), 30);
+});
+
+test('resolveScanInterval uses the environment variable when no stored value exists', () => {
+  assert.strictEqual(resolveScanInterval({}, { SCAN_INTERVAL_MINUTES: '5' }), 5);
+  assert.strictEqual(resolveScanInterval({ skipPaths: [] }, { SCAN_INTERVAL_MINUTES: '45' }), 45);
+});
+
+test('resolveScanInterval falls back to 15 minutes when nothing is configured', () => {
+  assert.strictEqual(resolveScanInterval({}, {}), 15);
+  assert.strictEqual(resolveScanInterval(undefined, {}), 15);
+  assert.strictEqual(resolveScanInterval({}, { SCAN_INTERVAL_MINUTES: '' }), 15);
+});
+
+test('resolveScanInterval falls back past zero, negative and non-numeric values', () => {
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 0 }, { SCAN_INTERVAL_MINUTES: '8' }), 8);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: -4 }, { SCAN_INTERVAL_MINUTES: '8' }), 8);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 'abc' }, { SCAN_INTERVAL_MINUTES: '8' }), 8);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 0 }, { SCAN_INTERVAL_MINUTES: 'nope' }), 15);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: -1 }, { SCAN_INTERVAL_MINUTES: '0' }), 15);
+});
+
+test('resolveScanInterval floors a valid sub-minute value at one minute', () => {
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 0.2 }, {}), 1);
+  assert.strictEqual(resolveScanInterval({}, { SCAN_INTERVAL_MINUTES: '0.5' }), 1);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 2.9 }, {}), 2);
+});
+
+test('a scan writes the snapshot to the database and creates no local JSON file', () => {
+  const db = tempStoreFile();
+  const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  try {
+    scanOnce(
+      { projectsRoot, scanIntervalMinutes: 15, skipPaths: [], environmentTools: [] },
+      db
+    );
+
+    const reader = openStore(db);
+    try {
+      assert.strictEqual(typeof reader.readLatestSnapshot('local').generatedAt, 'string');
+    } finally {
+      reader.close();
+    }
+
+    assert.ok(!fs.existsSync(path.join(path.dirname(db), 'local.json')));
+  } finally {
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
+    fs.rmSync(path.dirname(db), { recursive: true, force: true });
   }
 });

@@ -30,7 +30,15 @@ function groupByMarketplace<T>(items: T[], marketplaceOf: (item: T) => string) {
   return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
 }
 
-export function PluginsCompare({ userScope, cloud }: { userScope: UserScope; cloud: CloudData | null }) {
+export function PluginsCompare({
+  userScope,
+  cloud,
+  comments,
+}: {
+  userScope: UserScope
+  cloud: CloudData | null
+  comments: Record<string, string>
+}) {
   const cloudLoaded = !!cloud
   const cloudPlugins = cloud?.plugins || []
   // Keyed by name+marketplace, not marketplace alone — a marketplace can list
@@ -92,6 +100,7 @@ export function PluginsCompare({ userScope, cloud }: { userScope: UserScope; clo
                 cloudPlugin={cloudPlugin}
                 groupMissing={groupMissing}
                 cloudLoaded={cloudLoaded}
+                comments={comments}
                 skillsByUserPlugin={skillsByUserPlugin}
               />
             )
@@ -105,6 +114,7 @@ export function PluginsCompare({ userScope, cloud }: { userScope: UserScope; clo
                   id="group:cloud-only"
                   placeholder="Why missing from user scope?"
                   cloudLoaded={true}
+                  comments={comments}
                   extraClass="col-user"
                 />
                 <td className="col-cloud" />
@@ -132,6 +142,7 @@ function PluginGroup({
   cloudPlugin,
   groupMissing,
   cloudLoaded,
+  comments,
   skillsByUserPlugin,
 }: {
   marketplace: string
@@ -139,6 +150,7 @@ function PluginGroup({
   cloudPlugin: { name: string; marketplace: string; description?: string } | undefined
   groupMissing: boolean
   cloudLoaded: boolean
+  comments: Record<string, string>
   skillsByUserPlugin: Map<string, Skill[]>
 }) {
   return (
@@ -154,6 +166,7 @@ function PluginGroup({
             id={`group:${marketplace}`}
             placeholder="Why missing from cloud? e.g. all claude-plugins-official entries cannot be installed in cloud"
             cloudLoaded={cloudLoaded}
+            comments={comments}
             extraClass="col-cloud"
           />
         </tr>

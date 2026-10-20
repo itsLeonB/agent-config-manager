@@ -73,3 +73,24 @@ pre.install-cmd { background: var(--bg); border: 1px solid var(--border); border
 .mode-toggle button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .compare-pickers { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .compare-picker { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; }
+.rescan { margin-bottom: 24px; }
+.rescan-btn { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 12px; cursor: pointer; }
+.rescan-btn:hover:not(:disabled) { border-color: var(--accent); }
+.rescan-btn:disabled { color: var(--muted); cursor: progress; }
+.rescan-error { margin: 12px 0 0; }
+.settings-field { margin-bottom: 14px; }
+.settings-field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.settings-field input, .settings-field textarea, .settings-table input { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; font-family: inherit; }
+.settings-field input:focus, .settings-field textarea:focus, .settings-table input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.settings-field input[aria-invalid="true"], .settings-field textarea[aria-invalid="true"] { border-color: var(--danger); }
+.field-error { color: var(--danger); font-size: 12px; margin: 4px 0 0; }
+.settings-table td { vertical-align: middle; }
+.settings-summary { background: var(--danger-bg); border: 1px solid var(--danger); border-radius: 6px; padding: 10px 12px; margin-bottom: 16px; font-size: 13px; }
+.settings-summary:focus { outline: 2px solid var(--danger); outline-offset: 1px; }
+.settings-summary p { margin: 0 0 6px; }
+.settings-summary ul { margin: 0; padding-left: 18px; }
+.settings-summary a { color: var(--danger); }
+.settings-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+.settings-save { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-size: 13px; cursor: pointer; }
+.settings-save:disabled { background: var(--border); border-color: var(--border); color: var(--muted); cursor: progress; }
+.settings-saved { color: var(--success); font-size: 13px; }

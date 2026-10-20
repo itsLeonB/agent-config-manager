@@ -13,10 +13,14 @@ locally is this ticket's job.
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A written recipe covers service type, build source, both mounts, the interval variable, the host-path variable, the published port, and the Traefik host rule with HTTPS off
-- [ ] The deployment consumes artifacts that already exist in the repo; no manual image surgery
-- [ ] Local proof recorded: the service returns traffic again after a container restart, and after a Docker daemon restart where that is permitted, with no manual start
-- [ ] The HTTPS limitation for `.localhost` and the published-port fallback are documented, including what to do when the loopback port bind is refused
-- [ ] No machine-specific path is baked into the image
+- [x] A written recipe covers service type, build source, both mounts, the interval variable, the host-path variable, the published port, and the Traefik host rule with HTTPS off
+- [x] The deployment consumes artifacts that already exist in the repo; no manual image surgery
+- [x] Local proof recorded: the service returns traffic again after a container restart, and after a Docker daemon restart where that is permitted, with no manual start
+- [x] The HTTPS limitation for `.localhost` and the published-port fallback are documented, including what to do when the loopback port bind is refused
+- [x] No machine-specific path is baked into the image
+
+## Comments
+
+Resolved on `feat/dokploy-sqlite-dashboard`. `docs/deploy-dokploy.md` + local restart/crash proof; published port 3100 because Dokploy owns 3000. Operator clicks in Dokploy remain.

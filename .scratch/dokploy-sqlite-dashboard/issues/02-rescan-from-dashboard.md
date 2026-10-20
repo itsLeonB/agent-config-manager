@@ -9,10 +9,14 @@ comes from the dashboard's own origin.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The control triggers a scan and the page shows the new snapshot without a manual reload
-- [ ] The control shows progress while scanning and cannot be fired twice concurrently
-- [ ] A scan failure surfaces an error and the previous snapshot stays displayed
-- [ ] A mutating request from a foreign origin is rejected; the guard is unit-tested for same-origin (allowed), cross-origin (rejected), and carrying neither origin nor a same-origin fetch indicator (rejected)
-- [ ] Works both under the dev server and inside the container
+- [x] The control triggers a scan and the page shows the new snapshot without a manual reload
+- [x] The control shows progress while scanning and cannot be fired twice concurrently
+- [x] A scan failure surfaces an error and the previous snapshot stays displayed
+- [x] A mutating request from a foreign origin is rejected; the guard is unit-tested for same-origin (allowed), cross-origin (rejected), and carrying neither origin nor a same-origin fetch indicator (rejected)
+- [x] Works both under the dev server and inside the container
+
+## Comments
+
+Resolved on `feat/dokploy-sqlite-dashboard`. `rescan` POST server function with in-flight join, pending/error UI, same-origin guard. Guard later re-based on `PUBLIC_ORIGIN` in the review pass.

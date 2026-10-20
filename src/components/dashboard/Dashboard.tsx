@@ -1,16 +1,19 @@
 import type { DashboardData } from '../../types/dashboard'
 import { CloudBanner } from './CloudBanner'
+import { EmptyState } from './EmptyState'
+import { RescanButton } from './RescanButton'
 import { PluginsCompare } from './PluginsCompare'
 import { McpList } from './McpList'
 import { SkillsCompare } from './SkillsCompare'
 import { EnvironmentTools } from './EnvironmentTools'
 
-export function Dashboard({ local, cloud }: DashboardData) {
+export function Dashboard({ local, cloud, comments }: DashboardData) {
   if (!local) {
     return (
       <>
-        <h1>Agent Config Manager</h1>
-        <div className="meta">database/local.json not found. Run: node scan.cjs</div>
+        <EmptyState title="Agent Config Manager" />
+        <RescanButton />
+        <CloudBanner cloud={cloud} />
       </>
     )
   }
@@ -19,10 +22,11 @@ export function Dashboard({ local, cloud }: DashboardData) {
     <>
       <h1>Agent Config Manager</h1>
       <div className="meta">Generated {local.generatedAt}</div>
+      <RescanButton />
       <CloudBanner cloud={cloud} />
 
       <section>
-        <PluginsCompare userScope={local.userScope} cloud={cloud} />
+        <PluginsCompare userScope={local.userScope} cloud={cloud} comments={comments} />
       </section>
 
       <section>
@@ -30,7 +34,7 @@ export function Dashboard({ local, cloud }: DashboardData) {
       </section>
 
       <section>
-        <SkillsCompare userScope={local.userScope} cloud={cloud} />
+        <SkillsCompare userScope={local.userScope} cloud={cloud} comments={comments} />
       </section>
 
       <section>

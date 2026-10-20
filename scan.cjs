@@ -4,9 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
+const { openStore } = require('./src/server/store.cjs');
 
 const HOME = os.homedir();
 const DATABASE_DIR = path.join(__dirname, 'database');
+const STORE_FILE = path.join(DATABASE_DIR, 'dashboard.db');
+const CLOUD_FILE = 'cloud.json';
+const DEFAULT_SCAN_INTERVAL_MINUTES = 15;
 const SECRET_KEY_RE = /token|key|secret|authorization|password|credential|bearer|cookie|session/i;
 const ENV_VAR_PLACEHOLDER_RE = /^\$\{[^}]+\}$/;
 const SKIP_DIR_RE = /^node_modules$|^\.git$/;
@@ -189,19 +193,121 @@ function getNpxSkillsGlobal() {
   return { skills, lastSelectedAgents: lock.lastSelectedAgents || [] };
 }
 
-function getSkipPaths() {
-  const config = readJsonSafe(path.join(DATABASE_DIR, 'scan-config.json'));
-  return new Set((config && config.skipPaths) || []);
+// Stored config wins over the environment variable, which wins over the
+// default; a zero, negative or non-numeric value falls through to the next
+// source, and the winner is floored at one minute so it cannot spin the loop.
+function resolveScanInterval(storedConfig, env = {}) {
+  const candidates = [
+    storedConfig && storedConfig.scanIntervalMinutes,
+    env && env.SCAN_INTERVAL_MINUTES,
+  ];
+  for (const candidate of candidates) {
+    const minutes = parseIntervalMinutes(candidate);
+    if (minutes !== null) return Math.max(1, Math.floor(minutes));
+  }
+  return DEFAULT_SCAN_INTERVAL_MINUTES;
+}
+
+function parseIntervalMinutes(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+// Stored settings win over the environment variable, which wins over the default,
+// and the whole thing is re-read at scan time so a save applies on the next tick.
+function resolveConfig(stored = {}, env = {}) {
+  return {
+    projectsRoot: firstNonEmptyString(stored.projectsRoot, env.PROJECTS_ROOT) || path.join(HOME, 'Projects'),
+    scanIntervalMinutes: resolveScanInterval(stored, env),
+    skipPaths: Array.isArray(stored.skipPaths) ? stored.skipPaths : [],
+    environmentTools: Array.isArray(stored.environmentTools) ? stored.environmentTools : [],
+  };
+}
+
+function firstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  }
+  return null;
+}
+
+// Reads the four config keys the settings page writes. An install that has never
+// been configured has no rows, so every value falls through to its default.
+function loadConfig(storeFile = STORE_FILE, env = process.env) {
+  const store = openStore(storeFile);
+  try {
+    return resolveConfig(
+      {
+        projectsRoot: store.readConfig('projectsRoot'),
+        scanIntervalMinutes: store.readConfig('scanIntervalMinutes'),
+        skipPaths: store.readConfig('skipPaths'),
+        environmentTools: store.readConfig('environmentTools'),
+      },
+      env
+    );
+  } finally {
+    store.close();
+  }
+}
+
+// The /refresh-cloud command writes cloud.json into the data directory; that
+// file is the only cloud input. The last-seen mtime lives in the returned
+// closure, and starts empty so a file already on disk is ingested on the first
+// call — at process start or on the next tick, one code path.
+function createCloudSync(dir = DATABASE_DIR) {
+  let lastMtimeMs = null;
+
+  return function syncCloudSnapshot(store) {
+    const filePath = path.join(dir, CLOUD_FILE);
+    let mtimeMs;
+    try {
+      mtimeMs = fs.statSync(filePath).mtimeMs;
+    } catch {
+      return false; // no cloud file yet; any stored cloud snapshot stays served
+    }
+    if (mtimeMs === lastMtimeMs) return false;
+    // Record the attempt even when the file is unusable, so one bad write is
+    // logged once instead of on every tick.
+    lastMtimeMs = mtimeMs;
+
+    const data = readJsonSafe(filePath);
+    if (!isCloudData(data)) {
+      console.error(`Ignoring malformed ${CLOUD_FILE}; keeping the previous cloud snapshot.`);
+      return false;
+    }
+    // A restart re-reads a file it already stored; identical contents are not
+    // worth another snapshot row.
+    if (JSON.stringify(store.readLatestSnapshot('cloud')) === JSON.stringify(data)) return false;
+
+    store.saveSnapshot('cloud', data);
+    console.log(`Cloud snapshot stored from ${CLOUD_FILE} (last updated ${data.lastUpdated}).`);
+    return true;
+  };
+}
+
+// cloud.json comes from an agent-driven browser scrape, so its shape is not
+// guaranteed: anything else must never reach the Cloud section.
+function isCloudData(value) {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof value.lastUpdated === 'string' &&
+    Array.isArray(value.plugins) &&
+    Array.isArray(value.skills)
+  );
 }
 
 // Tools that live outside the plugin/MCP/skill system (standalone CLIs,
-// marker files) but still need to be set up in every environment —
-// tracked via database/env-tools.json so new ones can be added by editing
-// config, not code.
-function getEnvironmentTools() {
-  const config = readJsonSafe(path.join(DATABASE_DIR, 'env-tools.json'));
-  const tools = (config && config.tools) || [];
-  return tools.map((t) => {
+// marker files) but still need to be set up in every environment. The list
+// comes from the stored settings; each check command runs as a shell command.
+function getEnvironmentTools(configuredTools) {
+  return configuredTools.map((t) => {
     let installedLocally = false;
     try {
       execSync(t.checkCommand, { stdio: 'ignore', timeout: 5000 });
@@ -322,7 +428,7 @@ function scanProject(projectPath, allInstalledPlugins) {
   };
 }
 
-function assembleLocal(projectsRoot) {
+function assembleLocal(projectsRoot, config = {}) {
   const installedPlugins = getInstalledPlugins();
   const { enabledPlugins, extraKnownMarketplaces } = getEnabledPluginsFromSettings();
 
@@ -333,7 +439,7 @@ function assembleLocal(projectsRoot) {
       enabled: Boolean(enabledPlugins[`${p.plugin}@${p.marketplace}`]),
     }));
 
-  const projectPaths = walkProjects(projectsRoot, getSkipPaths());
+  const projectPaths = walkProjects(projectsRoot, new Set(config.skipPaths));
   const projects = projectPaths.map((p) => scanProject(p, installedPlugins));
 
   return {
@@ -345,17 +451,26 @@ function assembleLocal(projectsRoot) {
       skills: getUserSkills(plugins),
     },
     npxSkillsGlobal: getNpxSkillsGlobal(),
-    environmentTools: getEnvironmentTools(),
+    environmentTools: getEnvironmentTools(config.environmentTools || []),
     projects,
   };
 }
 
-function main() {
-  const projectsRoot = process.argv[2] || path.join(HOME, 'Projects');
-  const result = assembleLocal(projectsRoot);
-
-  fs.mkdirSync(DATABASE_DIR, { recursive: true });
-  fs.writeFileSync(path.join(DATABASE_DIR, 'local.json'), JSON.stringify(result, null, 2));
+function scanOnce(config, storeFile = STORE_FILE, syncCloud) {
+  const store = openStore(storeFile);
+  // Callers that scan repeatedly pass one closure so the last-seen mtime survives the
+  // tick; a one-off scan makes its own beside the store it writes to.
+  const syncCloudSnapshot = syncCloud ?? createCloudSync(path.dirname(storeFile));
+  let result;
+  try {
+    // Cloud ingestion is independent of the local scan, so it runs first: a
+    // local scan failure must not hold back a pending cloud refresh.
+    syncCloudSnapshot(store);
+    result = assembleLocal(config.projectsRoot, config);
+    store.saveSnapshot('local', result);
+  } finally {
+    store.close();
+  }
 
   console.log(
     `Scanned: ${result.userScope.plugins.length} plugins, ` +
@@ -363,8 +478,48 @@ function main() {
       `${result.userScope.skills.length} user skills, ` +
       `${result.npxSkillsGlobal.skills.length} npx-skills, ` +
       `${result.environmentTools.filter((t) => t.installedLocally).length}/${result.environmentTools.length} env tools installed, ` +
-      `${result.projects.length} projects -> database/local.json`
+      `${result.projects.length} projects -> database/dashboard.db`
   );
+  return result;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Container mode: scan immediately so the first page load has data, then
+// rescan every interval. Config is resolved per tick, so saving settings takes
+// effect without a restart. A failed scan is logged and retried on the next
+// tick rather than killing the process, so the previous snapshot stays served.
+async function runScanLoop(getConfig) {
+  // One closure for the whole loop: the tick only re-reads cloud.json when its mtime moved.
+  const syncCloud = createCloudSync(path.dirname(STORE_FILE));
+  for (;;) {
+    let minutes = DEFAULT_SCAN_INTERVAL_MINUTES;
+    try {
+      const config = getConfig();
+      minutes = config.scanIntervalMinutes;
+      scanOnce(config, STORE_FILE, syncCloud);
+    } catch (error) {
+      console.error(`Scan failed, keeping the previous snapshot: ${error.message}`);
+    }
+    await sleep(minutes * 60 * 1000);
+  }
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  // A positional argument still overrides the stored projects root for one run.
+  const argRoot = args.find((arg) => !arg.startsWith('--'));
+  const getConfig = () => {
+    const config = loadConfig();
+    return argRoot === undefined ? config : { ...config, projectsRoot: argRoot };
+  };
+  if (args.includes('--loop')) {
+    return runScanLoop(getConfig);
+  }
+  scanOnce(getConfig());
+  return undefined;
 }
 
 if (require.main === module) {
@@ -381,11 +536,15 @@ module.exports = {
   getUserMcpServers,
   getUserSkills,
   getNpxSkillsGlobal,
-  getSkipPaths,
+  resolveConfig,
+  loadConfig,
+  resolveScanInterval,
+  createCloudSync,
   getEnvironmentTools,
   looksLikeGitRepo,
   walkProjects,
   getProjectNpxSkills,
   scanProject,
   assembleLocal,
+  scanOnce,
 };

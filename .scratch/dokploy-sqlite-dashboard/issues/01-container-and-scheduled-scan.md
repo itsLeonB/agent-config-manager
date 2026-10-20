@@ -12,11 +12,15 @@ absolute path.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The image builds from the repo and starts with nothing beyond the two directory attachments
-- [ ] The first page load after start shows real data, not the "no data, run the scanner" placeholder
-- [ ] A new snapshot appears automatically after one interval with no user action
-- [ ] Interval resolution is unit-tested: stored config wins over the environment variable, which wins over the default; zero, negative and non-numeric values fall back and are floored at one minute
-- [ ] A scan killed mid-write leaves the previous snapshot intact and readable
-- [ ] A `test` script exists and runs every suite with `node --test`; no new test dependency added
+- [x] The image builds from the repo and starts with nothing beyond the two directory attachments
+- [x] The first page load after start shows real data, not the "no data, run the scanner" placeholder
+- [x] A new snapshot appears automatically after one interval with no user action
+- [x] Interval resolution is unit-tested: stored config wins over the environment variable, which wins over the default; zero, negative and non-numeric values fall back and are floored at one minute
+- [x] A scan killed mid-write leaves the previous snapshot intact and readable
+- [x] A `test` script exists and runs every suite with `node --test`; no new test dependency added
+
+## Comments
+
+Resolved on `feat/dokploy-sqlite-dashboard`. Dockerfile (Bun build → node:22-slim), `HOST_HOME`, same-path ro home mount, scan-at-start + per-tick interval loop, atomic snapshot write, `test` script. 21 scanner tests at the time.
