@@ -8,3 +8,77 @@ Before editing files for a substantial task:
 - Monorepos: when working across packages, run the skill check from the workspace root and prefer the local skill for the package being changed.
 - Multiple matches: prefer the most specific local skill for the package or concern you are changing; load additional skills only when the task spans multiple packages or concerns.
 <!-- intent-skills:end -->
+
+# agent-config-manager
+
+Dashboard that inventories a Claude Code setup — plugins, MCP servers, skills,
+environment tools, project scope — across the local machine and the claude.ai
+cloud. [README.md](README.md) covers what it does and how to run it.
+
+Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
+
+## Architecture
+
+- **Rendering is TanStack Start** — React 19 + TypeScript, file-based routing
+  under `src/routes/`. The previous version was a static `index.html` + `app.js`
+  using hand-written DOM string templates; the React structure deliberately
+  mirrors that page's modularity (one component per original render function in
+  `src/components/dashboard/`, composed by `Dashboard.tsx`) rather than
+  inventing new structure.
+- **Data loading is server-only.** `src/server/dashboard.server.ts` reads
+  `database/local.json` / `database/cloud.json` via `node:fs`;
+  `dashboard.functions.ts` wraps it in a `createServerFn`; the index route's
+  `loader` calls that. Loaders are isomorphic (they also run on the client), so
+  filesystem access belongs behind `createServerFn`, and a loader must not
+  self-fetch a relative URL during SSR.
+- **`src/types/dashboard.ts`** hand-mirrors the JSON shapes `scan.cjs` emits —
+  kept in sync by hand, not derived from it. `mcpJson` / `pluginInstalls` need
+  the recursive `Json` type because a server function's return type must be
+  provably serializable, so `unknown` will not do.
+- **`scan.cjs` / `scan.test.cjs`** is an offline CLI data generator, not part of
+  the app. It stays `.cjs` because `package.json` sets `"type": "module"` and
+  the script uses `require()`.
+- **Tailwind v4 is wired but unused.** The dashboard keeps its original
+  hand-written CSS (dark/light via `prefers-color-scheme`, no toggle) for
+  pixel-identical UX. Leave `src/styles.css` for future pages; there is no
+  theme toggle or Google Fonts import to restore.
+- **Per-browser state only.** The "missing" comments (`src/lib/comments.ts`)
+  and the copy-install-script button (`src/lib/install-script.ts`) use
+  localStorage and the clipboard. There is no backend write.
+
+## Gotchas
+
+- `database/` is gitignored and holds real scanned config. A fresh clone has no
+  data until `node scan.cjs` runs once; until then the UI reads
+  "database/local.json not found. Run: node scan.cjs".
+- `cloud.json` comes from the `/refresh-cloud` slash command (browser automation
+  against claude.ai), not from any code in this repo.
+- No environment variables are required.
+- TanStack Devtools in `src/routes/__root.tsx` are stripped from production
+  builds by `@tanstack/devtools-vite`. No `removeDevtoolsOnBuild` config needed.
+
+## Deployment
+
+Not deployed; this app has only run locally. `bun run build` emits
+`dist/client` + `dist/server` (Node SSR). A target needs `database/*.json` on
+its disk, or the data-loading layer swapped for another source — undecided.
+
+## Next steps
+
+- Pick a deployment target, and how `database/*.json` reaches it.
+- Decide whether `scan.cjs` becomes a server route the UI can trigger, instead
+  of a manually-run CLI script.
+
+## Agent skills
+
+### Issue tracker
+
+Local markdown under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`, created lazily by `/domain-modeling`. See `docs/agents/domain.md`.

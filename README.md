@@ -24,7 +24,7 @@ command. It uses browser automation to scrape claude.ai and writes
 `database/cloud.json`. This step is agent-driven, not part of `scan.cjs`.
 
 Run the dashboard (TanStack Start dev server reads `database/*.json` from
-disk via a server function — see [CLAUDE.md](CLAUDE.md)):
+disk via a server function — see [AGENTS.md](AGENTS.md)):
 
 ```
 bun install
