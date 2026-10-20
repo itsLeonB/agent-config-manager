@@ -42,13 +42,42 @@ test('a mutation from a foreign origin is rejected', () => {
   assert.equal(isSameOriginMutationRequest(request), false)
 })
 
-test('a mutation behind the proxy is allowed when the forwarded host is the site origin', () => {
+test('forwarded headers do not widen the allowlist for a foreign origin', () => {
   const request = new Request('http://10.0.0.5:3000/settings', {
     headers: {
-      origin: 'http://acm.localhost',
-      'x-forwarded-host': 'acm.localhost',
-      'x-forwarded-proto': 'http',
+      origin: 'https://evil.example',
+      'x-forwarded-host': 'evil.example',
+      'x-forwarded-proto': 'https',
+      'sec-fetch-site': 'same-origin',
     },
   })
+  assert.equal(isSameOriginMutationRequest(request), false)
+})
+
+test('PUBLIC_ORIGIN widens the allowlist for a proxied deployment', (t) => {
+  const previous = process.env.PUBLIC_ORIGIN
+  process.env.PUBLIC_ORIGIN = 'http://acm.localhost'
+  t.after(() => {
+    if (previous === undefined) delete process.env.PUBLIC_ORIGIN
+    else process.env.PUBLIC_ORIGIN = previous
+  })
+
+  const request = new Request('http://10.0.0.5:3000/settings', {
+    headers: { origin: 'http://acm.localhost', 'sec-fetch-site': 'same-origin' },
+  })
   assert.equal(isSameOriginMutationRequest(request), true)
+})
+
+test('an empty PUBLIC_ORIGIN adds nothing', (t) => {
+  const previous = process.env.PUBLIC_ORIGIN
+  process.env.PUBLIC_ORIGIN = '   '
+  t.after(() => {
+    if (previous === undefined) delete process.env.PUBLIC_ORIGIN
+    else process.env.PUBLIC_ORIGIN = previous
+  })
+
+  const request = new Request('http://10.0.0.5:3000/settings', {
+    headers: { origin: 'http://acm.localhost', 'sec-fetch-site': 'same-origin' },
+  })
+  assert.equal(isSameOriginMutationRequest(request), false)
 })

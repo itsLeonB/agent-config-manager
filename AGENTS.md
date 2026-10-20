@@ -26,13 +26,16 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   `src/components/dashboard/`, composed by `Dashboard.tsx`) rather than
   inventing new structure.
 - **Data loading is server-only.** `src/server/dashboard.server.ts` reads the newest
-  stored scan snapshot through `src/server/store.cjs` — the only module that touches
-  `node:sqlite`, plain CJS so the TypeScript app imports it and `scan.cjs` requires it — for
-  both the local and the cloud snapshot; `scan.cjs` stores a `'cloud'` snapshot whenever
-  `database/cloud.json`'s modification time changes. The helper
+  stored scan snapshot through `src/server/store.cjs` for both the local and the cloud
+  snapshot; `scan.cjs` stores a `'cloud'` snapshot when `database/cloud.json`'s
+  modification time changes **and** its content differs from the latest stored snapshot. The helper
   wraps all this in a `createServerFn`; the index route's `loader` calls that. Loaders are
   isomorphic (they also run on the client), so filesystem access belongs behind
   `createServerFn`, and a loader must not self-fetch a relative URL during SSR.
+- **`src/server/store.cjs` is the only module that touches `node:sqlite`.** It stays plain
+  CJS so the TypeScript app can load it and `scan.cjs` can require it, and it holds
+  everything the app persists: scan snapshots, the `config` rows behind `/settings`, and
+  the comments.
 - **`src/types/dashboard.ts`** hand-mirrors the JSON shapes `scan.cjs` emits —
   kept in sync by hand, not derived from it. `mcpJson` / `pluginInstalls` need
   the recursive `Json` type because a server function's return type must be
@@ -49,10 +52,24 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   (`src/server/origin-guard.ts`, unit-tested in `origin-guard.test.ts`), because
   the scanner runs the configured env tool check commands as shell commands.
   TanStack's default CSRF middleware also runs; the explicit guard is
-deliberate and does not lean on framework defaults.
+  deliberate and does not lean on framework defaults. Its allowlist is only
+  `new URL(request.url).origin` plus `PUBLIC_ORIGIN`, never `x-forwarded-*`: a foreign page
+  can send its own `Origin` with matching forwarded headers, so those headers cannot
+  whitelist anything.
+- **Settings live in the store's `config` table.** `src/routes/settings.tsx` renders
+  `src/components/settings/SettingsForm.tsx`; the values are read and written by
+  `src/server/settings.server.ts` behind the POST server function in
+  `src/server/settings.functions.ts`. `src/lib/settings.ts` holds the zod schemas the server
+  validates with and the draft/validate helpers the form runs on blur, so both sides agree.
+  The scanner re-reads the keys at the start of every tick, so a save needs no restart; the
+  defaults are mirrored in `scan.cjs`'s `resolveConfig` (marked `shortcut:`).
 - **`scan.cjs` / `scan.test.cjs`** is an offline CLI data generator, not part of
   the app. It stays `.cjs` because `package.json` sets `"type": "module"` and
   the script uses `require()`.
+- **The container runs `tools/entrypoint.mjs`**, which points `HOME` at `HOST_HOME`, starts
+  `scan.cjs --loop`, and stops so the container restarts if that loop exits — a dead scanner
+  would otherwise serve silently stale data. It then imports `tools/serve.mjs`, which serves
+  `dist/client` and `dist/server` through `srvx` on `PORT` / `HOST`.
 - **Tailwind v4 is wired but unused.** The dashboard keeps its original
   hand-written CSS (dark/light via `prefers-color-scheme`, no toggle) for
   pixel-identical UX. Leave `src/styles.css` for future pages; there is no
@@ -82,7 +99,8 @@ deliberate and does not lean on framework defaults.
 - `cloud.json` comes from the `/refresh-cloud` slash command (browser automation
   against claude.ai), not from any code in this repo; the scanner only ingests it. A
   malformed file is ignored and the previous cloud snapshot stays served.
-- No environment variables are required.
+- No environment variables are required to run locally. `PUBLIC_ORIGIN` is
+  required once a proxy fronts the server (see `src/server/origin-guard.ts`).
 - TanStack Devtools in `src/routes/__root.tsx` are stripped from production
   builds by `@tanstack/devtools-vite`. No `removeDevtoolsOnBuild` config needed.
 

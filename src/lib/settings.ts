@@ -5,6 +5,9 @@ export type SettingsField = 'projectsRoot' | 'scanIntervalMinutes' | 'skipPaths'
 export interface FieldError {
   field: SettingsField
   message: string
+  // The environment-tools row the error belongs to, so the summary can link to that row
+  // instead of the whole area. Absent on errors from the server and from other fields.
+  toolIndex?: number
 }
 
 const absolutePath = (value: string) => value.startsWith('/')
@@ -56,6 +59,9 @@ export type Settings = z.infer<typeof settingsSchema>
 
 // The form holds raw text; this is what the user is typing, before validation.
 export interface ToolDraft {
+  // Identity of the row itself, which is not the stored tool id: that one still follows the
+  // name, so it changes while the name is being typed and cannot key a React list.
+  rowKey: string
   name: string
   checkCommand: string
   installCommand: string
@@ -73,7 +79,8 @@ export function toDraft(settings: Settings): SettingsDraft {
     projectsRoot: settings.projectsRoot,
     scanIntervalMinutes: String(settings.scanIntervalMinutes),
     skipPaths: settings.skipPaths.join('\n'),
-    tools: settings.environmentTools.map(({ name, checkCommand, installCommand }) => ({
+    tools: settings.environmentTools.map(({ id, name, checkCommand, installCommand }) => ({
+      rowKey: id,
       name,
       checkCommand,
       installCommand,
@@ -126,9 +133,7 @@ export function validateDraft(draft: SettingsDraft): FieldError[] {
   return parsed.error.issues.map((issue) => {
     const field = fieldForPath(issue.path)
     const toolIndex = field === 'environmentTools' ? Number(issue.path[1]) : Number.NaN
-    return {
-      field,
-      message: Number.isInteger(toolIndex) ? `Tool ${String(toolIndex + 1)}: ${issue.message}` : issue.message,
-    }
+    if (!Number.isInteger(toolIndex)) return { field, message: issue.message }
+    return { field, message: `Tool ${String(toolIndex + 1)}: ${issue.message}`, toolIndex }
   })
 }
