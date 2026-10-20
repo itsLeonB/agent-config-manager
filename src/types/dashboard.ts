@@ -86,6 +86,17 @@ export interface LocalData {
   projects: Project[]
 }
 
+export interface ScanCounts {
+  generatedAt: string
+  plugins: number
+  mcpServers: number
+  skills: number
+  projects: number
+}
+
+// A failed scan leaves the previous snapshot on disk, so the UI keeps showing it.
+export type RescanResult = { ok: true; counts: ScanCounts } | { ok: false; error: string }
+
 export interface CloudPlugin {
   name: string
   marketplace: string

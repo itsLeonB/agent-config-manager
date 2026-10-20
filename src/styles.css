@@ -73,3 +73,8 @@ pre.install-cmd { background: var(--bg); border: 1px solid var(--border); border
 .mode-toggle button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .compare-pickers { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .compare-picker { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; }
+.rescan { margin-bottom: 24px; }
+.rescan-btn { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 12px; cursor: pointer; }
+.rescan-btn:hover:not(:disabled) { border-color: var(--accent); }
+.rescan-btn:disabled { color: var(--muted); cursor: progress; }
+.rescan-error { margin: 12px 0 0; }

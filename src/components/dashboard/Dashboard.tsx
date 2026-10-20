@@ -1,5 +1,6 @@
 import type { DashboardData } from '../../types/dashboard'
 import { CloudBanner } from './CloudBanner'
+import { RescanButton } from './RescanButton'
 import { PluginsCompare } from './PluginsCompare'
 import { McpList } from './McpList'
 import { SkillsCompare } from './SkillsCompare'
@@ -11,6 +12,7 @@ export function Dashboard({ local, cloud }: DashboardData) {
       <>
         <h1>Agent Config Manager</h1>
         <div className="meta">database/local.json not found. Run: node scan.cjs</div>
+        <RescanButton />
       </>
     )
   }
@@ -19,6 +21,7 @@ export function Dashboard({ local, cloud }: DashboardData) {
     <>
       <h1>Agent Config Manager</h1>
       <div className="meta">Generated {local.generatedAt}</div>
+      <RescanButton />
       <CloudBanner cloud={cloud} />
 
       <section>
