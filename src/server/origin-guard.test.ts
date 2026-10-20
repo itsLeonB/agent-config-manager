@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { isSameOriginRequest } from './origin-guard.ts'
+import { isSameOriginRequest, isSameOriginMutationRequest } from './origin-guard.ts'
 
 const ALLOWED = ['http://localhost:3000']
 
@@ -26,4 +26,29 @@ test('request with neither origin nor a same-origin fetch indicator is rejected'
 
 test('request with no origin and a non same-origin fetch indicator is rejected', () => {
   assert.equal(isSameOriginRequest(null, 'cross-site', ALLOWED), false)
+})
+
+test('a mutation from the dashboard origin is allowed', () => {
+  const request = new Request('http://localhost:3000/settings', {
+    headers: { origin: 'http://localhost:3000', 'sec-fetch-site': 'same-origin' },
+  })
+  assert.equal(isSameOriginMutationRequest(request), true)
+})
+
+test('a mutation from a foreign origin is rejected', () => {
+  const request = new Request('http://localhost:3000/settings', {
+    headers: { origin: 'https://evil.example', 'sec-fetch-site': 'same-origin' },
+  })
+  assert.equal(isSameOriginMutationRequest(request), false)
+})
+
+test('a mutation behind the proxy is allowed when the forwarded host is the site origin', () => {
+  const request = new Request('http://10.0.0.5:3000/settings', {
+    headers: {
+      origin: 'http://acm.localhost',
+      'x-forwarded-host': 'acm.localhost',
+      'x-forwarded-proto': 'http',
+    },
+  })
+  assert.equal(isSameOriginMutationRequest(request), true)
 })

@@ -12,10 +12,18 @@ const {
   getEnvironmentTools,
   getProjectNpxSkills,
   readJsonSafe,
-  readScanConfig,
+  resolveConfig,
+  loadConfig,
+  scanOnce,
   resolveScanInterval,
   writeJsonAtomic,
 } = require('./scan.cjs');
+const { openStore } = require('./src/server/store.cjs');
+
+function tempStoreFile() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  return path.join(dir, 'dashboard.db');
+}
 
 test('redactSecrets masks token/key/secret values, leaves others alone', () => {
   const input = {
@@ -132,54 +140,93 @@ test('getProjectNpxSkills returns an empty array when there is no lock file', ()
 });
 
 test('getEnvironmentTools reports installedLocally from checkCommand exit code', () => {
-  const configPath = path.join(__dirname, 'database', 'env-tools.json');
-  const backup = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null;
-  try {
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        tools: [
-          { id: 'present', name: 'Present Tool', checkCommand: 'true', installCommand: 'install-present' },
-          { id: 'absent', name: 'Absent Tool', checkCommand: 'false', installCommand: 'install-absent' },
-        ],
-      })
-    );
-    const tools = getEnvironmentTools();
-    assert.deepStrictEqual(
-      tools.map((t) => [t.id, t.installedLocally, t.installCommand]),
-      [
-        ['present', true, 'install-present'],
-        ['absent', false, 'install-absent'],
-      ]
-    );
-  } finally {
-    if (backup === null) fs.rmSync(configPath, { force: true });
-    else fs.writeFileSync(configPath, backup);
-  }
+  const tools = getEnvironmentTools([
+    { id: 'present', name: 'Present Tool', checkCommand: 'true', installCommand: 'install-present' },
+    { id: 'absent', name: 'Absent Tool', checkCommand: 'false', installCommand: 'install-absent' },
+  ]);
+  assert.deepStrictEqual(
+    tools.map((t) => [t.id, t.installedLocally, t.installCommand]),
+    [
+      ['present', true, 'install-present'],
+      ['absent', false, 'install-absent'],
+    ]
+  );
 });
 
-test('readScanConfig reads scanIntervalMinutes and skipPaths from a config directory', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
-  try {
-    fs.writeFileSync(
-      path.join(dir, 'scan-config.json'),
-      JSON.stringify({ scanIntervalMinutes: 7, skipPaths: ['/tmp/skip'] })
-    );
-    const config = readScanConfig(dir);
-    assert.strictEqual(config.scanIntervalMinutes, 7);
-    assert.deepStrictEqual(config.skipPaths, ['/tmp/skip']);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveConfig prefers the stored value, then the environment, then the default', () => {
+  assert.deepStrictEqual(
+    resolveConfig(
+      { projectsRoot: '/stored/projects', scanIntervalMinutes: 30, skipPaths: ['/stored/skip'], environmentTools: [{ id: 'stored' }] },
+      { PROJECTS_ROOT: '/env/projects', SCAN_INTERVAL_MINUTES: '5' }
+    ),
+    {
+      projectsRoot: '/stored/projects',
+      scanIntervalMinutes: 30,
+      skipPaths: ['/stored/skip'],
+      environmentTools: [{ id: 'stored' }],
+    }
+  );
+
+  assert.deepStrictEqual(resolveConfig({}, { PROJECTS_ROOT: '/env/projects', SCAN_INTERVAL_MINUTES: '5' }), {
+    projectsRoot: '/env/projects',
+    scanIntervalMinutes: 5,
+    skipPaths: [],
+    environmentTools: [],
+  });
 });
 
-test('readScanConfig returns an empty object when there is no config file', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+test('resolveConfig falls back to ~/Projects, 15 minutes and empty lists when nothing is configured', () => {
+  assert.deepStrictEqual(resolveConfig({}, {}), {
+    projectsRoot: path.join(os.homedir(), 'Projects'),
+    scanIntervalMinutes: 15,
+    skipPaths: [],
+    environmentTools: [],
+  });
+});
+
+test('loadConfig reads the four values a settings save writes', () => {
+  const db = tempStoreFile();
+  const writer = openStore(db);
+  writer.writeConfig('projectsRoot', '/stored/projects');
+  writer.writeConfig('scanIntervalMinutes', 3);
+  writer.writeConfig('skipPaths', ['/stored/skip']);
+  writer.writeConfig('environmentTools', [
+    { id: 'tool-a', name: 'Tool A', checkCommand: 'true', installCommand: 'install-a' },
+  ]);
+  writer.close();
+
+  assert.deepStrictEqual(loadConfig(db, { PROJECTS_ROOT: '/env/projects', SCAN_INTERVAL_MINUTES: '9' }), {
+    projectsRoot: '/stored/projects',
+    scanIntervalMinutes: 3,
+    skipPaths: ['/stored/skip'],
+    environmentTools: [{ id: 'tool-a', name: 'Tool A', checkCommand: 'true', installCommand: 'install-a' }],
+  });
+});
+
+test('an install that has never been configured scans with defaults against an empty store', () => {
+  const db = tempStoreFile();
+  const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
   try {
-    assert.deepStrictEqual(readScanConfig(dir), {});
+    const config = loadConfig(db, {});
+    assert.deepStrictEqual(config, {
+      projectsRoot: path.join(os.homedir(), 'Projects'),
+      scanIntervalMinutes: 15,
+      skipPaths: [],
+      environmentTools: [],
+    });
+
+    // The temp root keeps the scan offline and fast; everything else is the default.
+    const result = scanOnce({ ...config, projectsRoot }, db);
+    assert.deepStrictEqual(result.projects, []);
+
+    const reader = openStore(db);
+    try {
+      assert.strictEqual(typeof reader.readLatestSnapshot('local').generatedAt, 'string');
+    } finally {
+      reader.close();
+    }
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
   }
 });
 

@@ -86,29 +86,23 @@ The data directory stays the host's `database/`, so `local.json` and
 - Project scanning treats any directory containing `.git` as a project
   boundary and does not recurse further into it, so nested checkouts inside
   a repo (if any) aren't scanned separately.
-- `database/scan-config.json` lists absolute paths to skip entirely during
-  project-scope scanning (not descended into, not written to `local.json`),
-  and the rescan interval. Edit it by hand:
-  ```json
-  { "skipPaths": ["/home/user/Projects/some-repo"], "scanIntervalMinutes": 15 }
-  ```
-  Each rescan resolves its interval from the stored `scanIntervalMinutes`
-  first, then `SCAN_INTERVAL_MINUTES`, then a 15-minute default, floored at
-  one minute — so changing the value here takes effect on the next tick with
-  no restart. Snapshots are written to a temp file and renamed into place, so
-  a scan interrupted mid-write leaves the previous snapshot readable.
-- `database/env-tools.json` lists standalone tools to track outside the
-  plugin/MCP/skill system — each with a `checkCommand` (run locally via the
-  shell; exit code 0 means installed) and an `installCommand` shown as-is in
-  the Environment tools section for setting up a cloud/remote session. Add
-  more by editing this file, no code changes needed:
-  ```json
-  { "tools": [{ "id": "", "name": "", "checkCommand": "", "installCommand": "" }] }
-  ```
+- The `skip paths` and `scan interval` values live in the database `config`
+  table and are edited on the `/settings` page (skip paths are absolute paths
+  not descended into, and not written to the snapshot). Each rescan resolves
+  its interval from the stored `scanIntervalMinutes` first, then
+  `SCAN_INTERVAL_MINUTES`, then a 15-minute default, floored at one minute —
+  so saving takes effect on the next tick with no restart. An install that has
+  never been configured has no config rows and scans `~/Projects` every 15
+  minutes. An interrupted scan leaves the previous snapshot readable, because
+  a snapshot is committed in one transaction.
+- The environment tools list is also stored config, edited on `/settings`:
+  each tool has a `checkCommand` (run locally via the shell; exit code 0 means
+  installed) and an `installCommand` shown as-is in the Environment tools
+  section for setting up a cloud/remote session. The tool id follows its name.
   npx skills is a subsection of Environment tools, not its own section —
   each `npx skills` entry gets a per-skill Cloud install command,
   auto-generated from `~/.agents/.skill-lock.json` (no config needed, it's
-  derived, not hand-maintained like `env-tools.json`): `npx skills add
+  derived, not stored config like the env tools): `npx skills add
   <source> --skill "<name>" -g -a claude-code -y` (per the vercel-labs/skills
   CLI docs — `-g` installs at user/global scope, `-a claude-code` targets
   Claude Code, `-y` skips confirmation prompts for non-interactive/CI use).
