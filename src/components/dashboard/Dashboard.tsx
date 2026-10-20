@@ -6,7 +6,7 @@ import { McpList } from './McpList'
 import { SkillsCompare } from './SkillsCompare'
 import { EnvironmentTools } from './EnvironmentTools'
 
-export function Dashboard({ local, cloud }: DashboardData) {
+export function Dashboard({ local, cloud, comments }: DashboardData) {
   if (!local) {
     return (
       <>
@@ -25,7 +25,7 @@ export function Dashboard({ local, cloud }: DashboardData) {
       <CloudBanner cloud={cloud} />
 
       <section>
-        <PluginsCompare userScope={local.userScope} cloud={cloud} />
+        <PluginsCompare userScope={local.userScope} cloud={cloud} comments={comments} />
       </section>
 
       <section>
@@ -33,7 +33,7 @@ export function Dashboard({ local, cloud }: DashboardData) {
       </section>
 
       <section>
-        <SkillsCompare userScope={local.userScope} cloud={cloud} />
+        <SkillsCompare userScope={local.userScope} cloud={cloud} comments={comments} />
       </section>
 
       <section>

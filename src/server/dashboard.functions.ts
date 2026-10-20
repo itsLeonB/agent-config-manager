@@ -1,13 +1,14 @@
 import { createServerFn } from '@tanstack/react-start'
 import { getRequest } from '@tanstack/react-start/server'
-import { readCloudData, readLocalData, runScan } from './dashboard.server'
+import { z } from 'zod'
+import { readCloudData, readComments, readLocalData, runScan, writeComment } from './dashboard.server'
 import { isSameOriginRequest } from './origin-guard'
 import type { DashboardData, RescanResult } from '../types/dashboard'
 
 export const getDashboardData = createServerFn({ method: 'GET' }).handler(
   async (): Promise<DashboardData> => {
     const [local, cloud] = await Promise.all([readLocalData(), readCloudData()])
-    return { local, cloud }
+    return { local, cloud, comments: readComments() }
   },
 )
 
@@ -24,13 +25,31 @@ function allowedOrigins(request: Request): string[] {
   return origins
 }
 
-export const rescan = createServerFn({ method: 'POST' }).handler(async (): Promise<RescanResult> => {
+// A mutating function is trusted only when the request names this site's own origin.
+function isFromDashboard(): boolean {
   const request = getRequest()
-  const sameOrigin = isSameOriginRequest(
+  return isSameOriginRequest(
     request.headers.get('origin'),
     request.headers.get('sec-fetch-site'),
     allowedOrigins(request),
   )
-  if (!sameOrigin) return { ok: false, error: 'Rejected: request did not come from the dashboard.' }
+}
+
+export const rescan = createServerFn({ method: 'POST' }).handler(async (): Promise<RescanResult> => {
+  if (!isFromDashboard()) return { ok: false, error: 'Rejected: request did not come from the dashboard.' }
   return runScan()
 })
+
+const commentInput = z.object({
+  category: z.string().min(1),
+  id: z.string().min(1),
+  text: z.string(),
+})
+
+export const saveComment = createServerFn({ method: 'POST' })
+  .validator(commentInput)
+  .handler(async ({ data }): Promise<{ ok: boolean }> => {
+    if (!isFromDashboard()) return { ok: false }
+    writeComment(data.category, data.id, data.text)
+    return { ok: true }
+  })

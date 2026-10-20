@@ -9,5 +9,5 @@ export const Route = createFileRoute('/')({
 
 function Index() {
   const data = Route.useLoaderData()
-  return <Dashboard local={data.local} cloud={data.cloud} />
+  return <Dashboard local={data.local} cloud={data.cloud} comments={data.comments} />
 }

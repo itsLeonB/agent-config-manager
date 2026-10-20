@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { z } from 'zod'
 import { openStore } from './store.cjs'
 import type { Store } from './store.cjs'
+import { commentKey } from '../lib/comments'
 import type { CloudData, RescanResult } from '../types/dashboard'
 
 const DATABASE_DIR = path.join(process.cwd(), 'database')
@@ -49,6 +50,15 @@ export function readLocalData() {
 
 export function readCloudData() {
   return readJson<CloudData>('cloud.json')
+}
+
+// The whole map for one page load; the dashboard has many missing items but one round trip.
+export function readComments() {
+  return getStore().readComments()
+}
+
+export function writeComment(category: string, id: string, text: string) {
+  getStore().writeComment(commentKey(category, id), text)
 }
 
 // The scanner runs under the same interpreter as this server (Bun in dev, Node in the

@@ -1,7 +1,15 @@
 import type { CloudData, UserScope } from '../../types/dashboard'
 import { MissingCell } from './MissingCell'
 
-export function SkillsCompare({ userScope, cloud }: { userScope: UserScope; cloud: CloudData | null }) {
+export function SkillsCompare({
+  userScope,
+  cloud,
+  comments,
+}: {
+  userScope: UserScope
+  cloud: CloudData | null
+  comments: Record<string, string>
+}) {
   const cloudLoaded = !!cloud
   const userSkills = userScope.skills.filter((s) => s.source === 'standalone')
   const cloudSkills = (cloud?.skills || []).filter((s) => !s.marketplace)
@@ -50,6 +58,7 @@ export function SkillsCompare({ userScope, cloud }: { userScope: UserScope; clou
                     id={key}
                     placeholder="Why missing from cloud?"
                     cloudLoaded={cloudLoaded}
+                    comments={comments}
                     extraClass="col-cloud"
                   />
                 )}
@@ -64,6 +73,7 @@ export function SkillsCompare({ userScope, cloud }: { userScope: UserScope; clou
                 id={`cloud-only:${s.name.toLowerCase()}`}
                 placeholder="Why missing from user scope?"
                 cloudLoaded={true}
+                comments={comments}
                 extraClass="col-user"
               />
               <td className="col-cloud muted">{s.description || ''}</td>

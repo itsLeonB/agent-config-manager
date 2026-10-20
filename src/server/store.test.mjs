@@ -131,3 +131,34 @@ test('a read during a write returns the old or the new snapshot, never a corrupt
     store.close()
   }
 })
+
+test('the comment map reads back every stored comment', () => {
+  const store = openStore(tempDb())
+  try {
+    assert.deepStrictEqual(store.readComments(), {})
+
+    store.writeComment('plugins:group:official', 'cloud cannot install these')
+    store.writeComment('skills:foo', 'renamed in cloud')
+    assert.deepStrictEqual(store.readComments(), {
+      'plugins:group:official': 'cloud cannot install these',
+      'skills:foo': 'renamed in cloud',
+    })
+  } finally {
+    store.close()
+  }
+})
+
+test('an empty comment deletes the stored row instead of storing a blank', () => {
+  const store = openStore(tempDb())
+  try {
+    store.writeComment('skills:foo', 'renamed in cloud')
+    store.writeComment('skills:bar', 'still here')
+
+    store.writeComment('skills:foo', '')
+    assert.strictEqual(store.readComment('skills:foo'), null)
+    assert.ok(!('skills:foo' in store.readComments()))
+    assert.strictEqual(store.readComment('skills:bar'), 'still here')
+  } finally {
+    store.close()
+  }
+})
