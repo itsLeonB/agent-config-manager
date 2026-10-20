@@ -49,6 +49,11 @@ and survives redeploys.
 `HOME`, which is what keeps the absolute paths stored in the database (the settings and the skip
 paths) and in snapshots meaningful inside the container.
 
+The container runs as uid/gid `1000` (the image's `node` user), so the data mount source must be
+writable by that uid: `sudo chown -R 1000:1000 /home/leon/acm-database` once, plus a
+`chown 1000:1000` on any `dashboard.db` an earlier root container left behind. A bind mount
+overrides the image's own ownership of `/app/database`.
+
 `PUBLIC_ORIGIN` must be the URL the browser actually uses. Every mutating request (rescan, settings
 save, comment save) is accepted only when its `Origin` matches the request URL's own origin or this
 value; forwarded headers are deliberately not trusted, because a foreign page can forge them.
@@ -85,11 +90,36 @@ Fields as they appear in Dokploy v0.30.8; exact tab grouping may drift between v
 Security note: the bind-mounted home is read-only, so the dashboard can inventory the machine's
 Claude configuration but cannot modify it. The only writable host path is the data directory.
 
+## Reachability
+
+`acm.localhost` resolving to loopback says nothing about who can reach the service. Traefik
+publishes its `web` entrypoint on `0.0.0.0:80`, so any host on the same network that sends
+`Host: acm.localhost` gets the dashboard, and the published fallback port is reachable the same
+way when Swarm accepts an unscoped bind. Hostname resolution and the `.localhost` suffix are not
+access control, and the app has no authentication by design.
+
+The enforceable restriction therefore has to sit outside the app. Pick at least one:
+
+- **Firewall the published ports to loopback.** Published container ports are DNAT'ed and traverse
+  `FORWARD`, so the rule belongs in Docker's own chain, not `INPUT`: the rule below covers
+  Traefik's port 80 and the fallback port together.
+
+  ```bash
+  sudo iptables -I DOCKER-USER -p tcp -m multiport --dports 80,3100 ! -s 127.0.0.1 -j DROP
+  ```
+
+  Verify from another device: `curl -m 2 http://<host-lan-ip>/` must time out, while
+  `curl http://acm.localhost/` still answers locally. Persist it (iptables-persistent, or a
+  systemd unit) if it needs to survive a reboot.
+- **Scope the fallback port to loopback** with `127.0.0.1:3100:3000` where Swarm accepts it (see
+  [Loopback port bind refused](#loopback-port-bind-refused) when it does not). That alone does not
+  close port 80.
+- **Put an authenticating proxy in front of both routes** if anything beyond plain isolation is
+  wanted; authentication is out of scope for this tool.
+
 ## Routes
 
-`acm.localhost` resolves to loopback on this machine (checked: `getent hosts acm.localhost` →
-`::1`), so the Traefik route is loopback-only even though Traefik itself listens on all
-interfaces. The Dokploy Traefik config on this machine enables the `swarm`, `docker`, and `file`
+The Dokploy Traefik config on this machine enables the `swarm`, `docker`, and `file`
 providers with `exposedByDefault: false` and entrypoints `web` (:80) and `websecure` (:443, with a
 Let's Encrypt resolver attached by default).
 
@@ -226,8 +256,8 @@ the domain entry leaves HTTPS unchecked. This has two visible consequences:
 - The URL is `http://acm.localhost`, not `https://`.
 - Chrome, Firefox, and Safari all treat `.localhost` as a secure context even over plain HTTP, so
   the page, its clipboard button and its `localStorage` work normally. Switching the domain to
-  HTTPS later would need a real hostname with a public DNS record, which is out of scope for a
-  loopback-only inventory tool.
+  HTTPS later would need a real hostname with a public DNS record, which is out of scope for this
+  tool.
 
 The published port exists exactly for the case where Traefik is the broken part:
 `http://localhost:3100` goes straight to the container and bypasses Traefik and Dokploy's routing.
@@ -248,9 +278,9 @@ service stuck at `0/1`, `docker service ps acm --no-trunc` shows the port error)
 
 Order of fixes, cheapest first:
 
-1. Publish `3100` → `3000` **without** a host IP. Ingress then binds all interfaces, but the app
-   is still loopback-only in practice because the only exposed route is `acm.localhost`; reach the
-   fallback at `127.0.0.1:3100`.
+1. Publish `3100` → `3000` **without** a host IP. Ingress then binds all interfaces, so the port
+   is reachable from the network — close it with the firewall rule in [Reachability](#reachability),
+   or accept it. Reach the fallback at `127.0.0.1:3100`.
 2. Publish in `host` mode instead of `ingress` (Dokploy exposes this as the port's publish mode).
    A host-mode publish binds only on the node running the task and accepts the loopback IP.
 3. Drop the published port entirely and keep the Traefik route. This gives up the fallback but
@@ -278,10 +308,11 @@ Everything that needs clicking in Dokploy, in order. Roughly 10 minutes.
 - **Host port 3000 is unavailable.** Dokploy's own UI already publishes `0.0.0.0:3000`, so the
   fallback port must be something else; this doc uses 3100. Anything that assumes 3000 for the
   dashboard will collide with Dokploy.
-- **Root-owned data files.** The container runs as root, so `dashboard.db` (and the
-  `/refresh-cloud` drop file) are root-owned on the host. Harmless while the container is the only writer, but a
-  host-side `node scan.cjs` against the same directory needs `sudo`. Mitigation later: run the
-  service as a fixed uid.
+- **Data files are written as uid 1000.** The container runs as `1000:1000`, so the data mount
+  source must be owned and writable by that uid (`sudo chown -R 1000:1000 /home/leon/acm-database`)
+  or the store fails to open and the page shows the empty state. Files it writes are owned by uid
+  1000 on the host, not root — a host-side `node scan.cjs` against the same directory works without
+  `sudo` as long as you are that uid too.
 - **`HOST_HOME` must match the mount**, or the scanner inventories the container's empty `HOME`
   and the page shows zeros.
 - **Cloud data is still a host step.** `database/cloud.json` only appears after `/refresh-cloud`

@@ -22,7 +22,11 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/scan.cjs ./scan.cjs
 COPY --from=build /app/src/server/store.cjs ./src/server/store.cjs
 COPY --from=build /app/tools/entrypoint.mjs /app/tools/serve.mjs ./tools/
-RUN mkdir -p /app/database
+RUN mkdir -p /app/database && chown -R node:node /app/database
 
 EXPOSE 3000
+# Fixed uid/gid 1000 (the image's `node` user) so anything written to the bind-mounted
+# data directory is owned by the host user instead of root. The host data directory
+# must be writable by this uid; a bind mount overrides the chown above.
+USER 1000:1000
 CMD ["node", "tools/entrypoint.mjs"]

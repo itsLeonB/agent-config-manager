@@ -53,7 +53,9 @@ docker run -d --name acm \
   agent-config-manager
 ```
 
-The two mounts are all it needs. `HOST_HOME` is the only host-specific value:
+The container runs as uid/gid `1000`, so the data directory it writes to must be
+owned by that uid (`sudo chown -R 1000:1000 database` if yours is not). The two
+mounts are all it needs. `HOST_HOME` is the only host-specific value:
 it is the home directory mounted at its own absolute path inside the container
 (so absolute skip paths keep meaning) and it becomes the container's `HOME`.
 The data directory stays the host's `database/`, so `dashboard.db` and
@@ -66,16 +68,18 @@ delete.
 
 | Task | Command |
 | --- | --- |
-| Back up | `docker stop acm && cp database/dashboard.db ~/dashboard-backup.db` |
-| Restore | `docker stop acm && cp ~/dashboard-backup.db database/dashboard.db && docker start acm` |
-| Reset | `docker stop acm && rm database/dashboard.db && docker start acm` |
+| Back up | `docker stop acm && node -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('database/dashboard.db');d.exec('PRAGMA wal_checkpoint(TRUNCATE)');d.close()" && cp database/dashboard.db ~/dashboard-backup.db` |
+| Restore | `docker stop acm && rm -f database/dashboard.db-wal database/dashboard.db-shm && cp ~/dashboard-backup.db database/dashboard.db && docker start acm` |
+| Reset | `docker stop acm && rm -f database/dashboard.db database/dashboard.db-wal database/dashboard.db-shm && docker start acm` |
 
-Stop the container first: the store runs in WAL mode, so a copy taken while it
-is writing can miss the last commits (it is never corrupt, just behind). A
-reset leaves an empty store; the scanner's first run recreates the snapshot and
-the dashboard shows the "no scan stored yet" message until then, with settings
-back on their defaults. `cloud.json` is not part of the store — it is the drop
-point for `/refresh-cloud` and can be deleted at any time.
+Stop the container first. The store runs in WAL mode, so committed rows can still live in
+`dashboard.db-wal` rather than the main file; the checkpoint folds them in before the copy. If
+you skip the checkpoint, copy `dashboard.db-wal` as well, and restore both. A leftover `-wal`
+beside a replaced `dashboard.db` belongs to the old file, which is why restore and reset delete
+the sidecars rather than let SQLite replay them. A reset leaves an empty store; the scanner's
+first run recreates the snapshot and the dashboard shows the "no scan stored yet" message until
+then, with settings back on their defaults. `cloud.json` is not part of the store — it is the
+drop point for `/refresh-cloud` and can be deleted at any time.
 
 Upgrading from a pre-SQLite install: delete `database/local.json`,
 `database/scan-config.json` and `database/env-tools.json`. Nothing reads them

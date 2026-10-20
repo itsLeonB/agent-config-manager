@@ -4,6 +4,7 @@ import { getDashboardData } from '../server/dashboard.functions'
 import { ProjectsTable } from '../components/dashboard/ProjectsTable'
 import { ProjectsCompare } from '../components/dashboard/ProjectsCompare'
 import { EmptyState } from '../components/dashboard/EmptyState'
+import { RescanButton } from '../components/dashboard/RescanButton'
 
 const projectsSearchSchema = z.object({
   mode: z.literal('compare').optional().catch(undefined),
@@ -22,7 +23,15 @@ function Projects() {
   const { mode = 'table' } = Route.useSearch()
   const navigate = useNavigate({ from: '/projects' })
 
-  if (!local) return <EmptyState title="Project scope" />
+  // The empty state tells the reader to rescan, so the control has to be here too.
+  if (!local) {
+    return (
+      <>
+        <EmptyState title="Project scope" />
+        <RescanButton />
+      </>
+    )
+  }
 
   return (
     <>

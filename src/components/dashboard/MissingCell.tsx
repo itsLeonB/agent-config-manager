@@ -32,7 +32,17 @@ export function MissingCell({
     clearTimeout(timer.current)
     const text = pending.current
     pending.current = null
-    if (text !== null) void saveComment({ data: { category, id, text } })
+    if (text === null) return
+    // A failed write puts the text back, so the next blur or edit retries it instead of
+    // the edit disappearing with the input.
+    saveComment({ data: { category, id, text } }).then(
+      (result) => {
+        if (!result.ok) pending.current = text
+      },
+      () => {
+        pending.current = text
+      },
+    )
   }
 
   useEffect(() => flush, [])

@@ -456,15 +456,16 @@ function assembleLocal(projectsRoot, config = {}) {
   };
 }
 
-function scanOnce(config, storeFile = STORE_FILE) {
+function scanOnce(config, storeFile = STORE_FILE, syncCloud) {
   const store = openStore(storeFile);
-  // The cloud file lives beside the store, so a temp store path stays hermetic.
-  const syncCloud = createCloudSync(path.dirname(storeFile));
+  // Callers that scan repeatedly pass one closure so the last-seen mtime survives the
+  // tick; a one-off scan makes its own beside the store it writes to.
+  const syncCloudSnapshot = syncCloud ?? createCloudSync(path.dirname(storeFile));
   let result;
   try {
     // Cloud ingestion is independent of the local scan, so it runs first: a
     // local scan failure must not hold back a pending cloud refresh.
-    syncCloud(store);
+    syncCloudSnapshot(store);
     result = assembleLocal(config.projectsRoot, config);
     store.saveSnapshot('local', result);
   } finally {
@@ -491,12 +492,14 @@ function sleep(ms) {
 // effect without a restart. A failed scan is logged and retried on the next
 // tick rather than killing the process, so the previous snapshot stays served.
 async function runScanLoop(getConfig) {
+  // One closure for the whole loop: the tick only re-reads cloud.json when its mtime moved.
+  const syncCloud = createCloudSync(path.dirname(STORE_FILE));
   for (;;) {
     let minutes = DEFAULT_SCAN_INTERVAL_MINUTES;
     try {
       const config = getConfig();
       minutes = config.scanIntervalMinutes;
-      scanOnce(config);
+      scanOnce(config, STORE_FILE, syncCloud);
     } catch (error) {
       console.error(`Scan failed, keeping the previous snapshot: ${error.message}`);
     }
