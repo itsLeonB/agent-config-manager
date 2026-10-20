@@ -4,9 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
+const { openStore } = require('./src/server/store.cjs');
 
 const HOME = os.homedir();
 const DATABASE_DIR = path.join(__dirname, 'database');
+const STORE_FILE = path.join(DATABASE_DIR, 'dashboard.db');
 const DEFAULT_SCAN_INTERVAL_MINUTES = 15;
 const SNAPSHOT_TMP_SUFFIX = '.tmp';
 const SECRET_KEY_RE = /token|key|secret|authorization|password|credential|bearer|cookie|session/i;
@@ -399,6 +401,14 @@ function assembleLocal(projectsRoot) {
 
 function scanOnce(projectsRoot) {
   const result = assembleLocal(projectsRoot);
+
+  const store = openStore(STORE_FILE);
+  try {
+    store.saveSnapshot('local', result);
+  } finally {
+    store.close();
+  }
+  // Transitional: the JSON file is retired once nothing reads it any more.
   writeJsonAtomic(path.join(DATABASE_DIR, 'local.json'), result);
 
   console.log(

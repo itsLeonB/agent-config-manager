@@ -20,6 +20,7 @@ COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/scan.cjs ./scan.cjs
+COPY --from=build /app/src/server/store.cjs ./src/server/store.cjs
 COPY --from=build /app/tools/entrypoint.mjs /app/tools/serve.mjs ./tools/
 RUN mkdir -p /app/database
 
