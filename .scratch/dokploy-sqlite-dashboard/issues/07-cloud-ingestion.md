@@ -9,10 +9,14 @@ ingested immediately so a restart does not blank the Cloud section.
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] After the refresh command writes its file, the Cloud section updates within one scan interval with no other action
-- [ ] An unchanged file produces no duplicate snapshot
-- [ ] A cloud file present at container start is ingested immediately, so the Cloud section is populated on first load
-- [ ] The refresh command's instructions are unchanged; no new operator step
-- [ ] A malformed cloud file is ignored and leaves the previous cloud snapshot in place
+- [x] After the refresh command writes its file, the Cloud section updates within one scan interval with no other action
+- [x] An unchanged file produces no duplicate snapshot
+- [x] A cloud file present at container start is ingested immediately, so the Cloud section is populated on first load
+- [x] The refresh command's instructions are unchanged; no new operator step
+- [x] A malformed cloud file is ignored and leaves the previous cloud snapshot in place
+
+## Comments
+
+Resolved on `feat/dokploy-sqlite-dashboard`. `createCloudSync` in `scan.cjs` ingests `cloud.json` on mtime change plus content difference; malformed file ignored.

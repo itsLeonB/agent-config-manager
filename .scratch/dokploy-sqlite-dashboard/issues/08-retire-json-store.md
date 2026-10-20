@@ -11,10 +11,14 @@ This is the contract step of the expand–contract sequence started in ticket 04
 
 **Blocked by:** 05, 06, 07
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A scan writes only the database; no local snapshot file is produced
-- [ ] The JSON config files no longer affect behaviour — settings are read from the database only
-- [ ] Leftover JSON files are gone from the data directory, and the empty-state message no longer points at the scanner command
-- [ ] A fresh empty start still yields a working dashboard with a message that describes the database case
-- [ ] Docs cover running it, backing up (copy the file), and resetting; the scanner's own tests still pass
+- [x] A scan writes only the database; no local snapshot file is produced
+- [x] The JSON config files no longer affect behaviour — settings are read from the database only
+- [x] Leftover JSON files are gone from the data directory, and the empty-state message no longer points at the scanner command
+- [x] A fresh empty start still yields a working dashboard with a message that describes the database case
+- [x] Docs cover running it, backing up (copy the file), and resetting; the scanner's own tests still pass
+
+## Comments
+
+Resolved on `feat/dokploy-sqlite-dashboard`. Local JSON snapshot and both JSON config files retired; existing data seeded into `dashboard.db` then the files deleted; empty state rewritten.

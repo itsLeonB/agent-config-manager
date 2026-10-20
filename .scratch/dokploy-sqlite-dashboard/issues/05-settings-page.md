@@ -12,11 +12,15 @@ sensible defaults.
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] All four config areas are editable and persist across a container restart
-- [ ] The scanner uses saved values on its next tick, with no restart
-- [ ] An invalid value is reported in its own field on blur, and a failed save shows a focused error summary linking each error to its field
-- [ ] Saving shows a pending state, then success; no write happens until save is pressed
-- [ ] A settings write from a foreign origin is rejected
-- [ ] A never-configured install scans successfully with defaults
+- [x] All four config areas are editable and persist across a container restart
+- [x] The scanner uses saved values on its next tick, with no restart
+- [x] An invalid value is reported in its own field on blur, and a failed save shows a focused error summary linking each error to its field
+- [x] Saving shows a pending state, then success; no write happens until save is pressed
+- [x] A settings write from a foreign origin is rejected
+- [x] A never-configured install scans successfully with defaults
+
+## Comments
+
+Resolved on `feat/dokploy-sqlite-dashboard`. `/settings` route, four config keys in the store, env as defaults only, explicit save with pending/success states, per-field errors.

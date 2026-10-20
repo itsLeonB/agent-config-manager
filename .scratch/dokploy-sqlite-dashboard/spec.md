@@ -1,6 +1,6 @@
 # Spec 0001 — Containerized dashboard on Dokploy, with SQLite-backed storage
 
-Status: ready-for-agent
+Status: resolved
 Tickets: issues/01–08
 
 ## Problem Statement

@@ -13,11 +13,15 @@ This is the expand step of an expand–contract sequence; ticket 08 removes the 
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] One module owns every database access; no other module imports the database API directly
-- [ ] A completed scan stores a snapshot and the previous file output still happens
-- [ ] The dashboard renders from the newest stored snapshot with byte-for-byte equivalent output
-- [ ] Newest-wins per snapshot kind is proven against a temporary database file
-- [ ] A read issued while a write is in flight returns either the old or the new snapshot, never a corrupt one
-- [ ] No new runtime dependency, no build step for the database engine
+- [x] One module owns every database access; no other module imports the database API directly
+- [x] A completed scan stores a snapshot and the previous file output still happens
+- [x] The dashboard renders from the newest stored snapshot with byte-for-byte equivalent output
+- [x] Newest-wins per snapshot kind is proven against a temporary database file
+- [x] A read issued while a write is in flight returns either the old or the new snapshot, never a corrupt one
+- [x] No new runtime dependency, no build step for the database engine
+
+## Comments
+
+Resolved on `feat/dokploy-sqlite-dashboard`. `src/server/store.cjs` is the only `node:sqlite` importer; snapshots blobs, `latest` = highest id. Verified under Bun and Node.
