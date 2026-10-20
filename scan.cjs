@@ -7,6 +7,8 @@ const { execSync } = require('child_process');
 
 const HOME = os.homedir();
 const DATABASE_DIR = path.join(__dirname, 'database');
+const DEFAULT_SCAN_INTERVAL_MINUTES = 15;
+const SNAPSHOT_TMP_SUFFIX = '.tmp';
 const SECRET_KEY_RE = /token|key|secret|authorization|password|credential|bearer|cookie|session/i;
 const ENV_VAR_PLACEHOLDER_RE = /^\$\{[^}]+\}$/;
 const SKIP_DIR_RE = /^node_modules$|^\.git$/;
@@ -189,9 +191,54 @@ function getNpxSkillsGlobal() {
   return { skills, lastSelectedAgents: lock.lastSelectedAgents || [] };
 }
 
+function readScanConfig(dir = DATABASE_DIR) {
+  return readJsonSafe(path.join(dir, 'scan-config.json')) || {};
+}
+
 function getSkipPaths() {
-  const config = readJsonSafe(path.join(DATABASE_DIR, 'scan-config.json'));
-  return new Set((config && config.skipPaths) || []);
+  return new Set(readScanConfig().skipPaths || []);
+}
+
+// Stored config wins over the environment variable, which wins over the
+// default; a zero, negative or non-numeric value falls through to the next
+// source, and the winner is floored at one minute so it cannot spin the loop.
+function resolveScanInterval(storedConfig, env = {}) {
+  const candidates = [
+    storedConfig && storedConfig.scanIntervalMinutes,
+    env && env.SCAN_INTERVAL_MINUTES,
+  ];
+  for (const candidate of candidates) {
+    const minutes = parseIntervalMinutes(candidate);
+    if (minutes !== null) return Math.max(1, Math.floor(minutes));
+  }
+  return DEFAULT_SCAN_INTERVAL_MINUTES;
+}
+
+function parseIntervalMinutes(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+// Write beside the target, then rename: a concurrent reader sees either the
+// previous snapshot or the new one, never a half-written file.
+function writeJsonAtomic(filePath, value) {
+  const json = JSON.stringify(value, null, 2);
+  const tmpPath = filePath + SNAPSHOT_TMP_SUFFIX;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  try {
+    fs.writeFileSync(tmpPath, json);
+    fs.renameSync(tmpPath, filePath);
+  } catch (error) {
+    fs.rmSync(tmpPath, { force: true });
+    throw error;
+  }
+  return filePath;
 }
 
 // Tools that live outside the plugin/MCP/skill system (standalone CLIs,
@@ -350,12 +397,9 @@ function assembleLocal(projectsRoot) {
   };
 }
 
-function main() {
-  const projectsRoot = process.argv[2] || path.join(HOME, 'Projects');
+function scanOnce(projectsRoot) {
   const result = assembleLocal(projectsRoot);
-
-  fs.mkdirSync(DATABASE_DIR, { recursive: true });
-  fs.writeFileSync(path.join(DATABASE_DIR, 'local.json'), JSON.stringify(result, null, 2));
+  writeJsonAtomic(path.join(DATABASE_DIR, 'local.json'), result);
 
   console.log(
     `Scanned: ${result.userScope.plugins.length} plugins, ` +
@@ -365,6 +409,36 @@ function main() {
       `${result.environmentTools.filter((t) => t.installedLocally).length}/${result.environmentTools.length} env tools installed, ` +
       `${result.projects.length} projects -> database/local.json`
   );
+  return result;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Container mode: scan immediately so the first page load has data, then
+// rescan every interval. A failed scan is logged and retried on the next tick
+// rather than killing the process, so the previous snapshot stays served.
+async function runScanLoop(projectsRoot) {
+  for (;;) {
+    try {
+      scanOnce(projectsRoot);
+    } catch (error) {
+      console.error(`Scan failed, keeping the previous snapshot: ${error.message}`);
+    }
+    const minutes = resolveScanInterval(readScanConfig(), process.env);
+    await sleep(minutes * 60 * 1000);
+  }
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  const projectsRoot = args.find((arg) => !arg.startsWith('--')) || path.join(HOME, 'Projects');
+  if (args.includes('--loop')) {
+    return runScanLoop(projectsRoot);
+  }
+  scanOnce(projectsRoot);
+  return undefined;
 }
 
 if (require.main === module) {
@@ -381,6 +455,9 @@ module.exports = {
   getUserMcpServers,
   getUserSkills,
   getNpxSkillsGlobal,
+  readScanConfig,
+  resolveScanInterval,
+  writeJsonAtomic,
   getSkipPaths,
   getEnvironmentTools,
   looksLikeGitRepo,
