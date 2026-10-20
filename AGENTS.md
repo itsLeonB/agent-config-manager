@@ -70,6 +70,10 @@ deliberate and does not lean on framework defaults.
 - `scan.cjs` and `database/` are resolved from `process.cwd()`, so the server
   must run with the repo root as its working directory (true for `bun run dev`
   and for the container).
+- `src/server/store.cjs` is loaded with `createRequire` from `process.cwd()` in
+  `dashboard.server.ts`, not statically imported: Vite's dev SSR serves a `.cjs`
+  source file as-is, so a static import fails in dev with `require is not
+  defined`. Loading it by path works in dev and in the built server.
 - `cloud.json` comes from the `/refresh-cloud` slash command (browser automation
   against claude.ai), not from any code in this repo.
 - No environment variables are required.

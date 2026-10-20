@@ -36,6 +36,9 @@ function RootDocument({ children }: { children: React.ReactNode }) {
           <Link to="/projects" activeProps={{ className: 'active' }}>
             Project scope
           </Link>
+          <Link to="/settings" activeProps={{ className: 'active' }}>
+            Settings
+          </Link>
         </nav>
         {children}
         <TanStackDevtools

@@ -1,12 +1,19 @@
 import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
-import { openStore } from './store.cjs'
 import type { Store } from './store.cjs'
 import { commentKey } from '../lib/comments'
 import type { CloudData, RescanResult } from '../types/dashboard'
+
+// Vite's dev SSR serves a .cjs source file as-is, so a static import of the store
+// fails there with "require is not defined". Loading it by path at runtime works
+// under dev and in the built server, which both run with the repo root as cwd.
+const requireStore = createRequire(import.meta.url)
+// SAFETY: this repo's own CommonJS store module; its API is typed in store.d.cts.
+const { openStore } = requireStore(path.join(process.cwd(), 'src/server/store.cjs')) as typeof import('./store.cjs')
 
 const DATABASE_DIR = path.join(process.cwd(), 'database')
 const STORE_FILE = path.join(DATABASE_DIR, 'dashboard.db')
@@ -16,7 +23,7 @@ const execFileAsync = promisify(execFile)
 
 let store: Store | null = null
 
-function getStore(): Store {
+export function getStore(): Store {
   store ??= openStore(STORE_FILE)
   return store
 }
