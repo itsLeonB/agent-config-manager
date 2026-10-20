@@ -27,8 +27,9 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   inventing new structure.
 - **Data loading is server-only.** `src/server/dashboard.server.ts` reads the newest
   stored scan snapshot through `src/server/store.cjs` — the only module that touches
-  `node:sqlite`, plain CJS so the TypeScript app imports it and `scan.cjs` requires it — and
-  still reads `database/cloud.json` via `node:fs` until cloud ingestion lands. The helper
+  `node:sqlite`, plain CJS so the TypeScript app imports it and `scan.cjs` requires it — for
+  both the local and the cloud snapshot; `scan.cjs` stores a `'cloud'` snapshot whenever
+  `database/cloud.json`'s modification time changes. The helper
   wraps all this in a `createServerFn`; the index route's `loader` calls that. Loaders are
   isomorphic (they also run on the client), so filesystem access belongs behind
   `createServerFn`, and a loader must not self-fetch a relative URL during SSR.
@@ -69,7 +70,8 @@ deliberate and does not lean on framework defaults.
   must run with the repo root as its working directory (true for `bun run dev`
   and for the container).
 - `cloud.json` comes from the `/refresh-cloud` slash command (browser automation
-  against claude.ai), not from any code in this repo.
+  against claude.ai), not from any code in this repo; the scanner only ingests it. A
+  malformed file is ignored and the previous cloud snapshot stays served.
 - No environment variables are required.
 - TanStack Devtools in `src/routes/__root.tsx` are stripped from production
   builds by `@tanstack/devtools-vite`. No `removeDevtoolsOnBuild` config needed.

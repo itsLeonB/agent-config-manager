@@ -15,7 +15,9 @@ const {
   readScanConfig,
   resolveScanInterval,
   writeJsonAtomic,
+  createCloudSync,
 } = require('./scan.cjs');
+const { openStore } = require('./src/server/store.cjs');
 
 test('redactSecrets masks token/key/secret values, leaves others alone', () => {
   const input = {
@@ -156,6 +158,122 @@ test('getEnvironmentTools reports installedLocally from checkCommand exit code',
   } finally {
     if (backup === null) fs.rmSync(configPath, { force: true });
     else fs.writeFileSync(configPath, backup);
+  }
+});
+
+// A temp data directory plus its own database, so each test owns the cloud
+// file and the snapshots it produces.
+function cloudFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  const store = openStore(path.join(dir, 'dashboard.db'));
+  return {
+    dir,
+    store,
+    cloudPath: path.join(dir, 'cloud.json'),
+    sync: createCloudSync(dir),
+    writeCloud(value, mtimeMs) {
+      fs.writeFileSync(
+        path.join(dir, 'cloud.json'),
+        typeof value === 'string' ? value : JSON.stringify(value)
+      );
+      const seconds = mtimeMs / 1000;
+      fs.utimesSync(path.join(dir, 'cloud.json'), seconds, seconds);
+    },
+    cleanup() {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+const CLOUD = {
+  lastUpdated: '2026-01-01T00:00:00.000Z',
+  plugins: [{ name: 'code-review', marketplace: 'official' }],
+  skills: [{ name: 'grilling' }],
+};
+
+// The error log is expected here; silence it so a passing run stays readable.
+function withoutStderrLog(fn) {
+  const original = console.error;
+  console.error = () => {};
+  try {
+    return fn();
+  } finally {
+    console.error = original;
+  }
+}
+
+test('a cloud file already on disk at first scan is stored immediately', () => {
+  const f = cloudFixture();
+  try {
+    f.writeCloud(CLOUD, 1_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+    assert.deepStrictEqual(f.store.readLatestSnapshot('cloud'), CLOUD);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a missing cloud file stores nothing and is not an error', () => {
+  const f = cloudFixture();
+  try {
+    assert.strictEqual(f.sync(f.store), false);
+    assert.strictEqual(f.store.readLatestSnapshot('cloud'), null);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('an unchanged cloud file stores no new cloud snapshot', () => {
+  const f = cloudFixture();
+  try {
+    f.writeCloud(CLOUD, 1_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+
+    assert.strictEqual(f.sync(f.store), false);
+    // Rewritten with identical contents but a newer mtime: still no duplicate.
+    f.writeCloud(CLOUD, 2_000_000);
+    assert.strictEqual(f.sync(f.store), false);
+    assert.deepStrictEqual(f.store.readLatestSnapshot('cloud'), CLOUD);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a changed cloud file stores exactly one new cloud snapshot', () => {
+  const f = cloudFixture();
+  try {
+    f.writeCloud(CLOUD, 1_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+
+    const refreshed = { ...CLOUD, lastUpdated: '2026-02-02T00:00:00.000Z', skills: [] };
+    f.writeCloud(refreshed, 2_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+    assert.strictEqual(f.sync(f.store), false);
+    assert.deepStrictEqual(f.store.readLatestSnapshot('cloud'), refreshed);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a malformed cloud file keeps the previous cloud snapshot', () => {
+  const f = cloudFixture();
+  try {
+    f.writeCloud(CLOUD, 1_000_000);
+    assert.strictEqual(f.sync(f.store), true);
+
+    withoutStderrLog(() => {
+      f.writeCloud('{"lastUpdated": "half-writ', 2_000_000);
+      assert.strictEqual(f.sync(f.store), false);
+
+      // Parseable JSON of the wrong shape is rejected the same way.
+      f.writeCloud({ lastUpdated: 42, plugins: 'nope' }, 3_000_000);
+      assert.strictEqual(f.sync(f.store), false);
+    });
+
+    assert.deepStrictEqual(f.store.readLatestSnapshot('cloud'), CLOUD);
+  } finally {
+    f.cleanup();
   }
 });
 

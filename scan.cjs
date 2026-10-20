@@ -9,6 +9,7 @@ const { openStore } = require('./src/server/store.cjs');
 const HOME = os.homedir();
 const DATABASE_DIR = path.join(__dirname, 'database');
 const STORE_FILE = path.join(DATABASE_DIR, 'dashboard.db');
+const CLOUD_FILE = 'cloud.json';
 const DEFAULT_SCAN_INTERVAL_MINUTES = 15;
 const SNAPSHOT_TMP_SUFFIX = '.tmp';
 const SECRET_KEY_RE = /token|key|secret|authorization|password|credential|bearer|cookie|session/i;
@@ -243,6 +244,55 @@ function writeJsonAtomic(filePath, value) {
   return filePath;
 }
 
+// The /refresh-cloud command writes cloud.json into the data directory; that
+// file is the only cloud input. The last-seen mtime lives in the returned
+// closure, and starts empty so a file already on disk is ingested on the first
+// call — at process start or on the next tick, one code path.
+function createCloudSync(dir = DATABASE_DIR) {
+  let lastMtimeMs = null;
+
+  return function syncCloudSnapshot(store) {
+    const filePath = path.join(dir, CLOUD_FILE);
+    let mtimeMs;
+    try {
+      mtimeMs = fs.statSync(filePath).mtimeMs;
+    } catch {
+      return false; // no cloud file yet; any stored cloud snapshot stays served
+    }
+    if (mtimeMs === lastMtimeMs) return false;
+    // Record the attempt even when the file is unusable, so one bad write is
+    // logged once instead of on every tick.
+    lastMtimeMs = mtimeMs;
+
+    const data = readJsonSafe(filePath);
+    if (!isCloudData(data)) {
+      console.error(`Ignoring malformed ${CLOUD_FILE}; keeping the previous cloud snapshot.`);
+      return false;
+    }
+    // A restart re-reads a file it already stored; identical contents are not
+    // worth another snapshot row.
+    if (JSON.stringify(store.readLatestSnapshot('cloud')) === JSON.stringify(data)) return false;
+
+    store.saveSnapshot('cloud', data);
+    console.log(`Cloud snapshot stored from ${CLOUD_FILE} (last updated ${data.lastUpdated}).`);
+    return true;
+  };
+}
+
+const syncCloudSnapshot = createCloudSync();
+
+// cloud.json comes from an agent-driven browser scrape, so its shape is not
+// guaranteed: anything else must never reach the Cloud section.
+function isCloudData(value) {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof value.lastUpdated === 'string' &&
+    Array.isArray(value.plugins) &&
+    Array.isArray(value.skills)
+  );
+}
+
 // Tools that live outside the plugin/MCP/skill system (standalone CLIs,
 // marker files) but still need to be set up in every environment —
 // tracked via database/env-tools.json so new ones can be added by editing
@@ -400,10 +450,13 @@ function assembleLocal(projectsRoot) {
 }
 
 function scanOnce(projectsRoot) {
-  const result = assembleLocal(projectsRoot);
-
   const store = openStore(STORE_FILE);
+  let result;
   try {
+    // Cloud ingestion is independent of the local scan, so it runs first: a
+    // local scan failure must not hold back a pending cloud refresh.
+    syncCloudSnapshot(store);
+    result = assembleLocal(projectsRoot);
     store.saveSnapshot('local', result);
   } finally {
     store.close();
@@ -468,6 +521,7 @@ module.exports = {
   readScanConfig,
   resolveScanInterval,
   writeJsonAtomic,
+  createCloudSync,
   getSkipPaths,
   getEnvironmentTools,
   looksLikeGitRepo,

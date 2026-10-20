@@ -1,11 +1,10 @@
 import { execFile } from 'node:child_process'
-import fs from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import { openStore } from './store.cjs'
 import type { Store } from './store.cjs'
-import type { CloudData, RescanResult } from '../types/dashboard'
+import type { RescanResult } from '../types/dashboard'
 
 const DATABASE_DIR = path.join(process.cwd(), 'database')
 const STORE_FILE = path.join(DATABASE_DIR, 'dashboard.db')
@@ -18,17 +17,6 @@ let store: Store | null = null
 function getStore(): Store {
   store ??= openStore(STORE_FILE)
   return store
-}
-
-async function readJson<T>(fileName: string): Promise<T | null> {
-  try {
-    const raw = await fs.readFile(path.join(DATABASE_DIR, fileName), 'utf-8')
-    // SAFETY: database/cloud.json is written only by this app's own /refresh-cloud
-    // automation, never by external/untrusted input.
-    return JSON.parse(raw) as T
-  } catch {
-    return null
-  }
 }
 
 const localDataValidator = z.looseObject({
@@ -47,8 +35,10 @@ export function readLocalData() {
   return data !== null && localDataValidator.safeParse(data).success ? data : null
 }
 
+// The scanner stores a cloud snapshot whenever /refresh-cloud rewrites
+// cloud.json; null means the operator has never run that command.
 export function readCloudData() {
-  return readJson<CloudData>('cloud.json')
+  return getStore().readLatestSnapshot('cloud')
 }
 
 // The scanner runs under the same interpreter as this server (Bun in dev, Node in the
