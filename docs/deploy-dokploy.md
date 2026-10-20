@@ -34,6 +34,7 @@ This machine's real values. Only `HOST_HOME` and the mount source change on a se
 | Domain | `acm.localhost`, internal port `3000`, HTTPS **off** |
 | Traefik entrypoint | `web` (port 80) only |
 | `HOST_HOME` | `/home/leon` |
+| `PUBLIC_ORIGIN` | `http://acm.localhost` (required: without it the origin guard rejects rescan and settings writes behind the proxy) |
 | Home mount | `/home/leon:/home/leon:ro` (read-only, same absolute path inside the container) |
 | Data mount | host `/home/leon/acm-database` → `/app/database` (read-write) |
 | `SCAN_INTERVAL_MINUTES` | `15` |
@@ -47,6 +48,10 @@ and survives redeploys.
 `HOST_HOME` must equal the mount's host path. It is both the scanned directory and the container's
 `HOME`, which is what keeps the absolute paths stored in the database (the settings and the skip
 paths) and in snapshots meaningful inside the container.
+
+`PUBLIC_ORIGIN` must be the URL the browser actually uses. Every mutating request (rescan, settings
+save, comment save) is accepted only when its `Origin` matches the request URL's own origin or this
+value; forwarded headers are deliberately not trusted, because a foreign page can forge them.
 
 The data directory holds two files: `dashboard.db` (the store — snapshots, settings, comments) and
 `cloud.json` (the `/refresh-cloud` drop point). Backing up is copying `dashboard.db` while the
@@ -62,7 +67,7 @@ Fields as they appear in Dokploy v0.30.8; exact tab grouping may drift between v
    Build Type `Dockerfile`; Dockerfile Path `Dockerfile`; Build Context Path `.`.
    (A GitHub provider is already configured on this instance — the existing `hrms` application
    uses the same source/build combination.)
-4. **Environment**: `HOST_HOME=/home/leon`, `SCAN_INTERVAL_MINUTES=15`. Leave `PORT` alone.
+4. **Environment**: `HOST_HOME=/home/leon`, `SCAN_INTERVAL_MINUTES=15`, `PUBLIC_ORIGIN=http://acm.localhost`. Leave `PORT` alone.
 5. **Advanced → Mounts**, two bind mounts:
 
    | Type | Host path | Mount path | Read only |
@@ -163,6 +168,7 @@ $ docker build -t agent-config-manager .
 
 $ docker run -d --name acm --restart always -p 127.0.0.1:3100:3000 \
     -e HOST_HOME=/home/leon -e SCAN_INTERVAL_MINUTES=5 \
+    -e PUBLIC_ORIGIN=http://localhost:3100 \
     -v /home/leon:/home/leon:ro -v "$PWD/database:/app/database" agent-config-manager
 0b1681c9487a1096b57b3d6a92ffd5eb8cd712918b2b1abd0179a812ddadb1b7
 
