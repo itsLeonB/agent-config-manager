@@ -40,7 +40,6 @@ function openStore(filePath) {
   const upsertConfig = db.prepare(
     'INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value'
   );
-  const selectComment = db.prepare('SELECT text FROM comments WHERE key = ?');
   const selectAllComments = db.prepare('SELECT key, text FROM comments');
   const deleteComment = db.prepare('DELETE FROM comments WHERE key = ?');
   const upsertComment = db.prepare(
@@ -69,10 +68,6 @@ function openStore(filePath) {
         return;
       }
       upsertComment.run(key, text, new Date().toISOString());
-    },
-    readComment(key) {
-      const row = selectComment.get(key);
-      return row === undefined ? null : row.text;
     },
     readComments() {
       // One query for the whole page load instead of one per missing item.

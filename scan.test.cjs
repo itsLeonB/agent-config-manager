@@ -11,12 +11,10 @@ const {
   walkProjects,
   getEnvironmentTools,
   getProjectNpxSkills,
-  readJsonSafe,
   resolveConfig,
   loadConfig,
   scanOnce,
   resolveScanInterval,
-  writeJsonAtomic,
   createCloudSync,
 } = require('./scan.cjs');
 const { openStore } = require('./src/server/store.cjs');
@@ -376,54 +374,25 @@ test('resolveScanInterval floors a valid sub-minute value at one minute', () => 
   assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 2.9 }, {}), 2);
 });
 
-test('writeJsonAtomic writes the snapshot and leaves no temp file behind', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+test('a scan writes the snapshot to the database and creates no local JSON file', () => {
+  const db = tempStoreFile();
+  const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
   try {
-    const target = path.join(dir, 'nested', 'local.json');
-    writeJsonAtomic(target, { generatedAt: 'first' });
-    assert.deepStrictEqual(readJsonSafe(target), { generatedAt: 'first' });
-    assert.deepStrictEqual(fs.readdirSync(path.dirname(target)), ['local.json']);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+    scanOnce(
+      { projectsRoot, scanIntervalMinutes: 15, skipPaths: [], environmentTools: [] },
+      db
+    );
 
-test('an interrupted snapshot write leaves the previous snapshot intact and readable', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
-  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
-  try {
-    const target = path.join(dir, 'local.json');
-    writeJsonAtomic(target, { generatedAt: 'old' });
-
-    // Root ignores directory permissions, so the interruption cannot be simulated there.
-    if (!isRoot) {
-      fs.chmodSync(dir, 0o555);
-      try {
-        assert.throws(() => writeJsonAtomic(target, { generatedAt: 'new' }));
-      } finally {
-        fs.chmodSync(dir, 0o755);
-      }
-      assert.deepStrictEqual(readJsonSafe(target), { generatedAt: 'old' });
-      assert.deepStrictEqual(fs.readdirSync(dir), ['local.json']);
+    const reader = openStore(db);
+    try {
+      assert.strictEqual(typeof reader.readLatestSnapshot('local').generatedAt, 'string');
+    } finally {
+      reader.close();
     }
+
+    assert.ok(!fs.existsSync(path.join(path.dirname(db), 'local.json')));
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('a stale temp file left by a killed scan never shadows the readable snapshot', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
-  try {
-    const target = path.join(dir, 'local.json');
-    writeJsonAtomic(target, { generatedAt: 'old' });
-    fs.writeFileSync(path.join(dir, 'local.json.tmp'), '{"generatedAt": "half-writ');
-
-    assert.deepStrictEqual(readJsonSafe(target), { generatedAt: 'old' });
-
-    writeJsonAtomic(target, { generatedAt: 'new' });
-    assert.deepStrictEqual(readJsonSafe(target), { generatedAt: 'new' });
-    assert.deepStrictEqual(fs.readdirSync(dir), ['local.json']);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
+    fs.rmSync(path.dirname(db), { recursive: true, force: true });
   }
 });
