@@ -193,10 +193,6 @@ function getNpxSkillsGlobal() {
   return { skills, lastSelectedAgents: lock.lastSelectedAgents || [] };
 }
 
-function getSkipPaths(skipPaths = []) {
-  return new Set(skipPaths);
-}
-
 // Stored config wins over the environment variable, which wins over the
 // default; a zero, negative or non-numeric value falls through to the next
 // source, and the winner is floored at one minute so it cannot spin the loop.
@@ -443,7 +439,7 @@ function assembleLocal(projectsRoot, config = {}) {
       enabled: Boolean(enabledPlugins[`${p.plugin}@${p.marketplace}`]),
     }));
 
-  const projectPaths = walkProjects(projectsRoot, getSkipPaths(config.skipPaths));
+  const projectPaths = walkProjects(projectsRoot, new Set(config.skipPaths));
   const projects = projectPaths.map((p) => scanProject(p, installedPlugins));
 
   return {
@@ -541,7 +537,6 @@ module.exports = {
   loadConfig,
   resolveScanInterval,
   createCloudSync,
-  getSkipPaths,
   getEnvironmentTools,
   looksLikeGitRepo,
   walkProjects,

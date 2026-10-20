@@ -1,5 +1,5 @@
-// A mutating request is trusted only when the browser names this site's origin, or when
-// it carries no origin at all and the browser itself marked the request same-origin
+// A mutating request is trusted only when the browser names one of this site's own origins,
+// or when it carries no origin at all and the browser itself marked the request same-origin
 // (Sec-Fetch-Site is set by the browser; a page cannot forge it for a cross-site POST).
 export function isSameOriginRequest(
   origin: string | null,
@@ -10,16 +10,14 @@ export function isSameOriginRequest(
   return secFetchSite === 'same-origin'
 }
 
-// Behind Dokploy the request reaches us as an internal host, so the proxy's forwarded
-// host and protocol are accepted as this site's own origin too.
+// The allowlist may only hold values a foreign page cannot supply. Forwarded headers cannot
+// be used: a foreign page sends its own Origin alongside matching x-forwarded-* headers and
+// would otherwise whitelist itself. So the origin of the URL this server actually received,
+// plus the operator-configured PUBLIC_ORIGIN, which is what makes a proxied deployment work.
 export function allowedOrigins(request: Request): string[] {
-  const url = new URL(request.url)
-  const forwardedHost = request.headers.get('x-forwarded-host')?.split(',')[0].trim()
-  const host = forwardedHost !== undefined && forwardedHost !== '' ? forwardedHost : request.headers.get('host')
-  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0].trim()
-  const proto = forwardedProto !== undefined && forwardedProto !== '' ? forwardedProto : url.protocol.slice(0, -1)
-  const origins = [url.origin]
-  if (host !== null) origins.push(`${proto}://${host}`)
+  const origins = [new URL(request.url).origin]
+  const configured = process.env.PUBLIC_ORIGIN?.trim().replace(/\/+$/, '')
+  if (configured !== undefined && configured !== '') origins.push(configured)
   return origins
 }
 

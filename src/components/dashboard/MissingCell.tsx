@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { commentKey } from '../../lib/comments'
 import { saveComment } from '../../server/dashboard.functions'
 
@@ -24,6 +24,18 @@ export function MissingCell({
   // Uncontrolled on purpose: the stored text is the initial value, and typing must not
   // fight a re-render. Writes are debounced so one edit is one save, not one per keystroke.
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pending = useRef<string | null>(null)
+
+  // A debounced save would be dropped if the page navigated before the timer fired, so the
+  // pending text is written when the input loses focus and when the cell goes away.
+  function flush() {
+    clearTimeout(timer.current)
+    const text = pending.current
+    pending.current = null
+    if (text !== null) void saveComment({ data: { category, id, text } })
+  }
+
+  useEffect(() => flush, [])
 
   if (!cloudLoaded) {
     return <td className={`muted ${extraClass}`}>not scraped yet</td>
@@ -38,10 +50,11 @@ export function MissingCell({
         placeholder={placeholder}
         defaultValue={comments[commentKey(category, id)] ?? ''}
         onChange={(e) => {
-          const text = e.target.value
+          pending.current = e.target.value
           clearTimeout(timer.current)
-          timer.current = setTimeout(() => void saveComment({ data: { category, id, text } }), SAVE_DELAY_MS)
+          timer.current = setTimeout(flush, SAVE_DELAY_MS)
         }}
+        onBlur={flush}
       />
     </td>
   )

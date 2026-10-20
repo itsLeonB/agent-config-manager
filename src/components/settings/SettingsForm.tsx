@@ -4,9 +4,27 @@ import { draftToSettings, toDraft, validateDraft } from '../../lib/settings'
 import type { FieldError, Settings, SettingsDraft, SettingsField, ToolDraft } from '../../lib/settings'
 import { fieldErrorsOf, saveSettings } from '../../server/settings.functions'
 
-const EMPTY_TOOL: ToolDraft = { name: '', checkCommand: '', installCommand: '' }
-
 type SaveStatus = 'idle' | 'saving' | 'saved'
+
+const TOOLS_ERROR_ID = 'environmentTools-error'
+
+// A stored tool's id keys its row; a row added in this session has no stored id yet, so it
+// gets a key that cannot collide with one.
+let addedRows = 0
+function emptyTool(): ToolDraft {
+  addedRows += 1
+  return { rowKey: `added-${String(addedRows)}`, name: '', checkCommand: '', installCommand: '' }
+}
+
+const toolInputId = (index: number, field: keyof Omit<ToolDraft, 'rowKey'>) =>
+  `tool-${String(index)}-${field}`
+
+// Every summary link has to land on a real input, so the tools area points at the first
+// invalid row instead of the section.
+function anchorFor(error: FieldError): string {
+  if (error.field !== 'environmentTools') return error.field
+  return error.toolIndex === undefined ? 'environmentTools-add' : toolInputId(error.toolIndex, 'name')
+}
 
 export function SettingsForm({ settings }: { settings: Settings }) {
   const [draft, setDraft] = useState<SettingsDraft>(() => toDraft(settings))
@@ -22,6 +40,7 @@ export function SettingsForm({ settings }: { settings: Settings }) {
   }, [focusToken])
 
   const errorFor = (field: SettingsField) => errors.find((error) => error.field === field)?.message
+  const toolsError = errors.find((error) => error.field === 'environmentTools')
 
   function edit(patch: Partial<SettingsDraft>) {
     setDraft((prev) => ({ ...prev, ...patch }))
@@ -78,7 +97,7 @@ export function SettingsForm({ settings }: { settings: Settings }) {
           <ul>
             {errors.map((error, index) => (
               <li key={`${error.field}-${index}`}>
-                <a href={`#${error.field}`}>{error.message}</a>
+                <a href={`#${anchorFor(error)}`}>{error.message}</a>
               </li>
             ))}
             {saveError !== null ? <li>{saveError}</li> : null}
@@ -166,52 +185,72 @@ export function SettingsForm({ settings }: { settings: Settings }) {
                 <td className="muted">none</td>
               </tr>
             ) : (
-              draft.tools.map((tool, index) => (
-                <tr key={index}>
-                  <td>
-                    <input
-                      aria-label={`Tool ${index + 1} name`}
-                      value={tool.name}
-                      onChange={(event) => editTool(index, { name: event.target.value })}
-                      onBlur={() => validateField('environmentTools')}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      aria-label={`Tool ${index + 1} check command`}
-                      value={tool.checkCommand}
-                      onChange={(event) => editTool(index, { checkCommand: event.target.value })}
-                      onBlur={() => validateField('environmentTools')}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      aria-label={`Tool ${index + 1} install command`}
-                      value={tool.installCommand}
-                      onChange={(event) => editTool(index, { installCommand: event.target.value })}
-                      onBlur={() => validateField('environmentTools')}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="copy-btn"
-                      aria-label={`Remove ${tool.name === '' ? `tool ${index + 1}` : tool.name}`}
-                      onClick={() => edit({ tools: draft.tools.filter((_, position) => position !== index) })}
-                    >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))
+              draft.tools.map((tool, index) => {
+                const rowError = errors.find((error) => error.toolIndex === index)
+                const describedBy = rowError === undefined ? undefined : TOOLS_ERROR_ID
+                return (
+                  <tr key={tool.rowKey}>
+                    <td>
+                      <input
+                        id={toolInputId(index, 'name')}
+                        aria-label={`Tool ${index + 1} name`}
+                        value={tool.name}
+                        onChange={(event) => editTool(index, { name: event.target.value })}
+                        onBlur={() => validateField('environmentTools')}
+                        aria-invalid={rowError !== undefined}
+                        aria-describedby={describedBy}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        id={toolInputId(index, 'checkCommand')}
+                        aria-label={`Tool ${index + 1} check command`}
+                        value={tool.checkCommand}
+                        onChange={(event) => editTool(index, { checkCommand: event.target.value })}
+                        onBlur={() => validateField('environmentTools')}
+                        aria-invalid={rowError !== undefined}
+                        aria-describedby={describedBy}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        id={toolInputId(index, 'installCommand')}
+                        aria-label={`Tool ${index + 1} install command`}
+                        value={tool.installCommand}
+                        onChange={(event) => editTool(index, { installCommand: event.target.value })}
+                        onBlur={() => validateField('environmentTools')}
+                        aria-invalid={rowError !== undefined}
+                        aria-describedby={describedBy}
+                      />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="copy-btn"
+                        aria-label={`Remove ${tool.name === '' ? `tool ${index + 1}` : tool.name}`}
+                        onClick={() => edit({ tools: draft.tools.filter((_, position) => position !== index) })}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })
             )}
           </tbody>
         </table>
-        {errorFor('environmentTools') !== undefined ? (
-          <p className="field-error">{errorFor('environmentTools')}</p>
-        ) : null}
+        {toolsError === undefined ? null : (
+          <p className="field-error" id={TOOLS_ERROR_ID}>
+            {toolsError.message}
+          </p>
+        )}
         <p>
-          <button type="button" className="copy-btn" onClick={() => edit({ tools: [...draft.tools, EMPTY_TOOL] })}>
+          <button
+            type="button"
+            id="environmentTools-add"
+            className="copy-btn"
+            onClick={() => edit({ tools: [...draft.tools, emptyTool()] })}
+          >
             Add tool
           </button>
         </p>

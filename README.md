@@ -77,14 +77,21 @@ the dashboard shows the "no scan stored yet" message until then, with settings
 back on their defaults. `cloud.json` is not part of the store — it is the drop
 point for `/refresh-cloud` and can be deleted at any time.
 
+Upgrading from a pre-SQLite install: delete `database/local.json`,
+`database/scan-config.json` and `database/env-tools.json`. Nothing reads them
+any more — `dashboard.db` is the whole store.
+
 For `bun run dev` against the same data, use the same commands without the
 `docker` prefix.
 
 | Env | Default | Meaning |
 | --- | --- | --- |
 | `HOST_HOME` | unset (container `HOME`) | Scanned home directory, must equal the read-only mount path |
+| `PROJECTS_ROOT` | `~/Projects` | Projects directory to scan; a stored `projectsRoot` wins over it |
 | `SCAN_INTERVAL_MINUTES` | `15` | Rescan cadence; a stored `scanIntervalMinutes` wins over it |
-| `PORT` | `3000` | Listen port inside the container |
+| `PUBLIC_ORIGIN` | unset | This dashboard's public origin, e.g. `http://acm.localhost`; **required behind a proxy** — the origin guard trusts only the received URL's origin plus this value, never forwarded headers |
+| `PORT` | `3000` | Listen port inside the container (and for `tools/serve.mjs` locally) |
+| `HOST` | `0.0.0.0` | Listen hostname for `tools/serve.mjs` in the container |
 
 ### Deploying to Dokploy
 
