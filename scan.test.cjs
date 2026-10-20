@@ -5,7 +5,17 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { redactSecrets, looksLikeGitRepo, walkProjects, getEnvironmentTools, getProjectNpxSkills } = require('./scan.cjs');
+const {
+  redactSecrets,
+  looksLikeGitRepo,
+  walkProjects,
+  getEnvironmentTools,
+  getProjectNpxSkills,
+  readJsonSafe,
+  readScanConfig,
+  resolveScanInterval,
+  writeJsonAtomic,
+} = require('./scan.cjs');
 
 test('redactSecrets masks token/key/secret values, leaves others alone', () => {
   const input = {
@@ -146,5 +156,110 @@ test('getEnvironmentTools reports installedLocally from checkCommand exit code',
   } finally {
     if (backup === null) fs.rmSync(configPath, { force: true });
     else fs.writeFileSync(configPath, backup);
+  }
+});
+
+test('readScanConfig reads scanIntervalMinutes and skipPaths from a config directory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  try {
+    fs.writeFileSync(
+      path.join(dir, 'scan-config.json'),
+      JSON.stringify({ scanIntervalMinutes: 7, skipPaths: ['/tmp/skip'] })
+    );
+    const config = readScanConfig(dir);
+    assert.strictEqual(config.scanIntervalMinutes, 7);
+    assert.deepStrictEqual(config.skipPaths, ['/tmp/skip']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readScanConfig returns an empty object when there is no config file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  try {
+    assert.deepStrictEqual(readScanConfig(dir), {});
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveScanInterval prefers the stored config over the environment variable', () => {
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 30 }, { SCAN_INTERVAL_MINUTES: '5' }), 30);
+});
+
+test('resolveScanInterval uses the environment variable when no stored value exists', () => {
+  assert.strictEqual(resolveScanInterval({}, { SCAN_INTERVAL_MINUTES: '5' }), 5);
+  assert.strictEqual(resolveScanInterval({ skipPaths: [] }, { SCAN_INTERVAL_MINUTES: '45' }), 45);
+});
+
+test('resolveScanInterval falls back to 15 minutes when nothing is configured', () => {
+  assert.strictEqual(resolveScanInterval({}, {}), 15);
+  assert.strictEqual(resolveScanInterval(undefined, {}), 15);
+  assert.strictEqual(resolveScanInterval({}, { SCAN_INTERVAL_MINUTES: '' }), 15);
+});
+
+test('resolveScanInterval falls back past zero, negative and non-numeric values', () => {
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 0 }, { SCAN_INTERVAL_MINUTES: '8' }), 8);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: -4 }, { SCAN_INTERVAL_MINUTES: '8' }), 8);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 'abc' }, { SCAN_INTERVAL_MINUTES: '8' }), 8);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 0 }, { SCAN_INTERVAL_MINUTES: 'nope' }), 15);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: -1 }, { SCAN_INTERVAL_MINUTES: '0' }), 15);
+});
+
+test('resolveScanInterval floors a valid sub-minute value at one minute', () => {
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 0.2 }, {}), 1);
+  assert.strictEqual(resolveScanInterval({}, { SCAN_INTERVAL_MINUTES: '0.5' }), 1);
+  assert.strictEqual(resolveScanInterval({ scanIntervalMinutes: 2.9 }, {}), 2);
+});
+
+test('writeJsonAtomic writes the snapshot and leaves no temp file behind', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  try {
+    const target = path.join(dir, 'nested', 'local.json');
+    writeJsonAtomic(target, { generatedAt: 'first' });
+    assert.deepStrictEqual(readJsonSafe(target), { generatedAt: 'first' });
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(target)), ['local.json']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an interrupted snapshot write leaves the previous snapshot intact and readable', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  try {
+    const target = path.join(dir, 'local.json');
+    writeJsonAtomic(target, { generatedAt: 'old' });
+
+    // Root ignores directory permissions, so the interruption cannot be simulated there.
+    if (!isRoot) {
+      fs.chmodSync(dir, 0o555);
+      try {
+        assert.throws(() => writeJsonAtomic(target, { generatedAt: 'new' }));
+      } finally {
+        fs.chmodSync(dir, 0o755);
+      }
+      assert.deepStrictEqual(readJsonSafe(target), { generatedAt: 'old' });
+      assert.deepStrictEqual(fs.readdirSync(dir), ['local.json']);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a stale temp file left by a killed scan never shadows the readable snapshot', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  try {
+    const target = path.join(dir, 'local.json');
+    writeJsonAtomic(target, { generatedAt: 'old' });
+    fs.writeFileSync(path.join(dir, 'local.json.tmp'), '{"generatedAt": "half-writ');
+
+    assert.deepStrictEqual(readJsonSafe(target), { generatedAt: 'old' });
+
+    writeJsonAtomic(target, { generatedAt: 'new' });
+    assert.deepStrictEqual(readJsonSafe(target), { generatedAt: 'new' });
+    assert.deepStrictEqual(fs.readdirSync(dir), ['local.json']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -33,6 +33,34 @@ bun dev
 
 Then open `http://localhost:3000`.
 
+## Container
+
+The same repo builds a single image (`Dockerfile`) that serves the dashboard and
+rescans by itself: one scan at start, then every interval. Bun builds,
+`node:22-slim` runs (`bun run build`, then `node tools/entrypoint.mjs`).
+
+```
+docker build -t agent-config-manager .
+docker run -d --name acm \
+  -p 127.0.0.1:3000:3000 \
+  -e HOST_HOME=/home/you \
+  -v /home/you:/home/you:ro \
+  -v "$PWD/database:/app/database" \
+  agent-config-manager
+```
+
+The two mounts are all it needs. `HOST_HOME` is the only host-specific value:
+it is the home directory mounted at its own absolute path inside the container
+(so absolute skip paths keep meaning) and it becomes the container's `HOME`.
+The data directory stays the host's `database/`, so `local.json` and
+`cloud.json` remain visible and droppable from the host.
+
+| Env | Default | Meaning |
+| --- | --- | --- |
+| `HOST_HOME` | unset (container `HOME`) | Scanned home directory, must equal the read-only mount path |
+| `SCAN_INTERVAL_MINUTES` | `15` | Rescan cadence; a stored `scanIntervalMinutes` wins over it |
+| `PORT` | `3000` | Listen port inside the container |
+
 ## Notes
 
 - `database/` contains real (redacted) local config and is gitignored — it's
@@ -59,11 +87,16 @@ Then open `http://localhost:3000`.
   boundary and does not recurse further into it, so nested checkouts inside
   a repo (if any) aren't scanned separately.
 - `database/scan-config.json` lists absolute paths to skip entirely during
-  project-scope scanning (not descended into, not written to `local.json`).
-  Edit it by hand:
+  project-scope scanning (not descended into, not written to `local.json`),
+  and the rescan interval. Edit it by hand:
   ```json
-  { "skipPaths": ["/home/user/Projects/some-repo"] }
+  { "skipPaths": ["/home/user/Projects/some-repo"], "scanIntervalMinutes": 15 }
   ```
+  Each rescan resolves its interval from the stored `scanIntervalMinutes`
+  first, then `SCAN_INTERVAL_MINUTES`, then a 15-minute default, floored at
+  one minute — so changing the value here takes effect on the next tick with
+  no restart. Snapshots are written to a temp file and renamed into place, so
+  a scan interrupted mid-write leaves the previous snapshot readable.
 - `database/env-tools.json` lists standalone tools to track outside the
   plugin/MCP/skill system — each with a `checkCommand` (run locally via the
   shell; exit code 0 means installed) and an `installCommand` shown as-is in
@@ -86,5 +119,5 @@ Then open `http://localhost:3000`.
 ## Tests
 
 ```
-node --test scan.test.cjs
+bun run test   # node --test, no test dependency
 ```

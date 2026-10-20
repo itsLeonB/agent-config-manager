@@ -1,0 +1,11 @@
+node_modules
+dist
+database
+.git
+.gitignore
+.scratch
+.serena
+.claude
+.agents
+docs
+tools/oxlint
