@@ -25,12 +25,13 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   mirrors that page's modularity (one component per original render function in
   `src/components/dashboard/`, composed by `Dashboard.tsx`) rather than
   inventing new structure.
-- **Data loading is server-only.** `src/server/dashboard.server.ts` reads
-  `database/local.json` / `database/cloud.json` via `node:fs`;
-  `dashboard.functions.ts` wraps it in a `createServerFn`; the index route's
-  `loader` calls that. Loaders are isomorphic (they also run on the client), so
-  filesystem access belongs behind `createServerFn`, and a loader must not
-  self-fetch a relative URL during SSR.
+- **Data loading is server-only.** `src/server/dashboard.server.ts` reads the newest
+  stored scan snapshot through `src/server/store.cjs` — the only module that touches
+  `node:sqlite`, plain CJS so the TypeScript app imports it and `scan.cjs` requires it — and
+  still reads `database/cloud.json` via `node:fs` until cloud ingestion lands. The helper
+  wraps all this in a `createServerFn`; the index route's `loader` calls that. Loaders are
+  isomorphic (they also run on the client), so filesystem access belongs behind
+  `createServerFn`, and a loader must not self-fetch a relative URL during SSR.
 - **`src/types/dashboard.ts`** hand-mirrors the JSON shapes `scan.cjs` emits —
   kept in sync by hand, not derived from it. `mcpJson` / `pluginInstalls` need
   the recursive `Json` type because a server function's return type must be
@@ -61,9 +62,9 @@ deliberate and does not lean on framework defaults.
 
 ## Gotchas
 
-- `database/` is gitignored and holds real scanned config. A fresh clone has no
-  data until `node scan.cjs` runs once; until then the UI reads
-  "database/local.json not found. Run: node scan.cjs".
+- `database/` is gitignored and holds real scanned config plus `dashboard.db`. A fresh
+  clone has no data until `node scan.cjs` runs once; until then the store's snapshot table is
+  empty and the UI reads "database/local.json not found. Run: node scan.cjs".
 - `scan.cjs` and `database/` are resolved from `process.cwd()`, so the server
   must run with the repo root as its working directory (true for `bun run dev`
   and for the container).

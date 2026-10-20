@@ -3,19 +3,28 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
-import type { CloudData, LocalData, RescanResult } from '../types/dashboard'
+import { openStore } from './store.cjs'
+import type { Store } from './store.cjs'
+import type { CloudData, RescanResult } from '../types/dashboard'
 
 const DATABASE_DIR = path.join(process.cwd(), 'database')
+const STORE_FILE = path.join(DATABASE_DIR, 'dashboard.db')
 const SCANNER = path.join(process.cwd(), 'scan.cjs')
 const SCAN_TIMEOUT_MS = 120_000
 const execFileAsync = promisify(execFile)
 
+let store: Store | null = null
+
+function getStore(): Store {
+  store ??= openStore(STORE_FILE)
+  return store
+}
+
 async function readJson<T>(fileName: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(path.join(DATABASE_DIR, fileName), 'utf-8')
-    // SAFETY: database/*.json is written only by this app's own scan.cjs / /refresh-cloud
-    // automation, never by external/untrusted input; readLocalData re-validates the shape
-    // it depends on below before returning it.
+    // SAFETY: database/cloud.json is written only by this app's own /refresh-cloud
+    // automation, never by external/untrusted input.
     return JSON.parse(raw) as T
   } catch {
     return null
@@ -33,8 +42,8 @@ const localDataValidator = z.looseObject({
   projects: z.array(z.unknown()),
 })
 
-export async function readLocalData() {
-  const data = await readJson<LocalData>('local.json')
+export function readLocalData() {
+  const data = getStore().readLatestSnapshot('local')
   return data !== null && localDataValidator.safeParse(data).success ? data : null
 }
 
@@ -71,7 +80,7 @@ async function scanOnce(): Promise<RescanResult> {
 
   const local = await readLocalData()
   if (local === null) {
-    return { ok: false, error: 'Scan finished but database/local.json is unreadable.' }
+    return { ok: false, error: 'Scan finished but the stored snapshot is unreadable.' }
   }
 
   return {
