@@ -56,9 +56,11 @@ deliberate and does not lean on framework defaults.
   hand-written CSS (dark/light via `prefers-color-scheme`, no toggle) for
   pixel-identical UX. Leave `src/styles.css` for future pages; there is no
   theme toggle or Google Fonts import to restore.
-- **Per-browser state only.** The "missing" comments (`src/lib/comments.ts`)
-  and the copy-install-script button (`src/lib/install-script.ts`) use
-  localStorage and the clipboard. There is no backend write.
+- **Comments are server-side.** The "missing" comments live in the store's
+  `comments` table and are read once per page load in `getDashboardData`, so they
+  follow the browser; the same-origin guard covers the write. The
+  copy-install-script button (`src/lib/install-script.ts`) still uses the
+  clipboard only. `src/lib/comments.ts` holds just the shared key format.
 
 ## Gotchas
 

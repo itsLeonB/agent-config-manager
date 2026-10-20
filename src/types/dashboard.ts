@@ -118,4 +118,6 @@ export interface CloudData {
 export interface DashboardData {
   local: LocalData | null
   cloud: CloudData | null
+  // Missing-counterpart comments, keyed by commentKey; see lib/comments.
+  comments: Record<string, string>
 }

@@ -11,6 +11,7 @@ export interface Store {
   readConfig(key: string): Json | null
   writeComment(key: string, text: string): void
   readComment(key: string): string | null
+  readComments(): Record<string, string>
   close(): void
 }
 

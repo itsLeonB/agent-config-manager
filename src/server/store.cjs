@@ -41,6 +41,8 @@ function openStore(filePath) {
     'INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value'
   );
   const selectComment = db.prepare('SELECT text FROM comments WHERE key = ?');
+  const selectAllComments = db.prepare('SELECT key, text FROM comments');
+  const deleteComment = db.prepare('DELETE FROM comments WHERE key = ?');
   const upsertComment = db.prepare(
     'INSERT INTO comments (key, text, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at'
   );
@@ -61,11 +63,20 @@ function openStore(filePath) {
       return row === undefined ? null : JSON.parse(row.value);
     },
     writeComment(key, text) {
+      // Clearing the box means "no explanation", so drop the row rather than store a blank.
+      if (text.trim() === '') {
+        deleteComment.run(key);
+        return;
+      }
       upsertComment.run(key, text, new Date().toISOString());
     },
     readComment(key) {
       const row = selectComment.get(key);
       return row === undefined ? null : row.text;
+    },
+    readComments() {
+      // One query for the whole page load instead of one per missing item.
+      return Object.fromEntries(selectAllComments.all().map((row) => [row.key, row.text]));
     },
     close() {
       db.close();
