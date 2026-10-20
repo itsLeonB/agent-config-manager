@@ -65,12 +65,16 @@ deliberate and does not lean on framework defaults.
 
 ## Gotchas
 
-- `database/` is gitignored and holds real scanned config plus `dashboard.db`. A fresh
-  clone has no data until `node scan.cjs` runs once; until then the store's snapshot table is
-  empty and the UI reads "database/local.json not found. Run: node scan.cjs".
+- `database/` is gitignored and holds `dashboard.db` — the only store — plus the
+  `cloud.json` drop point. A fresh clone has no data until `node scan.cjs` runs once (or the
+  container starts, which scans on boot); until then the store's snapshot table is empty and the
+  UI shows the "no scan stored yet" empty state with a Rescan button. Backing up means copying
+  `dashboard.db` while the server is stopped; resetting means deleting it.
 - `scan.cjs` and `database/` are resolved from `process.cwd()`, so the server
   must run with the repo root as its working directory (true for `bun run dev`
-  and for the container).
+  and for the container). The scanner writes only the SQLite file; there is no
+  JSON snapshot any more, and no code reads JSON for config — settings come from
+  the store's `config` table via `/settings`.
 - `src/server/store.cjs` is loaded with `createRequire` from `process.cwd()` in
   `dashboard.server.ts`, not statically imported: Vite's dev SSR serves a `.cjs`
   source file as-is, so a static import fails in dev with `require is not
@@ -96,8 +100,6 @@ recipe and the local restart/crash proof are in
 
 - Deploy the Dokploy Application using the operator checklist in
   [docs/deploy-dokploy.md](docs/deploy-dokploy.md).
-- Decide whether `scan.cjs` becomes a server route the UI can trigger, instead
-  of a manually-run CLI script.
 
 ## Agent skills
 

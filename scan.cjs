@@ -11,7 +11,6 @@ const DATABASE_DIR = path.join(__dirname, 'database');
 const STORE_FILE = path.join(DATABASE_DIR, 'dashboard.db');
 const CLOUD_FILE = 'cloud.json';
 const DEFAULT_SCAN_INTERVAL_MINUTES = 15;
-const SNAPSHOT_TMP_SUFFIX = '.tmp';
 const SECRET_KEY_RE = /token|key|secret|authorization|password|credential|bearer|cookie|session/i;
 const ENV_VAR_PLACEHOLDER_RE = /^\$\{[^}]+\}$/;
 const SKIP_DIR_RE = /^node_modules$|^\.git$/;
@@ -261,22 +260,6 @@ function loadConfig(storeFile = STORE_FILE, env = process.env) {
   }
 }
 
-// Write beside the target, then rename: a concurrent reader sees either the
-// previous snapshot or the new one, never a half-written file.
-function writeJsonAtomic(filePath, value) {
-  const json = JSON.stringify(value, null, 2);
-  const tmpPath = filePath + SNAPSHOT_TMP_SUFFIX;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  try {
-    fs.writeFileSync(tmpPath, json);
-    fs.renameSync(tmpPath, filePath);
-  } catch (error) {
-    fs.rmSync(tmpPath, { force: true });
-    throw error;
-  }
-  return filePath;
-}
-
 // The /refresh-cloud command writes cloud.json into the data directory; that
 // file is the only cloud input. The last-seen mtime lives in the returned
 // closure, and starts empty so a file already on disk is ingested on the first
@@ -491,8 +474,6 @@ function scanOnce(config, storeFile = STORE_FILE) {
   } finally {
     store.close();
   }
-  // Transitional: the JSON file is retired once nothing reads it any more.
-  writeJsonAtomic(path.join(path.dirname(storeFile), 'local.json'), result);
 
   console.log(
     `Scanned: ${result.userScope.plugins.length} plugins, ` +
@@ -500,7 +481,7 @@ function scanOnce(config, storeFile = STORE_FILE) {
       `${result.userScope.skills.length} user skills, ` +
       `${result.npxSkillsGlobal.skills.length} npx-skills, ` +
       `${result.environmentTools.filter((t) => t.installedLocally).length}/${result.environmentTools.length} env tools installed, ` +
-      `${result.projects.length} projects -> database/local.json`
+      `${result.projects.length} projects -> database/dashboard.db`
   );
   return result;
 }
@@ -559,7 +540,6 @@ module.exports = {
   resolveConfig,
   loadConfig,
   resolveScanInterval,
-  writeJsonAtomic,
   createCloudSync,
   getSkipPaths,
   getEnvironmentTools,

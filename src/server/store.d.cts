@@ -10,7 +10,6 @@ export interface Store {
   writeConfig(key: string, value: Json): void
   readConfig(key: string): Json | null
   writeComment(key: string, text: string): void
-  readComment(key: string): string | null
   readComments(): Record<string, string>
   close(): void
 }

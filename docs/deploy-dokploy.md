@@ -45,8 +45,12 @@ is stable, host-visible (so `/refresh-cloud` and future SQLite backups stay plai
 and survives redeploys.
 
 `HOST_HOME` must equal the mount's host path. It is both the scanned directory and the container's
-`HOME`, which is what keeps absolute paths already stored in `database/scan-config.json` and in
-snapshots meaningful inside the container.
+`HOME`, which is what keeps the absolute paths stored in the database (the settings and the skip
+paths) and in snapshots meaningful inside the container.
+
+The data directory holds two files: `dashboard.db` (the store — snapshots, settings, comments) and
+`cloud.json` (the `/refresh-cloud` drop point). Backing up is copying `dashboard.db` while the
+container is stopped; resetting is deleting it and letting the next start recreate it.
 
 ## Create the application
 
@@ -123,7 +127,7 @@ Both should print `200`. A `404` from Traefik means the domain rule or entrypoin
 - **Roll back through git** instead if the deployment list is not enough:
   `git revert <bad-commit> && git push`, which re-enters through auto-deploy.
 - The data directory is not part of the image or the deploy, so redeploying and rolling back
-  never touch `database/`. Restoring data is copying a file back and restarting the container.
+  never touch `dashboard.db`. Restoring data is copying the file back and restarting the container.
 
 ## Restart and reboot behaviour
 
@@ -140,10 +144,14 @@ containers, including Dokploy itself. Do it once by hand when convenient:
 sudo systemctl restart docker
 docker service ls                       # acm should be 1/1 within a minute
 curl -s -o /dev/null -w '%{http_code}\n' http://acm.localhost/
-stat -c %y /home/leon/acm-database/local.json   # mtime should advance: a fresh scan ran
+stat -c %y /home/leon/acm-database/dashboard.db   # mtime should advance: a fresh scan ran
 ```
 
 ## Local proof
+
+The pasted output below was captured before ticket 08 retired the JSON snapshot: the scanner now
+logs `-> database/dashboard.db` and writes no `local.json`, so read every `local.json` in these
+commands as `dashboard.db`.
 
 Run on this machine, real Docker daemon (v29.2.0, Swarm active), same image and mounts the
 Dokploy service uses, host port 3100 to avoid the Dokploy UI on 3000.
@@ -253,8 +261,8 @@ Everything that needs clicking in Dokploy, in order. Roughly 10 minutes.
 1. `mkdir -p /home/leon/acm-database`
 2. Create the Application with the values in [Values](#values) and [Create the application](#create-the-application).
 3. Deploy, then confirm `200` from both `http://acm.localhost/` and `http://localhost:3100/`.
-4. Confirm the first scan landed: `ls -l /home/leon/acm-database/local.json` — it should exist and
-   its mtime should be within a minute of the deploy.
+4. Confirm the first scan landed: `ls -l /home/leon/acm-database/dashboard.db` — it should exist
+   and its mtime should be within a minute of the deploy.
 5. Reboot once (or later) and confirm the page returns without starting anything:
    `curl -s -o /dev/null -w '%{http_code}\n' http://acm.localhost/`
 6. Optional, when convenient: `sudo systemctl restart docker` and repeat step 5.
@@ -264,14 +272,15 @@ Everything that needs clicking in Dokploy, in order. Roughly 10 minutes.
 - **Host port 3000 is unavailable.** Dokploy's own UI already publishes `0.0.0.0:3000`, so the
   fallback port must be something else; this doc uses 3100. Anything that assumes 3000 for the
   dashboard will collide with Dokploy.
-- **Root-owned data files.** The container runs as root, so `local.json` and the future SQLite
-  file are root-owned on the host. Harmless while the container is the only writer, but a
+- **Root-owned data files.** The container runs as root, so `dashboard.db` (and the
+  `/refresh-cloud` drop file) are root-owned on the host. Harmless while the container is the only writer, but a
   host-side `node scan.cjs` against the same directory needs `sudo`. Mitigation later: run the
   service as a fixed uid.
 - **`HOST_HOME` must match the mount**, or the scanner inventories the container's empty `HOME`
   and the page shows zeros.
 - **Cloud data is still a host step.** `database/cloud.json` only appears after `/refresh-cloud`
   runs on the host and writes into `/home/leon/acm-database` (or is copied there). Nothing in the
-  container produces it.
+  container produces it; the scanner only ingests it into `dashboard.db`.
 - **Rolling back past the SQLite phase loses settings and comments**, because they live in the
-  data directory. Copy the file before reverting.
+  data directory. Copy `dashboard.db` before reverting. A rollback to a build that predates the
+  store cannot read it at all, so the page falls back to its empty state.

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { getDashboardData } from '../server/dashboard.functions'
 import { ProjectsTable } from '../components/dashboard/ProjectsTable'
 import { ProjectsCompare } from '../components/dashboard/ProjectsCompare'
+import { EmptyState } from '../components/dashboard/EmptyState'
 
 const projectsSearchSchema = z.object({
   mode: z.literal('compare').optional().catch(undefined),
@@ -21,14 +22,7 @@ function Projects() {
   const { mode = 'table' } = Route.useSearch()
   const navigate = useNavigate({ from: '/projects' })
 
-  if (!local) {
-    return (
-      <>
-        <h1>Project scope</h1>
-        <div className="meta">database/local.json not found. Run: node scan.cjs</div>
-      </>
-    )
-  }
+  if (!local) return <EmptyState title="Project scope" />
 
   return (
     <>

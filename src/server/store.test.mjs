@@ -76,14 +76,13 @@ test('config round-trips and overwrites', () => {
 test('a comment is upserted, not appended', () => {
   const store = openStore(tempDb())
   try {
-    assert.strictEqual(store.readComment('plugin:b'), null)
+    assert.deepStrictEqual(store.readComments(), {})
 
     store.writeComment('plugin:b', 'first')
-    assert.strictEqual(store.readComment('plugin:b'), 'first')
+    assert.deepStrictEqual(store.readComments(), { 'plugin:b': 'first' })
 
     store.writeComment('plugin:b', 'second')
-    assert.strictEqual(store.readComment('plugin:b'), 'second')
-    assert.strictEqual(store.readComment('plugin:a'), null)
+    assert.deepStrictEqual(store.readComments(), { 'plugin:b': 'second' })
   } finally {
     store.close()
   }
@@ -155,9 +154,7 @@ test('an empty comment deletes the stored row instead of storing a blank', () =>
     store.writeComment('skills:bar', 'still here')
 
     store.writeComment('skills:foo', '')
-    assert.strictEqual(store.readComment('skills:foo'), null)
-    assert.ok(!('skills:foo' in store.readComments()))
-    assert.strictEqual(store.readComment('skills:bar'), 'still here')
+    assert.deepStrictEqual(store.readComments(), { 'skills:bar': 'still here' })
   } finally {
     store.close()
   }
