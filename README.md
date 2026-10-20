@@ -61,6 +61,14 @@ The data directory stays the host's `database/`, so `local.json` and
 | `SCAN_INTERVAL_MINUTES` | `15` | Rescan cadence; a stored `scanIntervalMinutes` wins over it |
 | `PORT` | `3000` | Listen port inside the container |
 
+### Deploying to Dokploy
+
+This machine's deployment target is a Dokploy Application built from this
+repo's `Dockerfile`, served at `http://acm.localhost` (Traefik, HTTPS off) with
+the container port also published on the host as a fallback. The recipe — real
+values, mounts, env, port, domain, auto-deploy, rollback by commit, and the
+local restart/crash proof — is in [docs/deploy-dokploy.md](docs/deploy-dokploy.md).
+
 ## Notes
 
 - `database/` contains real (redacted) local config and is gitignored — it's

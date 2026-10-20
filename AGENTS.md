@@ -75,13 +75,18 @@ deliberate and does not lean on framework defaults.
 
 ## Deployment
 
-Not deployed; this app has only run locally. `bun run build` emits
-`dist/client` + `dist/server` (Node SSR). A target needs `database/*.json` on
-its disk, or the data-loading layer swapped for another source — undecided.
+Target: a Dokploy Application built from this repo's `Dockerfile`, on the local
+Swarm, at `http://acm.localhost` (Traefik, HTTPS off) with the container port
+also published on the host. Host home goes in read-only at its own absolute
+path (`HOST_HOME`), the data directory is a read-write host bind. The full
+recipe and the local restart/crash proof are in
+[docs/deploy-dokploy.md](docs/deploy-dokploy.md). `bun run build` emits
+`dist/client` + `dist/server` (Node SSR).
 
 ## Next steps
 
-- Pick a deployment target, and how `database/*.json` reaches it.
+- Deploy the Dokploy Application using the operator checklist in
+  [docs/deploy-dokploy.md](docs/deploy-dokploy.md).
 - Decide whether `scan.cjs` becomes a server route the UI can trigger, instead
   of a manually-run CLI script.
 
