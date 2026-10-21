@@ -108,9 +108,17 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
 
 Target: a Dokploy Application built from this repo's `Dockerfile`, on the local
 Swarm, at `http://acm.localhost` (Traefik, HTTPS off) with the container port
-also published on the host. Host home goes in read-only at its own absolute
-path (`HOST_HOME`), the data directory is a read-write host bind. The full
-recipe and the local restart/crash proof are in
+also published on the host. Dokploy cannot mount a bind read-only (v0.30.8 stores
+only type / host path / mount path / volume name), so the host home goes in
+read-write at its own absolute path (`HOST_HOME`) and the data directory is a
+second read-write bind. The app's own code only reads `$HOME` and writes the
+store under `/app/database`, but the env-tool `checkCommand` strings from
+`/settings` are run as shell commands in the container and the dashboard has no
+auth, so the writable home is a real trust boundary: keep that list to commands
+you would run yourself, and keep the app on a trusted network. `tools/entrypoint.mjs`
+exits 1 when `HOST_HOME` is not a directory and
+warns when none of `.claude`, `.claude.json`, `.agents` is mounted under it. The
+full recipe and the local restart/crash proof are in
 [docs/deploy-dokploy.md](docs/deploy-dokploy.md). `bun run build` emits
 `dist/client` + `dist/server` (Node SSR).
 

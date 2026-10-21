@@ -90,7 +90,7 @@ For `bun run dev` against the same data, use the same commands without the
 
 | Env | Default | Meaning |
 | --- | --- | --- |
-| `HOST_HOME` | unset (container `HOME`) | Scanned home directory, must equal the read-only mount path |
+| `HOST_HOME` | unset (container `HOME`) | Scanned home directory, must be the container path the host home is mounted at |
 | `PROJECTS_ROOT` | `~/Projects` | Projects directory to scan; a stored `projectsRoot` wins over it |
 | `SCAN_INTERVAL_MINUTES` | `15` | Rescan cadence; a stored `scanIntervalMinutes` wins over it |
 | `PUBLIC_ORIGIN` | unset | This dashboard's public origin, e.g. `http://acm.localhost`; **required behind a proxy** — the origin guard trusts only the received URL's origin plus this value, never forwarded headers |
