@@ -76,16 +76,18 @@ Fields as they appear in Dokploy v0.30.8; exact tab grouping may drift between v
 4. **Environment**: `HOST_HOME=/home/leon`, `SCAN_INTERVAL_MINUTES=15`, `PUBLIC_ORIGIN=http://acm.localhost`. Leave `PORT` alone.
 5. **Advanced → Mounts**, two bind mounts. Dokploy v0.30.8 stores only type / host path / mount
    path / volume name per mount, so a bind mount **cannot be made read-only** — the home mount is
-   writable, which is harmless here because nothing in the app writes to `$HOME` (the only write
-   path is the SQLite store in `/app/database`).
+   writable. The app's own code only reads the home and writes the SQLite store in `/app/database`,
+   but an env-tool `checkCommand` from `/settings` runs as a shell command in the container (see the
+   security note below), so the writable home is a trust boundary rather than a pure read mount.
 
    | Type | Host path | Mount path |
    | --- | --- | --- |
    | Bind | `/home/leon` | `/home/leon` |
    | Bind | `/home/leon/acm-database` | `/app/database` |
 
-   The mount path must repeat the host path exactly; a suffix like `:ro` on the mount path is
-   *part of the path*, and the real path then does not exist in the container.
+   The home bind must repeat the host path exactly (`/home/leon` → `/home/leon`); the data bind maps
+   the host's `/home/leon/acm-database` to `/app/database`. On either one, a suffix like `:ro` in the
+   mount path is *part of the path*, and the real path then does not exist in the container.
 
    Narrowing the home mount to the four paths the scanner reads (`~/.claude`, `~/.claude.json`,
    `~/.agents`, `~/Projects`) is optional: it changes no code and scans the same data, and it keeps
@@ -98,11 +100,15 @@ Fields as they appear in Dokploy v0.30.8; exact tab grouping may drift between v
 8. **General → Auto Deploy**: on (Dokploy registers the GitHub webhook; a push to `main` deploys).
 9. **Deploy**.
 
-Security note: the home mount is read-write, because Dokploy cannot mount a bind read-only. That is
-acceptable because the dashboard only reads the home: the sole write path in the code is the SQLite
-store under `/app/database`, and the only command execution is the env-tool check commands you
-configure yourself in `/settings` (empty by default). The exposure to weigh is therefore the network
-side, not the mount — see [Reachability](#reachability).
+Security note: the home mount is read-write, because Dokploy cannot mount a bind read-only. The
+dashboard's own code only reads the home and writes the SQLite store under `/app/database`. The
+exception is the env-tool list in `/settings`: a `checkCommand` is any non-empty string, and
+`scan.cjs` runs it through `execSync` as a shell command in the container. The app has no
+authentication — the settings and rescan endpoints are guarded only by the same-origin check, which
+a direct client satisfies — so anyone who can reach the dashboard can store a command that writes to
+the writable home (a `~/.claude/settings.json` hook, say) and reach host code execution through it.
+Treat that list as commands you would run yourself, keep the dashboard on a trusted network (see
+[Reachability](#reachability)), and treat the writable home as the trust boundary it is.
 
 ## Reachability
 
