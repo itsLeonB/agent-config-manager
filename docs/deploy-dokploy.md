@@ -35,7 +35,7 @@ This machine's real values. Only `HOST_HOME` and the mount source change on a se
 | Traefik entrypoint | `web` (port 80) only |
 | `HOST_HOME` | `/home/leon` |
 | `PUBLIC_ORIGIN` | `http://acm.localhost` (required: without it the origin guard rejects rescan and settings writes behind the proxy) |
-| Home mount | `/home/leon:/home/leon:ro` (read-only, same absolute path inside the container) |
+| Home mount | `/home/leon` → `/home/leon`, read-write (Dokploy has no read-only option for binds) |
 | Data mount | host `/home/leon/acm-database` → `/app/database` (read-write) |
 | `SCAN_INTERVAL_MINUTES` | `15` |
 
@@ -45,9 +45,10 @@ deploy. A data directory inside it would be a moving target for a bind mount. `/
 is stable, host-visible (so `/refresh-cloud` and future SQLite backups stay plain filesystem work),
 and survives redeploys.
 
-`HOST_HOME` must equal the mount's host path. It is both the scanned directory and the container's
-`HOME`, which is what keeps the absolute paths stored in the database (the settings and the skip
-paths) and in snapshots meaningful inside the container.
+`HOST_HOME` must be the container path the home content lands at (`/home/leon`), so the absolute
+paths stored in the database (the settings and the skip paths) and in snapshots stay meaningful
+inside the container. The entrypoint refuses to start when `HOST_HOME` is not a directory and warns
+when no `.claude` / `.claude.json` / `.agents` is mounted under it.
 
 The container runs as uid/gid `1000` (the image's `node` user), so the data mount source must be
 writable by that uid: `sudo chown -R 1000:1000 /home/leon/acm-database` once, plus a
@@ -73,12 +74,22 @@ Fields as they appear in Dokploy v0.30.8; exact tab grouping may drift between v
    (A GitHub provider is already configured on this instance — the existing `hrms` application
    uses the same source/build combination.)
 4. **Environment**: `HOST_HOME=/home/leon`, `SCAN_INTERVAL_MINUTES=15`, `PUBLIC_ORIGIN=http://acm.localhost`. Leave `PORT` alone.
-5. **Advanced → Mounts**, two bind mounts:
+5. **Advanced → Mounts**, two bind mounts. Dokploy v0.30.8 stores only type / host path / mount
+   path / volume name per mount, so a bind mount **cannot be made read-only** — the home mount is
+   writable, which is harmless here because nothing in the app writes to `$HOME` (the only write
+   path is the SQLite store in `/app/database`).
 
-   | Type | Host path | Mount path | Read only |
-   | --- | --- | --- | --- |
-   | Bind | `/home/leon` | `/home/leon` | yes |
-   | Bind | `/home/leon/acm-database` | `/app/database` | no |
+   | Type | Host path | Mount path |
+   | --- | --- | --- |
+   | Bind | `/home/leon` | `/home/leon` |
+   | Bind | `/home/leon/acm-database` | `/app/database` |
+
+   The mount path must repeat the host path exactly; a suffix like `:ro` on the mount path is
+   *part of the path*, and the real path then does not exist in the container.
+
+   Narrowing the home mount to the four paths the scanner reads (`~/.claude`, `~/.claude.json`,
+   `~/.agents`, `~/Projects`) is optional: it changes no code and scans the same data, and it keeps
+   the rest of the home — credentials, dotfiles — out of the container.
 
 6. **Ports**: publish `3100` → container `3000`. Host IP `127.0.0.1` if the form accepts one;
    see [Loopback port bind refused](#loopback-port-bind-refused) if Swarm rejects it.
@@ -87,8 +98,11 @@ Fields as they appear in Dokploy v0.30.8; exact tab grouping may drift between v
 8. **General → Auto Deploy**: on (Dokploy registers the GitHub webhook; a push to `main` deploys).
 9. **Deploy**.
 
-Security note: the bind-mounted home is read-only, so the dashboard can inventory the machine's
-Claude configuration but cannot modify it. The only writable host path is the data directory.
+Security note: the home mount is read-write, because Dokploy cannot mount a bind read-only. That is
+acceptable because the dashboard only reads the home: the sole write path in the code is the SQLite
+store under `/app/database`, and the only command execution is the env-tool check commands you
+configure yourself in `/settings` (empty by default). The exposure to weigh is therefore the network
+side, not the mount — see [Reachability](#reachability).
 
 ## Reachability
 
@@ -188,8 +202,10 @@ The pasted output below was captured before ticket 08 retired the JSON snapshot:
 logs `-> database/dashboard.db` and writes no `local.json`, so read every `local.json` in these
 commands as `dashboard.db`.
 
-Run on this machine, real Docker daemon (v29.2.0, Swarm active), same image and mounts the
-Dokploy service uses, host port 3100 to avoid the Dokploy UI on 3000.
+Run on this machine, real Docker daemon (v29.2.0, Swarm active), same image the Dokploy service
+uses, host port 3100 to avoid the Dokploy UI on 3000. Recorded with the whole home mounted
+read-only; `docker run` accepts `:ro`, Dokploy does not, so the deployed mount is read-write at the
+same path.
 
 ```
 $ docker build -t agent-config-manager .
@@ -313,8 +329,12 @@ Everything that needs clicking in Dokploy, in order. Roughly 10 minutes.
   or the store fails to open and the page shows the empty state. Files it writes are owned by uid
   1000 on the host, not root — a host-side `node scan.cjs` against the same directory works without
   `sudo` as long as you are that uid too.
-- **`HOST_HOME` must match the mount**, or the scanner inventories the container's empty `HOME`
-  and the page shows zeros.
+- **`HOST_HOME` must be the container path the scans land on**, or the scanner inventories the
+  container's empty `HOME` and the page shows zeros. Dokploy has no read-only toggle, so the mount
+  paths are plain paths and must repeat the host path exactly: a `:ro` pasted into the mount path
+  makes the target `/home/leon:ro`, leaves `/home/leon` absent (the entrypoint then exits 1 on
+  startup), and makes the mount writable. `docker inspect <container> --format '{{json .Mounts}}'`
+  shows the landed `Destination`.
 - **Cloud data is still a host step.** `database/cloud.json` only appears after `/refresh-cloud`
   runs on the host and writes into `/home/leon/acm-database` (or is copied there). Nothing in the
   container produces it; the scanner only ingests it into `dashboard.db`.
