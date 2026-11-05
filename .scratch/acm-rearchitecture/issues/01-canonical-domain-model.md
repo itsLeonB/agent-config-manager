@@ -28,3 +28,21 @@ OpenCode. Challenge any fuzzy term with a precise canonical one and record it.
 **Zoom:** `BRIEF.md` §5, §6, §8.3. Related: [Harness adapter contract and capability model](./02-adapter-contract-and-capabilities.md), [Storage and migration decision](./10-storage-and-migration.md).
 
 **Output:** the agreed entity/field list and rationale, written into the handoff spec.
+
+## Comments
+
+2026-11-05 — input from the three config-surface researches (they all landed; see
+[Pi](./03-pi-config-surface.md), [Codex](./04-codex-config-surface.md),
+[OpenCode](./05-opencode-config-surface.md)). The scope vocabulary this ticket settles cannot
+assume one scope shape per harness:
+
+| Harness | Tiers | Sharp edges |
+|---|---|---|
+| Pi | 2 | user (`~/.pi/agent`), project (`.pi/`) — no project-local tier |
+| Codex | 3 | user, `profile` (`<name>.config.toml`, **launch-time only, not writable state**), project; project inert until `trust_level = "trusted"` in *user* config; `requirements.toml`/MDM above all |
+| OpenCode | 4+ | `/etc/opencode` is root-managed and **outranks the project**; `~/.opencode` is real but undocumented; project chain merges every ancestor `opencode.json(c)` cwd→root, and `.opencode/*` configs outrank direct ones |
+
+So at least one harness has a tier that is not a mirror target (`profile`), one has a tier the tool
+does not own (`/etc/opencode`, MDM), and one has no project-local tier at all. The model needs a
+way to represent "this installation exists at a tier ACM cannot write" that is distinct from
+"unsupported component".

@@ -56,15 +56,16 @@ that slice.
   positional index) — the inverse of Pi; MCP merges per field across layers but `codex mcp add`
   replaces whole tables and is user-scope only, so project-scope writes must be file writes;
   `config.toml` can hold MCP OAuth `client_secret`. Findings on `research/codex-config`.
+- [OpenCode native configuration surface](issues/05-opencode-config-surface.md): four tiers with
+  `/etc/opencode` **outranking** the project and ancestor-chain merging; hooks are code (not
+  config, as in Pi); MCP is `mcp.servers.<name>` + `disabled` with whole-entry replace, no
+  field patch; the CLI manages only `mcp add|auth|logout` and `plugin *`, global scope only, and
+  there is no `mcp remove`; invalid config is dropped with **exit 0 and empty stderr**.
+  Findings on `research/opencode-config`.
 
 ## Not yet specified
 
-- **Capability-gap semantics.** Once the Pi/Codex/OpenCode research reports what each harness
-  actually supports, we must decide what "equivalent" means when the target lacks a feature:
-  block, degrade, or ask. Not sharp until those facts exist.
-- **Equivalence per component category.** How config is translated for MCP servers vs skills
-  vs hooks vs instructions vs plugins differs; the shape of that translation is unknown until
-  adapters and the mirror plan exist.
+- **Equivalence per component category.** The *gap* rule graduated to [Capability-gap semantics](issues/11-capability-gap-semantics.md); what remains fog is the per-category translation table itself (MCP vs skills vs instructions vs plugins), which cannot be written until the domain model and the mirror plan exist.
 - **Which harness pairs matter most.** Source/target precedence and the highest-value first
   pair depend on the research findings and on which harnesses are actually used day to day.
 
