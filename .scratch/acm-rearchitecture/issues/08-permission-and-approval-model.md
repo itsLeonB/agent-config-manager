@@ -30,50 +30,64 @@ Decide the concrete model for this slice:
 
 ## Answer
 
-Settled with the dev over four grilling rounds on 2026-07-23. Decision record: an ADR is
-required (security-critical, hard to reverse). This answer fixes the *gates*; the concrete
-detection rulebook is [Secret detection rules and secret-free-by-design guidance](./13-secret-detection-rules.md).
+Settled with the dev over five grilling rounds on 2026-07-23. §1–§3 were revised in round 5:
+round 1's elicitation-or-refuse is replaced by **graded consent**, so a client without elicitation
+(Pi) can still `apply`. Decision record: an ADR is required (security-critical, hard to reverse).
+This answer fixes the *gates*; the concrete detection rulebook is
+[Secret detection rules and secret-free-by-design guidance](./13-secret-detection-rules.md).
 
-### 1. The trust boundary — why only the client can carry a "yes"
+### 1. The trust boundary — consent is graded, and the engine decides the grade
 
-Engine and agent run as the same OS user on the same machine. Nothing the *engine* holds can
-distinguish a human's consent from an agent's assertion: an approval token, a state file, or an
-`--yes` flag is all writable by the agent. So "permissions enforced by the core engine rather
-than relying on the agent" (§4.2) cannot mean "engine holds the secret to consent". It means:
+Engine and agent run as the same OS user on the same machine, so **no channel the engine controls
+can distinguish a human's consent from an agent's assertion**: an approval token, a state file, a
+`confirm: true` argument, or a `--yes` flag are all writable by the agent. Only **MCP
+elicitation** escapes that, because the *client* renders the dialog. Verified capability
+(2026-07-23): **Codex 0.166** and **OpenCode 2.2.5** implement `elicitation/create` (form + URL).
+**Pi 1.5.0 does not**, and Pi's docs state it "does not ask for approval before every tool call".
 
-- The engine **never mutates on an assertion** — a `confirm: true` argument from the caller is
-  inert. It refuses rather than believing.
-- The only unforgeable channel is **MCP elicitation** (`elicitation/create`), which the *client*
-  renders to a human. The engine's gate is therefore: *no human answer reachable → no write*.
+The engine therefore **grades every plan** and only the risky grade needs a human answer:
 
-Verified capability (2026-07-23): **Codex 0.166** and **OpenCode 2.2.5** implement
-`elicitation/create` (form + URL). **Pi 1.5.0 does not**, and Pi's own docs state it "does not
-ask for approval before every tool call". Consequence, accepted deliberately:
+| Grade | When | On apply |
+|---|---|---|
+| `safe` | every write is `writeAtPointer` / `writeFile` into a **pre-existing** target file, inside the declared `writePaths`, with no risk flag (§6–8), no conflict, no credential path | applies on **any** client; consent recorded as `"client-policy"` |
+| `risky` | any write flagged `executable`, `secretValues`, or `irreversible`; any `copyFile`; any new directory; any conflict; any elevation | needs **elicitation**; on a client without it, the risky writes alone return as `manualSteps[]` and the safe remainder still applies |
 
-> **On Pi, `apply` is unavailable.** It returns `status: "noApprovalChannel"` with the full plan
-> and a `manualSteps[]` entry naming an elicitation-capable client. Pi can drive discovery,
-> inspection and `plan`; it cannot mutate. No silent downgrade to the client's tool-permission
-> layer, which Pi does not prompt from by default.
+The invariant, in one line: **the engine never mutates on an assertion, and what it will do
+without a human answer is bounded by the grade.** `client-policy` means the harness's own
+permission configuration is the authorization — the same authorization every other tool that
+client offers runs on. It is never something ACM asserts for itself.
 
-The engine must also only ever send `elicitation/create` when the client declared the capability
-in its `initialize` — sending it blind would be a spec violation, not a fallback.
+Two costs, stated because they are real:
+
+- A `safe` write can still break a config file if the classifier is wrong about "safe." The
+  mitigation is structural — preconditions, `preserved[]`, pointer-level merge — not consent.
+- The engine **cannot verify** that a Pi user configured a permission rule. `safe` plans apply
+  even when none exists. Deliberate: an unconfigured client degrades to "can write config
+  files," never to "can write code, carry secrets, or overwrite conflicts."
+
+Defense in depth: `apply` declares `readOnlyHint: false` + `destructiveHint: true`, and `plan`
+declares `readOnlyHint: true`, so any client's own permission layer can gate on top of the grade.
+The engine must only ever send `elicitation/create` when the client declared the capability in
+its `initialize` — sending it blind is a spec violation, not a fallback.
 
 ### 2. The four gates
 
 | # | Gate | Enforced where | Refuses when |
 |---|---|---|---|
 | 1 | **Plan is read-only** | `plan` handler | Nothing is refused; `plan` writes no bytes and mutates no state |
-| 2 | **Human consent** | `apply` handler, before any filesystem access | Client has no elicitation capability, human declines, dialog times out |
+| 2 | **Graded consent** | `apply` handler, before any filesystem access | The plan is `risky` and the client has no elicitation capability (risky writes move to `manualSteps`) or the human declines |
 | 3 | **Precondition + containment** | `apply` handler, before the first byte | Any write is stale, out-of-allowlist, symlinked, non-regular, elevated, or targets a credential location |
 | 4 | **Acknowledgement of risk flags** | The elicitation form itself | A write flagged `executable` / `secretValues` / `irreversible` was not ticked |
 
 Gate order matters: the human is never asked to approve a plan the engine would refuse anyway,
 and no file is opened for write before gates 2–4 pass.
 
-### 3. Gate 2 — what the human sees and what one yes covers
+### 3. Gate 2 — what the human sees on a `risky` plan
 
-One elicitation per `apply` call, covering the whole plan, plus a **separate tick** for every
-write carrying a risk flag. The form shows, and only shows:
+A `safe` plan shows no dialog: it returns the plan, the `landed[]` set and
+`consent: "client-policy"`. For a `risky` plan, one elicitation per `apply` call, covering the
+whole plan, plus a **separate tick** for every write carrying a risk flag. The form shows, and
+only shows:
 
 - `planId`, `target {harness, tierId, scope, nativeLocation}`, `createdAt`.
 - Every write as `op · file · pointer` — never a file's whole contents.
@@ -188,8 +202,10 @@ construction, not by an audit.
 ### 10. Prohibited in this slice
 
 No automation policy, no blanket approval, no `--yes`, no env var that skips a gate, no "approve
-for the session", no standing consent for a path or an adapter. Every mutating call is one
-human's answer to one plan.
+for the session", no standing consent for a path or an adapter. Consent for a `risky` write is
+always one human's answer to one plan, in that plan's own dialog. `safe` plans are the single
+delegation, and their authorization is the harness's own permission configuration — never a flag
+ACM accepts.
 
 ### 11. Amendments to settled tickets
 
@@ -197,7 +213,8 @@ human's answer to one plan.
   `irreversible: boolean`; the plan gains `security: { secrets: [{pointer, verdict}],
   executables: [{file, why}] }`. Its worked example changes: `env` is no longer plain `carried`
   — a clean `env` value carries, a `suspect`/`secret` one takes §6's three-way path. `apply`'s
-  result set grows `declined`, `noApprovalChannel`, `partial`, `busy`.
+  result set grows `declined`, `partial`, `busy`, plus `consent: "elicitation" | "client-policy"`;
+  plans gain `grade: "safe" | "risky"` and each write gains `grade` alongside its risk flags.
 - **Ticket 02** — the adapter descriptor gains `credentialPointers: string[]` and per-tier
   `writePaths` as classifier/containment inputs. Both are checked for agreement at load like the
   rest of the descriptor.

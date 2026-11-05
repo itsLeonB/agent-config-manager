@@ -97,9 +97,12 @@ that slice.
   `alreadyPresent`, and `already shared` all return a plan with empty `writes[]`, never a separate
   error shape. Needs one amendment to ticket 02's `translate()` union (`manualSteps[]`).
 - [Permission, approval, and safety model for MCP mutations](issues/08-permission-and-approval-model.md):
-  consent can only come from **MCP elicitation** — on Pi 1.5.0, which has none, `apply` refuses
-  (`noApprovalChannel`) while `plan` still works; a caller-supplied `confirm` is inert. Four gates:
-  plan is read-only → human consent → preflight+containment → risk-flag ticks. Approval binds to
+  consent is **graded**, so a client without elicitation still applies. The engine grades each plan
+  `safe` (pointer/file writes into existing files, no risk flags → applies anywhere, consent recorded
+  `client-policy`) or `risky` (executable / secretValues / irreversible / copyFile / conflict /
+  new dir / elevation → needs elicitation; on Pi 1.5.0 — which has no elicitation — only those
+  writes return as `manualSteps`). A caller-supplied `confirm` is always inert. Four gates:
+  plan is read-only → graded consent → preflight+containment → risk-flag ticks. Approval binds to
   `planId` per call, stateless, audit on target `provenance`. User + project tiers writable,
   elevated/root tiers refused; writes must match an adapter-declared `writePaths` entry, resolve
   without symlinks, be regular files, and never touch a credential location. Preflight all, then
