@@ -2,7 +2,7 @@
 
 Labels: wayfinder:grilling
 Type: grilling
-Status: open
+Status: resolved
 Blocked by: 02, 07
 
 ## Question
@@ -39,8 +39,9 @@ rather than merging — so the `method` column decides whether the write is a fi
 **Pi → OpenCode skills** (same content, different tier, and 01's "already shared" case if the target
 path coincides).
 
-Out of this ticket: hooks and plugins (both `manual` per ticket 07) and anything in
-`BRIEF.md` §9's recipe pipeline.
+Out of this ticket: plugins (a `manual` gap per ticket 07 §1). **Hooks are in** — see the comment
+below; ticket 11 made hooks a real write for Pi and Codex. Anything in `BRIEF.md` §9's recipe
+pipeline stays out.
 
 **Zoom:** [Pi](./03-pi-config-surface.md), [Codex](./04-codex-config-surface.md),
 [OpenCode](./05-opencode-config-surface.md) — the three researches hold the native surfaces;
@@ -64,3 +65,237 @@ exposed a gap class that is not a per-field gap:
 - `codex command: "serena"` + `args: [...]` → `opencode command: ["serena", ...]` is a structural
   mapping (two source fields into one target array), not a rename. This table is the first place
   that has to say how a many-to-one mapping is named in `mapped[]`.
+
+**2026-11-05 — hooks handed in from [Capability-gap semantics](./11-capability-gap-semantics.md).**
+
+That ticket's exclusion premise flipped: hooks are no longer `manual` everywhere. What this ticket
+now owes, beyond its four categories:
+
+- A **hooks table** per target. Codex carries native `hooks.json` / `[hooks]` (14 events); Pi carries
+  `hooks.json` only once `npm:@vahor/pi-hooks` is installed; OpenCode is `categoryAbsent` and gets
+  no table. So the `expressible` allowlist differs per target *and* the `manualSteps[]` differs.
+- The **event-name mapping** — a source event has to land on the target's own event name, or become
+  a `fieldAbsent` gap. Codex's 14 events, Pi's `pi.on()` event set, and OpenCode's plugin hooks do
+  not share names.
+- The **handler mapping**: `{command}` vs `{mcp_tool}` (Codex) vs a shell-command array entry (Pi
+  via the bridge). Every command-carrying write is `executable` and can never verify (ticket 11 §7),
+  which the table has to state in its `method` column rather than leave to prose.
+- `gaps[].reason` comes from ticket 11's closed five; `executable` and `categoryAbsent` are the two
+  this table will actually emit.
+
+## Answer
+
+Settled with the dev over three grilling rounds on 2026-11-05, with [Secret detection
+rules](./13-secret-detection-rules.md) landing between rounds 2 and 3 and rewriting three of the
+answers. Category set is `mcp`, `skills`, `instructions`, `hooks` — **`commands` is dropped** from
+the slice (Pi `prompts/` and OpenCode `commands/` exist, Codex has no such surface at all, and the
+dev does not use them).
+
+### 0. Shapes this ticket changes
+
+| Ticket | Change |
+|---|---|
+| 02 §1 | `detectVersion()` deleted. The adapter has **no version surface**; latest release only, assumed, never recorded. |
+| 02 §2 | `expressible` moves to a per-`(harness, category)` record; the `(category, tierId)` rows carry `method` + a reference, not a copied list. |
+| 02 §2 | `method` is `file` on **every writable row**. `cli` stays in the vocabulary, unused — no write in this slice runs a harness CLI (see §6). |
+| 02 §1 | `credentialPointers: string[]` → `{ pointer, kind: 'leaf' \| 'file' }[]`, because three categories point at whole files. |
+| 07 §2 | `mapped[]` entry → `{ transform, fields: string[], targetField, template? }`. `transform` is a closed seven: `rename`, `invert`, `concat`, `unit`, `infer`, `extract`, `wrap`. |
+| 07 §2 | `writes[]` gains one op, `symlink` (§1.4), and `target` gains `alsoReadBy: Harness[]` (§1.5). |
+| 07 §2 | A credential gap's `replacement` is `dropped`. No fourth value: `reason: credential` already says why, and the migrate-out instruction lives in its mandatory `manualSteps[]`. |
+| 07 §3 | Its worked stress case is **wrong twice** and is corrected in §1.3: the Codex `.env` sub-table is just `env` (a TOML sub-table, not a Codex-only shape), and `startup_timeout_sec` is not a gap into OpenCode. |
+| 10 | `bindings.version` dropped from the schema. |
+| 11 §5 | OpenCode hooks are no longer `categoryAbsent` — they are **generated plugin code** (§4.3). |
+
+### 1. Cross-cutting
+
+**1.1 Categories and tiers.** Mirror targets are the writable tiers only: `pi:user`, `pi:project`,
+`codex:user`, `codex:project`, `oc:user`, `oc:project`. Out: `codex:profile` (launch-time only),
+`oc:system` (`/etc/opencode`, elevated), `oc:home` (`~/.opencode` — real, undocumented, and its
+precedence against `~/.config/opencode` is still unverified).
+
+**1.2 `writePaths` per adapter** (08 §5 checks every write against these):
+
+| Adapter | Declared writable paths |
+|---|---|
+| Pi | `~/.pi/agent/mcp.json`, `.pi/mcp.json`, `~/.pi/agent/hooks.json`, `.pi/hooks.json`, `~/.agents/skills/<name>/`, `.agents/skills/<name>/`, `~/.pi/agent/AGENTS.md` |
+| Codex | `$CODEX_HOME/config.toml`, `<repo>/.codex/config.toml`, `$CODEX_HOME/hooks.json`, `<repo>/.codex/hooks.json`, `$HOME/.agents/skills/<name>/`, `<repo>/.agents/skills/<name>/`, `$CODEX_HOME/AGENTS.md` |
+| OpenCode | `~/.config/opencode/opencode.json(c)`, `<repo>/.opencode/opencode.json(c)`, `~/.config/opencode/plugins/<name>.ts`, `<repo>/.opencode/plugins/<name>.ts`, `~/.config/opencode/skills/<name>/`, `~/.config/opencode/AGENTS.md` |
+
+**1.3 MCP field vocabulary.** Canonical on the left; the address is native per harness. `expressible`
+per harness is exactly the canonical names that harness can express — anything else is a gap.
+
+| canonical | Codex `[mcp_servers.<id>]` | OpenCode `mcp.servers.<id>` | Pi `mcpServers.<id>` |
+|---|---|---|---|
+| `transport` | — (inferred from `command` vs `url`) | `type: local \| remote` (required) | `type?` (inferred) |
+| `command` | `command` (string) | `command` key | `command` |
+| `args` | `args` | remainder of `command[]` | `args` |
+| `cwd` | `cwd` | `cwd` | `cwd` |
+| `env` | `[mcp_servers.<id>.env]` | `environment` (`{env:VAR}` only) | `env` (`${VAR}`, `!cmd`) |
+| `envPassthrough` | `env_vars` | — | — |
+| `url` | `url` | `url` | `url` |
+| `headers` | `http_headers` | `headers` | `headers` |
+| `enabled` | `enabled` | `disabled` (**inverted**) | `enabled` |
+| `timeoutStartup` | `startup_timeout_sec` (s) | `timeout.startup` (**ms**) | — |
+| `timeoutRequest` | `tool_timeout_sec` (s) | `timeout.execution` (**ms**) | `timeout` (s) |
+| `bearerTokenEnvVar` | `bearer_token_env_var` | — | — |
+| `description` | — | — | `description` |
+| `exposure` / `toolExposure` | — | — | Pi-only |
+| `codemode` / `pool` / `protocol` | — | OpenCode-only | — |
+| `approvalMode` / `disabledTools` / `required` / `startupReadiness` / `supportsParallelToolCalls` | Codex-only | — | — |
+
+The seven transforms, each with its instance in this table:
+
+| transform | Meaning | Instance |
+|---|---|---|
+| `rename` | same value, new key | `env` → `environment`; `tool_timeout_sec` → `timeout` |
+| `invert` | boolean flip | `enabled` ⇄ `disabled` |
+| `concat` | several source fields into one target value | `command` + `args` → OpenCode `command[]` |
+| `unit` | numeric rescale | `timeoutStartup` s ⇄ ms; `timeoutRequest` s ⇄ ms |
+| `infer` | value derived from which fields are present | `type: local/remote` ⇄ `command`/`url`; Codex `transport` absent |
+| `extract` | a component of a formatted value, pulled into a dedicated field (`template` = regex, one capture) | Pi `headers.Authorization: "Bearer ${T}"` → Codex `bearer_token_env_var: "T"` |
+| `wrap` | a bare identifier becomes an interpolation reference (`template` = string with `$value`) | Codex `bearer_token_env_var: "T"` → Pi `headers.Authorization: "Bearer ${T}"`; Codex `env_vars: ["K"]` → Pi `env.K: "${K}"`, OpenCode `environment.K: "{env:K}"` |
+
+`extract` and `wrap` are why 07's `{field, targetField, transform}` could not survive: the mapping
+is real, mechanical, and **not** a byte copy, and Codex does no interpolation at all — a copied
+`"Bearer ${T}"` ships the literal string as a bearer token (ticket 13 §c1).
+
+**1.4 `symlink` (new op).** Allowed only when the source tier and the target tier share the same
+scope bucket, the target path is a declared `writePath`, the target does not already exist (else a
+07 §6 conflict), and `precondition.digest` is the digest of the **resolved** content. Verification
+resolves the link and re-asserts the target pointer or digest. It exists because one physical copy
+with live propagation is the dev's stated preference, and it is safe at the OS level: all three read
+`AGENTS.md` and `SKILL.md` through plain `open()`, which follows links. Deleting the source would
+break the link, so the plan records the source installation id in the op and the engine never
+deletes. Symlinked skill **directories** are unverified for all three harnesses — skills therefore
+use it only when the source is already a directory both sides can see.
+
+**1.5 Shared paths.** `.agents/skills` (user `~/.agents/skills`, repo `.agents/skills`) and the
+project `AGENTS.md` are read by more than one harness — Pi and Codex both name `~/.agents/skills`
+explicitly, OpenCode's global discovery list includes it too. Two consequences: the engine computes
+`target.alsoReadBy: Harness[]` from the declared tier paths, so a Codex skill write warns "Pi and
+OpenCode also load this"; and an Installation found in a shared path carries one row with several
+`bindings` (01 already models this), so `list_installations` reports it once, acknowledged as
+present for each harness that scans it. A second mirror of the same skill into one of those
+harnesses returns 07's `already shared` plan with `writes: []`.
+
+### 2. Per-category tables
+
+**2.1 `mcp`** — `writeAtPointer`. Every row `method: file`.
+
+| harness | tier | expressible | notes |
+|---|---|---|---|
+| Pi | `pi:user` | `transport, command, args, cwd, env, url, headers, enabled, timeoutRequest, description, exposure, toolExposure` | `type` optional and inferred; `sse` rejected |
+| Pi | `pi:project` | same | a project entry **replaces** the user entry of the same name unless it carries no `command`/`url`/`type`, so a write must carry the full entry |
+| Codex | `codex:user` | `transport, command, args, cwd, env, envPassthrough, url, headers, enabled, timeoutStartup, timeoutRequest, bearerTokenEnvVar, approvalMode, disabledTools, required, startupReadiness, supportsParallelToolCalls` | `[features]`-free; `mcp add` unusable (§6) |
+| Codex | `codex:project` | same | inert until `[projects."<path>"].trust_level = "trusted"` in the **user** config → `manualSteps[]` |
+| OpenCode | `oc:user` | `transport, command, args, cwd, env, url, headers, enabled, timeoutStartup, timeoutRequest, codemode, pool, protocol` | `disabled`, and whole-entry replace means the write must be complete |
+| OpenCode | `oc:project` | same | a root-managed `/etc/opencode` outranks it → `manualSteps[]` naming the shadowing layer |
+
+Retired from 07 §3: Codex `.env` is `env` (carried, not a `shapeOnly` gap), and
+`startup_timeout_sec` → OpenCode is `unit`, not a gap. Still a gap: `startup_timeout_sec` → Pi
+(`fieldAbsent` — Pi's `timeout` is per-request), and any OpenCode `pool`/`protocol` → Codex/Pi.
+
+**2.2 `skills`** — `copyFile`, or `symlink` when §1.4 holds. No per-field translation: all three
+implement the Agent Skills spec.
+
+| harness | tier | target path | expressible |
+|---|---|---|---|
+| Pi | `pi:user` | `~/.agents/skills/<name>/` (shared) | `name, description, body, files[]` |
+| Pi | `pi:project` | `.agents/skills/<name>/` (shared) | same |
+| Codex | `codex:user` | `$HOME/.agents/skills/<name>/` (shared) | same |
+| Codex | `codex:project` | `<repo>/.agents/skills/<name>/` (shared) | same |
+| OpenCode | `oc:user` | `~/.agents/skills/<name>/` (shared; `~/.config/opencode/skills/` only for a deliberately harness-scoped copy) | same |
+| OpenCode | `oc:project` | `.agents/skills/<name>/` (shared) | same |
+
+An unknown frontmatter key is `preserved` by the copy, never a gap. `verify.asserts[]` is digest
+equality on the written directory.
+
+**2.3 `instructions`** — `writeFile`, plus `symlink` at user scope.
+
+| harness | tier | target | when |
+|---|---|---|---|
+| Pi | `pi:user` | `~/.pi/agent/AGENTS.md` | real file, or a link to the source under §1.4 |
+| Codex | `codex:user` | `$CODEX_HOME/AGENTS.md` | same |
+| OpenCode | `oc:user` | `~/.config/opencode/AGENTS.md` | same |
+| all three | project | `<repo>/AGENTS.md` | **the same file** — `alreadyPresent`, `writes: []` |
+
+`expressible`: `body`, `path`. Codex caps project docs at `project_doc_max_bytes` (32 KiB) →
+`manualSteps[]` when exceeded; OpenCode's `instructions[]` array is not written by the mirror.
+
+**2.4 `hooks`** — three genuinely different methods.
+
+| harness | tier | method | write | manualSteps[] |
+|---|---|---|---|---|
+| Codex | user, project | file | `writeAtPointer` into `hooks.json` (preferred over inline `[hooks]`) | `[features] hooks = true`; `/hooks` trust review (trust keyed on content hash + positional index) |
+| Pi | user, project | file | `writeAtPointer` into `hooks.json` → `hooks.<event>[]` | `pi install npm:@vahor/pi-hooks`; restart Pi |
+| OpenCode | user, project | file (generated code) | `writeFile` `.opencode/plugins/<name>.ts` — a `Plugin.define` module, auto-discovered, **no `plugins[]` entry** | restart OpenCode |
+
+Event mapping, direction-declared. Codex's 14 → Pi's 28:
+
+| Codex | Pi (`@vahor/pi-hooks`, 0.0.11) | transform |
+|---|---|---|
+| `SessionStart` | `session_start` | `rename` |
+| `SessionEnd` | `session_shutdown` | `rename` |
+| `UserPromptSubmit` | `input` | `rename` |
+| `PreToolUse` | `tool_call` | `rename` |
+| `PostToolUse` | `tool_result` | `rename` |
+| `PreCompact` | `session_before_compact` | `rename` |
+| `PostCompact` | `session_compact` | `rename` |
+| `PreModelRequest` | `before_provider_request` | `rename` |
+| `PostModelRequest` | `after_provider_response` | `rename` |
+| `Stop` | `turn_end` | `rename` |
+| `PermissionRequest`, `Interrupt`, `SubagentStart`, `SubagentStop` | — | `fieldAbsent` gap |
+
+Codex → OpenCode, generated plugin: only `PreToolUse` → `ctx.tool.hook("execute.before")`,
+`PostToolUse` → `ctx.tool.hook("execute.after")`, `PreModelRequest` →
+`ctx.session.hook("context")`. The other eleven are `fieldAbsent` gaps. Codex's three-level
+`event → matcher group → handlers` shape has no Pi or OpenCode equivalent, so a non-`*` **matcher is
+always its own `fieldAbsent` gap** — the hook would otherwise fire on every tool. Codex
+`{type: "mcp_tool"}` handlers are `fieldAbsent` on both targets (Pi hooks are shell commands;
+OpenCode's generated plugin could call a tool but that is generation, not translation). `timeout` is
+`unit` (s → ms) into Pi; `print` / `context` / `cwd` are Pi-only. Every write carrying a command is
+`executable: true`, needs its own tick, and can never land `verified` (11 §7).
+
+**OpenCode as a hook target, never a source**: a hook inside an existing plugin is code we cannot
+parse, so its `read` verdict is `manual` while `write` is `supported` — per-verb verdicts, which 02
+already allows.
+
+### 3. Credential pointers
+
+`credentialPointers` per adapter, values never entering `knownFields`:
+
+| harness | category | pointers |
+|---|---|---|
+| Pi | `mcp` | `env.<K>`, `headers.<H>`, `url` (basic-auth userinfo), `auth` |
+| Pi | `hooks`, `skills`, `instructions` | whole file (`kind: 'file'`) — `hooks` is code |
+| Codex | `mcp` | `env.<K>`, `http_headers.<H>`, `oauth.client_secret`, `auth.idp.client_secret`, `url`, `http_headers_helper` (`executable`) |
+| Codex | `hooks` | `hooks[].command` (`executable`) |
+| Codex | `skills`, `instructions` | whole file |
+| OpenCode | `mcp` | `environment.<K>`, `headers.<H>`, `oauth.client_secret`, `url` |
+| OpenCode | `hooks` | generated plugin file (`kind: 'file'`) |
+| OpenCode | `skills`, `instructions` | whole file |
+
+Pi's `mcp.json` **does** carry an OAuth client secret (`oauth.clientSecret`) — this corrects the
+map line that says credentials sit outside Pi's served tables — and OpenCode carries
+`oauth.client_secret` too, so the credential set is all three harnesses, not Codex alone.
+
+### 4. Open items for the builder
+
+1. Symlinked skill directories: unverified for all three. Probe before enabling §1.4 for `skills`.
+2. `~/.opencode` vs `~/.config/opencode` precedence: unverified, so `oc:home` stays out of the tier
+   table.
+3. `http_headers_helper` (Codex schema field, no doc): classified `executable` and excluded, never
+   written.
+4. Codex `auth.idp.client_secret` appeared in the schema; ticket 13 read it, nothing else confirms
+   its scope — treat as a credential pointer regardless.
+
+### Amendments to settled tickets
+
+- **02** — no `detectVersion()`; allowlist keyed per `(harness, category)`; `method: file` only;
+  `credentialPointers` carries a `kind`.
+- **07** — `mapped[]` gains `fields[]` + a seven-value `transform` + optional `template`; `writes[]`
+  gains `symlink`; `target` gains `alsoReadBy`; the §3 worked case is corrected twice; a credential
+  gap's `replacement` is `dropped`.
+- **10** — `bindings.version` dropped.
+- **11** — OpenCode hooks move from `categoryAbsent` to generated-plugin `translatable`.
+- **BRIEF §9.4** — the `commands` category is out of this slice.

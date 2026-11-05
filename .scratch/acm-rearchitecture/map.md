@@ -140,11 +140,50 @@ that slice.
   config for every subcommand), so `opencode debug config --standalone --print-logs` is parsed for
   `kind=invalid` + `source=`, and an `unreadable` tier tombstones nothing. Ticket 02's contract gains
   `health()`.
+- [Capability-gap semantics: block, degrade, or ask](issues/11-capability-gap-semantics.md): **degrade is the
+  only per-field outcome** — a gap never refuses a plan; `block` exists only as category-level
+  `notTranslatable` (`writes: []`, one `categoryAbsent` gap); `ask` is not a planner mode, it is 08's
+  consent gate. `gaps[].reason` is a closed enum of five (`fieldAbsent`, `shapeOnly`, `credential`,
+  `executable`, `categoryAbsent`) and the rule lives once in the engine, with no `onGap` caller knob.
+  Hooks are three-way per target, decided by which cases have a real bridge: Codex native `hooks.json`
+  and Pi via `npm:@vahor/pi-hooks` are both `translatable` with the install / trust review as
+  `manualSteps[]`; OpenCode is `categoryAbsent` (only hobby bridges exist). A hook command string is
+  `executable` content and can never verify. Scope mismatch is neither: an unwritable/nonexistent
+  target tier is caller-input validation, and a shadowing layer is a `manualStep`.
+- [Secret detection rules](issues/13-secret-detection-rules.md): the classifier is an ordered
+  first-match-wins table (pointer on `credentialPointers` → provider pattern → PEM → hash-shape
+  gate → key-name → entropy), with **4.4 for base64 and 3.0 for hex** because hex caps at
+  `log2(16) = 4.0` — one threshold for both either flags every `trusted_hash` or misses every hex
+  key. Hash-name exclusion is mandatory: 14 of 49 entropy hits on the real corpus were Codex hook
+  digests. `credentialPointers` must carry a **kind**, because `skills`/`instructions` are
+  credential-bearing whole files, not typed leaves. Secret-free injection is **not portable**:
+  Codex has no `${VAR}` interpolation at all, so a copied `headers.Authorization: "Bearer ${T}"`
+  ships the literal string — it maps to `bearer_token_env_var` — and blind copy must never route
+  through `codex mcp add`, which re-serializes the whole `mcp_servers` table and kills comments in
+  sibling entries. Findings on `research/secret-detection`; ticket 12 owes a `replacement` value
+  for a credential gap.
+- [Per-category canonical field tables](issues/12-per-category-field-tables.md): categories are
+  `mcp`, `skills`, `instructions`, `hooks`; **`commands` is dropped** (Codex has no such surface).
+  MCP gets a 17-field canonical vocabulary with concrete addresses in all three formats and a
+  **seven-transform** `mapped[]` (`rename`, `invert`, `concat`, `unit`, `infer`, `extract`, `wrap`) —
+  the last two exist because Codex does **no** `${VAR}` interpolation, so a header value and a
+  dedicated env-var field have to translate into each other. `expressible` is keyed per
+  `(harness, category)` and every writable row is `method: file`: no write runs a harness CLI, since
+  `codex mcp add` cannot target project scope and re-serializes the whole table, `pi mcp add` drops
+  fields it has no flag for, and OpenCode's writer emits V2 shape into V1 files. Skills resolve to
+  the shared `.agents/skills` (one copy, all three harnesses), so a second mirror is `already
+  shared`; a new `symlink` op covers the one case where paths differ but content must not
+  (user-scope `AGENTS.md`); `target.alsoReadBy` warns when a write lands somewhere another harness
+  reads. **OpenCode hooks flip from `categoryAbsent` to generated `Plugin.define` code** —
+  target-only, executable, never `verified`. Also retires two 07 §3 claims: Codex `.env` is plain
+  `env`, and `startup_timeout_sec` → OpenCode is a `unit` map, not a gap.
 
 ## Not yet specified
 
-- **Which harness pairs matter most.** Source/target precedence and the highest-value first
-  pair depend on which harnesses are actually used day to day — a human fact, not a research one.
+*(Empty — the frontier reached the destination on 2026-11-05 and no open tickets remain. The one
+leftover question, "which harness pair matters most", is a prioritisation preference rather than a
+decision the spec gates on: the engine is symmetric and every adapter declares both `read` and
+`write`, so no pair has precedence over another.)*
 
 ## Out of scope
 
