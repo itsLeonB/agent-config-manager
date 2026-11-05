@@ -180,10 +180,12 @@ that slice.
 
 ## Not yet specified
 
-*(Empty — the frontier reached the destination on 2026-11-05 and no open tickets remain. The one
-leftover question, "which harness pair matters most", is a prioritisation preference rather than a
-decision the spec gates on: the engine is symmetric and every adapter declares both `read` and
-`write`, so no pair has precedence over another.)*
+*(Empty. The decision frontier was cleared on 2026-11-05, but a review of the settled set found one
+missing decision — what the moving parts physically **are** — now ticketed as
+[Runtime, process, and module layout](issues/14-runtime-and-process-layout.md). The one leftover
+statement, "which harness pair matters most", is a prioritisation preference rather than a decision
+the spec gates on: the engine is symmetric and every adapter declares both `read` and `write`, so no
+pair has precedence over another.)*
 
 ## Out of scope
 
