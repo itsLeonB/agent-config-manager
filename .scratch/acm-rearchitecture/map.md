@@ -84,10 +84,21 @@ that slice.
   `busy_timeout = 5000` already suit a second writer; `origin-guard.ts` is HTTP-only, so an MCP
   stdio client sends neither `Origin` nor `Sec-Fetch-Site` and the guard cannot authorise a call.
   Inventory on `assets/06-codebase-inventory.md`.
+- [The mirror operation and its plan representation](issues/07-mirror-operation-and-plan.md): mirror has
+  **four ops** — `writeAtPointer`, `writeFile`, `copyFile`, `runCommand` — plus a plan-level
+  `manualSteps[]`; no mkdir, symlink, package install, or removal (plugins, hooks, and credentials
+  are `manual` or `notTranslatable`, never writes). A plan is **stateless and content-addressed**:
+  `planId` is the sha256 of its own canonical JSON, each write carries the target file's digest as
+  a precondition, and `apply` refuses a stale plan instead of re-deriving one. "Equivalent" is
+  sharpened to **field-equivalence** — the source's `knownFields` partitioned into
+  `carried[] | mapped[] | gaps[] | preserved[]` — and verification asserts only `carried ∪ mapped`
+  on disk, never a harness probe, so a plan with pending `manualSteps[]` lands `unverified`, not
+  `verified`. Conflicts refuse by default (`onConflict: 'replace'` required); `notTranslatable`,
+  `alreadyPresent`, and `already shared` all return a plan with empty `writes[]`, never a separate
+  error shape. Needs one amendment to ticket 02's `translate()` union (`manualSteps[]`).
 
 ## Not yet specified
 
-- **Equivalence per component category.** The *gap* rule graduated to [Capability-gap semantics](issues/11-capability-gap-semantics.md); what remains fog is the per-category translation table itself (MCP vs skills vs instructions vs plugins), which cannot be written until the domain model and the mirror plan exist.
 - **Which harness pairs matter most.** Source/target precedence and the highest-value first
   pair depend on which harnesses are actually used day to day — a human fact, not a research one.
 

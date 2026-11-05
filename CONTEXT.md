@@ -47,12 +47,24 @@ another harness and tier, translating per that harness's declared capability, su
 not be carried, then applying and verifying under explicit approval.
 _Avoid_: sync, copy, port, convert
 
+**Field-equivalence**: what "equivalent" means throughout this file. A mirror is equivalent when the
+source Installation's `known fields` are fully partitioned into what the target carries
+(`carried[]`), what it carries under another name or polarity (`mapped[]`), and what it provably
+cannot (`gaps[]`), and a human approved that partition. Enumerable and assertable on disk; never a
+claim that two harnesses behave the same.
+_Avoid_: parity, identical, same config, lossless
+
 **Gap**: a field or behaviour present in the source Installation that the target harness cannot
 express. Recorded on the plan, never on the Installation.
 _Avoid_: limitation, difference, loss
 
-**Plan**: the reviewed, approval-gated description of one mutation (here: one mirror), including
-its gaps and its verification result. Distinct from execution; nothing is written before approval.
+**Plan**: the reviewed, approval-gated description of one mutation (here: one mirror), including its
+equivalence partition, its gaps, and the preconditions each write must still satisfy. Distinct from
+execution; nothing is written before approval. A plan is **stateless and content-addressed** — its id
+is the hash of its own body, so it is handed around rather than stored, and a target file that
+changed since planning makes the plan apply-ineligible (`stale`) instead of silently different. The
+verification result belongs to the binding, never to the plan.
+_Avoid_: job, task, transaction, changeset
 
 ## Rules that follow from the vocabulary
 

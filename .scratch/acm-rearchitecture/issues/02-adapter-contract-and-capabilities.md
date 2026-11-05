@@ -100,6 +100,14 @@ translate(source: Installation, target: { harness, tierId }) →
 `startup_timeout_sec` are handled: the adapter maps or drops, the planner never sees a native field
 name. No arm carries `warnings[]` or nullable fields, so the planner cannot half-read a result.
 
+**Amended 2026-11-05 by [ticket 07](./07-mirror-operation-and-plan.md):** the plan carries a
+`manualSteps[]` list *alongside* `writes[]`, because Codex project-scope MCP is a writable file whose
+Installation stays inert until `trust_level = "trusted"` sits in the *user* config — write-then-human,
+which the union above cannot say. `{kind:'manual'}` keeps its strict meaning (no writes at all);
+`translatable` plus non-empty `manualSteps[]` means "write these files, then a human must do this".
+The `translatable` arm itself is otherwise unchanged, and `manualSteps[]` is always present, possibly
+empty.
+
 ### 4. Native paths and formats survive to the plan
 
 Format and pointer syntax are adapter-declared per path shape, because format is not one-per-harness
