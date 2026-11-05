@@ -113,6 +113,21 @@ that slice.
   a hit stops the plan and offers migrate-out → blind copy → risk-read. OAuth: mirror the entry,
   never the grant.
 
+- [Minimal MCP tool surface and a worked mirror example](issues/09-mcp-tool-surface.md): **five tools** —
+  `list_installations(category?, harness?, scope?, fresh?)` (folds BRIEF's discovery + inventory
+  groups; harness rows ride along because a target must be a writable existing tier),
+  `inspect_installation`, `plan_mirror(installationId, target)` returning the whole plan document
+  with `security.grade: safe|risky` on it (an addition to 07's plan schema),
+  `apply_plan(plan, onConflict?)`, and `verify_plan(plan)` — which exists *only* because plans are
+  stateless, to re-assert after a pending `manualSteps[]`. No plan id anywhere; the agent carries
+  the document. Identical signatures on all three clients — the elicitation difference shows up in
+  the *result* (`consent: "client-policy"`, risky writes moved to `manualSteps[]` on Pi), never in
+  the surface. Inventory freshness = stored snapshot with `fresh: true` forcing a re-scan, safe
+  because `plan_mirror` re-reads for `contentDigest` and `apply` for `precondition.digest`.
+  `rollback_operation` out, Comparison and Research groups deferred. Prototype on
+  `assets/09-mcp-tool-surface.md`; the V1/V2 OpenCode shape question and the many-to-one
+  `command + args → command[]` mapping are handed to ticket 12.
+
 ## Not yet specified
 
 - **Which harness pairs matter most.** Source/target precedence and the highest-value first

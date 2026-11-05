@@ -49,3 +49,18 @@ Out of this ticket: hooks and plugins (both `manual` per ticket 07) and anything
 
 **Output:** the allowlist tables in the handoff spec, one table per `(harness, category)` with the
 tier column carrying `method` and `expressible`.
+
+## Comments
+
+**2026-11-05 — shape question handed over from [Minimal MCP tool surface](./09-mcp-tool-surface.md).**
+
+The prototype's trace B (Codex `mcp_servers.serena` → the real `~/.config/opencode/opencode.json`)
+exposed a gap class that is not a per-field gap:
+
+- OpenCode's legacy V1 flat `mcp.<name>` + `enabled: true` is still accepted and normalised in
+  memory (ticket 05 headline 3), so the engine writes V2 `mcp.servers.<name>` + `disabled` into a
+  file that may still hold the old shape, yielding a mixed document. Decide whether that
+  normalisation is reported in `equivalence.mapped[]` or is invisible plumbing.
+- `codex command: "serena"` + `args: [...]` → `opencode command: ["serena", ...]` is a structural
+  mapping (two source fields into one target array), not a rename. This table is the first place
+  that has to say how a many-to-one mapping is named in `mapped[]`.
