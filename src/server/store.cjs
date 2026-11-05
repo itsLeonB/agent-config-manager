@@ -14,11 +14,6 @@ const SCHEMA = `
     kind TEXT NOT NULL,
     data TEXT NOT NULL
   );
-  CREATE TABLE IF NOT EXISTS comments (
-    key TEXT PRIMARY KEY,
-    text TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
   CREATE TABLE IF NOT EXISTS config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -40,11 +35,6 @@ function openStore(filePath) {
   const upsertConfig = db.prepare(
     'INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value'
   );
-  const selectAllComments = db.prepare('SELECT key, text FROM comments');
-  const deleteComment = db.prepare('DELETE FROM comments WHERE key = ?');
-  const upsertComment = db.prepare(
-    'INSERT INTO comments (key, text, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at'
-  );
 
   return {
     saveSnapshot(kind, data) {
@@ -60,18 +50,6 @@ function openStore(filePath) {
     readConfig(key) {
       const row = selectConfig.get(key);
       return row === undefined ? null : JSON.parse(row.value);
-    },
-    writeComment(key, text) {
-      // Clearing the box means "no explanation", so drop the row rather than store a blank.
-      if (text.trim() === '') {
-        deleteComment.run(key);
-        return;
-      }
-      upsertComment.run(key, text, new Date().toISOString());
-    },
-    readComments() {
-      // One query for the whole page load instead of one per missing item.
-      return Object.fromEntries(selectAllComments.all().map((row) => [row.key, row.text]));
     },
     close() {
       db.close();
