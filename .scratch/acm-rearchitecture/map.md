@@ -50,6 +50,12 @@ that slice.
   be mirrored as data; MCP is Claude-compatible `mcp.json` but `pi mcp add` replaces whole entries
   rather than merging fields; programmatic install exists only for packages and MCP; project trust
   and MCP OAuth are human-only steps. Findings on `research/pi-config`.
+- [Codex native configuration surface](issues/04-codex-config-surface.md): three scopes (user,
+  launch-time `profile`, project) with project gated on `trust_level` in the *user* config; hooks
+  **are** declarative config here (14 events, additive merge, trust keyed on content hash +
+  positional index) — the inverse of Pi; MCP merges per field across layers but `codex mcp add`
+  replaces whole tables and is user-scope only, so project-scope writes must be file writes;
+  `config.toml` can hold MCP OAuth `client_secret`. Findings on `research/codex-config`.
 
 ## Not yet specified
 
