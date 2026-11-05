@@ -65,3 +65,11 @@ One fact for ticket 08 specifically: `origin-guard.ts` is an HTTP-browser check 
 `isSameOriginRequest(null, null, …)` returns `false` and the guard cannot authorise an MCP call.
 The concept carries, the implementation does not.
 
+**Superseded 2026-11-05 — the cloud half of this answer no longer holds.** `fcfbf2c` deleted the
+entire claude.ai cloud surface ([ADR 0002](../../../docs/adr/0002-no-cloud-config-management.md)),
+so: `createCloudSync` / `isCloudData` are gone and do **not** survive as reusable machinery (item
+1); `cloud.json` ingestion is gone, so nothing is "load-bearing for the dashboard" and there is no
+scanner main path left to edit (item 2); the `comments` lib and its `comments` table are gone with
+it, so read item 3's "`install-script` + `comments` libs" as `install-script` alone. The four test
+files item 3 counts are still four — they just cover less. Everything else above still reads true. Current
+counts live in [the inventory](../assets/06-codebase-inventory.md).

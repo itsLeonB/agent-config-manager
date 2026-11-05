@@ -79,7 +79,7 @@ that slice.
 - [Audit the existing codebase for reusable inventory](issues/06-audit-existing-code.md): no adapter
   reuse — discovery is eight Claude-path functions in `scan.cjs` with no registry or scope/tier
   concept, so all three adapters are greenfield; what carries is the machinery around it (redaction
-  trio, `readSkillMeta`, `walkProjects`, `createCloudSync`, `resolveConfig`). `store.cjs` has no
+  trio, `readSkillMeta`, `walkProjects`, `resolveConfig`). `store.cjs` has no
   migration runner and no query surface (blob snapshots, `ORDER BY id DESC LIMIT 1`), WAL +
   `busy_timeout = 5000` already suit a second writer; `origin-guard.ts` is HTTP-only, so an MCP
   stdio client sends neither `Origin` nor `Sec-Fetch-Site` and the guard cannot authorise a call.
