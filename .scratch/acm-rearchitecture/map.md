@@ -96,6 +96,19 @@ that slice.
   `verified`. Conflicts refuse by default (`onConflict: 'replace'` required); `notTranslatable`,
   `alreadyPresent`, and `already shared` all return a plan with empty `writes[]`, never a separate
   error shape. Needs one amendment to ticket 02's `translate()` union (`manualSteps[]`).
+- [Permission, approval, and safety model for MCP mutations](issues/08-permission-and-approval-model.md):
+  consent can only come from **MCP elicitation** — on Pi 1.5.0, which has none, `apply` refuses
+  (`noApprovalChannel`) while `plan` still works; a caller-supplied `confirm` is inert. Four gates:
+  plan is read-only → human consent → preflight+containment → risk-flag ticks. Approval binds to
+  `planId` per call, stateless, audit on target `provenance`. User + project tiers writable,
+  elevated/root tiers refused; writes must match an adapter-declared `writePaths` entry, resolve
+  without symlinks, be regular files, and never touch a credential location. Preflight all, then
+  write; mid-flight failure returns `partial` + `landed[]`, no rollback. `runCommand` kept in the
+  vocabulary with an **empty allowlist**. Executable content (scripts/plugin dirs, `!command`
+  headers) needs its own tick and can never land `verified`. A deterministic in-engine secret
+  classifier emits `clean|suspect|secret` per pointer and nothing secret ever leaves the process;
+  a hit stops the plan and offers migrate-out → blind copy → risk-read. OAuth: mirror the entry,
+  never the grant.
 
 ## Not yet specified
 

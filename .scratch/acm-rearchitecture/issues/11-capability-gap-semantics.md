@@ -32,10 +32,14 @@ Decide, per component category and per field class:
 3. Hooks specifically: when the target harness has no hook config (**Pi, OpenCode**), is that
    `unsupported`, or is generating extension / plugin source a permitted mirror output? Code is
    executable — does that cross the "explicit authorization" line differently from a config write?
-4. Credentials: Codex can carry an MCP OAuth `client_secret` inside `config.toml`. Confirm the
-   rule (never copy, strip on read, or refuse the plan) and where it is enforced.
+4. ~~Credentials: Codex can carry an MCP OAuth `client_secret` inside `config.toml`. Confirm the
+   rule (never copy, strip on read, or refuse the plan) and where it is enforced.~~ Answered by
+   [Permission, approval, and safety model](./08-permission-and-approval-model.md) §6–7 (classifier
+   gate + three-way consent; OAuth grant never mirrored) and
+   [Secret detection rules](./13-secret-detection-rules.md) (the rule table). Not this ticket's.
 5. Does a scope mismatch (source scope not present in target, e.g. `profile`, or `/etc/opencode`)
-   count as a capability gap under the same rules, or is it a separate error class?
+   count as a capability gap under the same rules, or is it a separate error class? (08 §5 already
+   rules out elevated tiers as *unwritable*; this question is about the gap vocabulary for them.)
 
 **Zoom:** `BRIEF.md` §8.2 (adapter may report unsupported / partial / requiring manual
 intervention), §10, §18. Inputs: all three config-surface findings. Related:
