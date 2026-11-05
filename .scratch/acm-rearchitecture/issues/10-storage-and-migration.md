@@ -211,3 +211,8 @@ verification) is untouched.
 `health() → per-tier ok | unreadable`, with the probe command as an optional descriptor field for
 harnesses that need one. Same shape of amendment ticket 07 made to `translate()`. Its answer stays
 closed; the amendment goes into the handoff spec beside that one.
+
+**Amendment from [ticket 14](./14-runtime-and-process-layout.md):** the store is now written by more
+than one process — the `acm mcp serve` subcommand and the CLI both open `dashboard.db` — so every write
+transaction opens with `BEGIN IMMEDIATE` and the `user_version` guard runs inside one. WAL and
+`busy_timeout = 5000` were already in `store.cjs` and stay. Nothing else in this answer changes.

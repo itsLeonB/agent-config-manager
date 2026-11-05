@@ -187,15 +187,21 @@ that slice.
   (single owner + `BEGIN EXCLUSIVE` lock, claim records, multi-writer WAL discipline). The
   framework question collapsed to "official SDK, transport TBD". Findings on `research/prior-art`,
   asset `assets/15-prior-art.md`. Ticket 14's round 1 is stale and is being re-asked.
+- [Runtime, process, and module layout](issues/14-runtime-and-process-layout.md): **one installed `acm`
+  binary** — `src/engine/service.ts` is the library, and `acm mcp serve` (stdio, official SDK 1.32.2
+  with consent via `server.elicitInput`) plus the CLI subcommands are two faces over it; the MCP server
+  never execs the CLI. A harness entry is the absolute bin path + `["mcp","serve"]`, **no `cwd`**, with
+  the project root derived from the module's location rather than `process.cwd()`; `acm setup` writes
+  that entry through the plan/apply path. `parseArgs` + zod, no CLI framework; **TypeScript, no Effect**
+  (reversal condition: a supervised long-lived engine). Both writers now owe `BEGIN IMMEDIATE` +
+  `user_version`, amended into ticket 10. No UI in the slice; when one exists it is `acm serve` — one
+  origin, reading through `service.ts`. [ADR 0004](../../docs/adr/0004-one-binary-engine-as-library.md).
 
 ## Not yet specified
 
-*(Empty. The decision frontier was cleared on 2026-11-05, but a review of the settled set found one
-missing decision — what the moving parts physically **are** — now ticketed as
-[Runtime, process, and module layout](issues/14-runtime-and-process-layout.md). The one leftover
-statement, "which harness pair matters most", is a prioritisation preference rather than a decision
-the spec gates on: the engine is symmetric and every adapter declares both `read` and `write`, so no
-pair has precedence over another.)*
+*(Empty. Every ticket on this map is resolved and nothing is left to decide before someone builds the
+first slice. The frontier reopens only if a build surfaces a decision this map missed — and since the
+destination is now clear, that would be a fresh effort rather than a resumption of this one.)*
 
 ## Out of scope
 
@@ -205,8 +211,9 @@ pair has precedence over another.)*
 - **Claude Code adapter** — explicitly skipped for this slice (charting Q4). The brief's
   §14 step 5 / §15 Phase 2 "convert/implement the Claude adapter" is not on this route. It
   returns only if the destination is redrawn, as a fresh effort.
-- **Full CLI** (`BRIEF.md` Phase 3) and **the read-only web UI** (Phase 7) — deferred; the
-  existing dashboard stays as-is for this slice.
+- **Full CLI** (`BRIEF.md` Phase 3) and **the read-only web UI** (Phase 7) — deferred. The `acm` bin
+  *is* in this slice, but only as a thin face over the same five operations the MCP tools expose
+  (`issues/14`); it is not Phase 3, and the existing dashboard stays as-is.
 - **Installation-intelligence research pipeline / recipes with evidence & confidence**
   (`BRIEF.md` Phase 5, §9) — deferred.
 - **Adoption, drift-detection lifecycle, and full rollback** (`BRIEF.md` §11, Phase 8) —
