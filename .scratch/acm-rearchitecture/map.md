@@ -45,6 +45,12 @@ that slice.
 
 <!-- one line per closed ticket: [Title](link): gist. Empty at charting; charting resolves nothing by hand. -->
 
+- [Pi native configuration surface](issues/03-pi-config-surface.md): Pi has two scopes (user
+  `~/.pi/agent`, project `.pi/`), no hook config — hooks are extension code, so plugins/hooks cannot
+  be mirrored as data; MCP is Claude-compatible `mcp.json` but `pi mcp add` replaces whole entries
+  rather than merging fields; programmatic install exists only for packages and MCP; project trust
+  and MCP OAuth are human-only steps. Findings on `research/pi-config`.
+
 ## Not yet specified
 
 - **Capability-gap semantics.** Once the Pi/Codex/OpenCode research reports what each harness
