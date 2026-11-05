@@ -127,6 +127,19 @@ that slice.
   `rollback_operation` out, Comparison and Research groups deferred. Prototype on
   `assets/09-mcp-tool-surface.md`; the V1/V2 OpenCode shape question and the many-to-one
   `command + args → command[]` mapping are handed to ticket 12.
+- [Storage and migration decision](issues/10-storage-and-migration.md): four canonical tables
+  (`installations` with provenance columns and `removed_at`, `bindings`, `operations`, `tier_health`)
+  join `snapshots`/`config` in the one `dashboard.db`, still owned by `store.cjs`, now with a `PRAGMA
+  user_version` runner ([ADR 0003](../../docs/adr/0003-one-sqlite-file-one-owner.md)). **No `plans`
+  table** — only the plan's hash persists, on provenance and the operation row; no `components` table
+  (`category + name + aliases` inline); no `verifications` table (the binding holds the latest status).
+  Legacy Claude snapshot rows and stale `kind='cloud'` rows are read by nobody and deleted by nobody.
+  The store **is** the inventory: discovery upserts rows and tombstones via `removed_at`, `fresh` just
+  re-runs discovery, and `src/engine/service.ts` is the whole boundary — no IPC, no daemon.
+  Tombstoning is gated per `(harness, tier)`: OpenCode has no strict mode (probed — exit 0 on malformed
+  config for every subcommand), so `opencode debug config --standalone --print-logs` is parsed for
+  `kind=invalid` + `source=`, and an `unreadable` tier tombstones nothing. Ticket 02's contract gains
+  `health()`.
 
 ## Not yet specified
 

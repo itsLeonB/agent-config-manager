@@ -29,6 +29,12 @@ _Avoid_: scope, level, layer
 `project-local`, `system`. Derived from the tier, never inferred from a path.
 _Avoid_: scope (when a tier is meant), level
 
+**Tier health**: whether a tier's config parsed cleanly on the last discovery pass — `ok` or
+`unreadable`. Only an `ok` tier may tombstone an Installation it no longer sees; `unreadable` means
+the tier was left alone, and the inventory is incomplete rather than smaller. Some harnesses report
+invalid config as success (OpenCode exits 0 and drops the file), so this is measured, never assumed.
+_Avoid_: error state, scan status
+
 **Capability**: what a harness can express for a Component category at a given tier:
 `supported`, `partial` (with the fields it cannot express), `unsupported`, or `manual`. Owned by
 the adapter, declared for `(harness, category, tier)`, never stored on an Installation.
