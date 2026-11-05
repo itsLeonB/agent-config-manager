@@ -1,7 +1,7 @@
 import type { Json, LocalData } from '../types/dashboard'
 
-// Each kind stores the snapshot type the dashboard already renders, so readers get
-// that type back without a cast. The store itself only round-trips JSON.
+// The store only round-trips JSON; typing the 'local' kind means readers get LocalData
+// back without a cast.
 export interface Store {
   saveSnapshot(kind: 'local', data: LocalData): void
   readLatestSnapshot(kind: 'local'): LocalData | null

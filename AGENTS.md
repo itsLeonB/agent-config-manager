@@ -73,8 +73,6 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   hand-written CSS (dark/light via `prefers-color-scheme`, no toggle) for
   pixel-identical UX. Leave `src/styles.css` for future pages; there is no
   theme toggle or Google Fonts import to restore.
-- **The copy-install-script button** (`src/lib/install-script.ts`) uses the
-  clipboard only.
 
 ## Gotchas
 
