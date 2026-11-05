@@ -1,19 +1,17 @@
 import type { DashboardData } from '../../types/dashboard'
-import { CloudBanner } from './CloudBanner'
 import { EmptyState } from './EmptyState'
 import { RescanButton } from './RescanButton'
-import { PluginsCompare } from './PluginsCompare'
+import { PluginsTable } from './PluginsTable'
 import { McpList } from './McpList'
-import { SkillsCompare } from './SkillsCompare'
+import { SkillsTable } from './SkillsTable'
 import { EnvironmentTools } from './EnvironmentTools'
 
-export function Dashboard({ local, cloud, comments }: DashboardData) {
+export function Dashboard({ local }: DashboardData) {
   if (!local) {
     return (
       <>
         <EmptyState title="Agent Config Manager" />
         <RescanButton />
-        <CloudBanner cloud={cloud} />
       </>
     )
   }
@@ -23,10 +21,9 @@ export function Dashboard({ local, cloud, comments }: DashboardData) {
       <h1>Agent Config Manager</h1>
       <div className="meta">Generated {local.generatedAt}</div>
       <RescanButton />
-      <CloudBanner cloud={cloud} />
 
       <section>
-        <PluginsCompare userScope={local.userScope} cloud={cloud} comments={comments} />
+        <PluginsTable userScope={local.userScope} />
       </section>
 
       <section>
@@ -34,7 +31,7 @@ export function Dashboard({ local, cloud, comments }: DashboardData) {
       </section>
 
       <section>
-        <SkillsCompare userScope={local.userScope} cloud={cloud} comments={comments} />
+        <SkillsTable userScope={local.userScope} />
       </section>
 
       <section>

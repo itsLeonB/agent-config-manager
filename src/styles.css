@@ -48,7 +48,6 @@ th { color: var(--muted); font-weight: normal; }
 tr:last-child td { border-bottom: none; }
 tbody tr:hover td { background: var(--border); }
 tr.group-row td { font-weight: 600; background: var(--border); }
-tr.group-row td.missing { background: var(--danger-bg); }
 .badge { display: inline-block; padding: 1px 6px; border-radius: 10px; font-size: 11px; background: var(--border); color: var(--muted); }
 .badge.on { background: var(--accent); color: #fff; }
 .banner { background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); border-radius: 6px; padding: 10px 12px; font-size: 13px; margin-bottom: 12px; }
@@ -56,11 +55,9 @@ code { background: var(--border); padding: 1px 5px; border-radius: 4px; font-siz
 input#filter { width: 100%; padding: 8px 10px; margin-bottom: 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; }
 .muted { color: var(--muted); }
 #projects tr.hidden { display: none; }
-td.missing { background: var(--danger-bg); }
 .badge.missing-badge { background: var(--danger); color: #fff; }
-.comment-input { width: 100%; margin-top: 4px; padding: 4px 6px; border-radius: 4px; border: 1px solid var(--danger); background: var(--bg); color: var(--text); font-size: 12px; }
-th.col-user, th.col-cloud { border-left: 1px solid var(--border); }
-td.col-user, td.col-cloud { border-left: 1px solid var(--border); }
+th.col-left, th.col-right { border-left: 1px solid var(--border); }
+td.col-left, td.col-right { border-left: 1px solid var(--border); }
 .check-yes { color: var(--success); font-weight: 700; }
 .check-no { color: var(--muted); }
 pre.install-cmd { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 0; font-size: 12px; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

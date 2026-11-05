@@ -12,8 +12,10 @@ Before editing files for a substantial task:
 # agent-config-manager
 
 Dashboard that inventories a Claude Code setup — plugins, MCP servers, skills,
-environment tools, project scope — across the local machine and the claude.ai
-cloud. [README.md](README.md) covers what it does and how to run it.
+environment tools, project scope — on the local machine.
+[README.md](README.md) covers what it does and how to run it. Configuration on
+claude.ai is deliberately out of scope; see
+[docs/adr/0002](docs/adr/0002-no-cloud-config-management.md).
 
 Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
 
@@ -26,16 +28,13 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   `src/components/dashboard/`, composed by `Dashboard.tsx`) rather than
   inventing new structure.
 - **Data loading is server-only.** `src/server/dashboard.server.ts` reads the newest
-  stored scan snapshot through `src/server/store.cjs` for both the local and the cloud
-  snapshot; `scan.cjs` stores a `'cloud'` snapshot when `database/cloud.json`'s
-  modification time changes **and** its content differs from the latest stored snapshot. The helper
+  stored scan snapshot through `src/server/store.cjs`. The helper
   wraps all this in a `createServerFn`; the index route's `loader` calls that. Loaders are
   isomorphic (they also run on the client), so filesystem access belongs behind
   `createServerFn`, and a loader must not self-fetch a relative URL during SSR.
 - **`src/server/store.cjs` is the only module that touches `node:sqlite`.** It stays plain
   CJS so the TypeScript app can load it and `scan.cjs` can require it, and it holds
-  everything the app persists: scan snapshots, the `config` rows behind `/settings`, and
-  the comments.
+  everything the app persists: scan snapshots and the `config` rows behind `/settings`.
 - **`src/types/dashboard.ts`** hand-mirrors the JSON shapes `scan.cjs` emits —
   kept in sync by hand, not derived from it. `mcpJson` / `pluginInstalls` need
   the recursive `Json` type because a server function's return type must be
@@ -74,16 +73,11 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   hand-written CSS (dark/light via `prefers-color-scheme`, no toggle) for
   pixel-identical UX. Leave `src/styles.css` for future pages; there is no
   theme toggle or Google Fonts import to restore.
-- **Comments are server-side.** The "missing" comments live in the store's
-  `comments` table and are read once per page load in `getDashboardData`, so they
-  follow the browser; the same-origin guard covers the write. The
-  copy-install-script button (`src/lib/install-script.ts`) still uses the
-  clipboard only. `src/lib/comments.ts` holds just the shared key format.
 
 ## Gotchas
 
-- `database/` is gitignored and holds `dashboard.db` — the only store — plus the
-  `cloud.json` drop point. A fresh clone has no data until `node scan.cjs` runs once (or the
+- `database/` is gitignored and holds `dashboard.db` — the only store. A fresh
+  clone has no data until `node scan.cjs` runs once (or the
   container starts, which scans on boot); until then the store's snapshot table is empty and the
   UI shows the "no scan stored yet" empty state with a Rescan button. Backing up means copying
   `dashboard.db` while the server is stopped; resetting means deleting it.
@@ -96,9 +90,6 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   `dashboard.server.ts`, not statically imported: Vite's dev SSR serves a `.cjs`
   source file as-is, so a static import fails in dev with `require is not
   defined`. Loading it by path works in dev and in the built server.
-- `cloud.json` comes from the `/refresh-cloud` slash command (browser automation
-  against claude.ai), not from any code in this repo; the scanner only ingests it. A
-  malformed file is ignored and the previous cloud snapshot stays served.
 - No environment variables are required to run locally. `PUBLIC_ORIGIN` is
   required once a proxy fronts the server (see `src/server/origin-guard.ts`).
 - TanStack Devtools in `src/routes/__root.tsx` are stripped from production

@@ -52,8 +52,8 @@ function CompareTable({
         <thead>
           <tr>
             <th>Name</th>
-            <th className="col-user">{leftName}</th>
-            <th className="col-cloud">{rightName}</th>
+            <th className="col-left">{leftName}</th>
+            <th className="col-right">{rightName}</th>
           </tr>
         </thead>
         <tbody>
@@ -65,7 +65,7 @@ function CompareTable({
             rows.map((r) => (
               <tr key={r.key}>
                 <td>{r.label}</td>
-                <td className="col-user">
+                <td className="col-left">
                   {r.left ? (
                     <span className="muted">{r.left}</span>
                   ) : renderMissing ? (
@@ -74,7 +74,7 @@ function CompareTable({
                     <span className="badge missing-badge">missing</span>
                   )}
                 </td>
-                <td className="col-cloud">
+                <td className="col-right">
                   {r.right ? (
                     <span className="muted">{r.right}</span>
                   ) : renderMissing ? (

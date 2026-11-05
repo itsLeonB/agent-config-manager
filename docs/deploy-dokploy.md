@@ -42,7 +42,7 @@ This machine's real values. Only `HOST_HOME` and the mount source change on a se
 Why the data mount source is a dedicated directory rather than the repo's `database/`: Dokploy
 clones the repo to `/etc/dokploy/applications/<appName>/code` and recreates that tree on every
 deploy. A data directory inside it would be a moving target for a bind mount. `/home/leon/acm-database`
-is stable, host-visible (so `/refresh-cloud` and future SQLite backups stay plain filesystem work),
+is stable, host-visible (so it stays plain filesystem work for inspection and backups),
 and survives redeploys.
 
 `HOST_HOME` must be the container path the home content lands at (`/home/leon`), so the absolute
@@ -59,8 +59,8 @@ overrides the image's own ownership of `/app/database`.
 save, comment save) is accepted only when its `Origin` matches the request URL's own origin or this
 value; forwarded headers are deliberately not trusted, because a foreign page can forge them.
 
-The data directory holds two files: `dashboard.db` (the store — snapshots, settings, comments) and
-`cloud.json` (the `/refresh-cloud` drop point). Backing up is copying `dashboard.db` while the
+The data directory holds one file: `dashboard.db` (the store — snapshots and settings).
+Backing up is copying `dashboard.db` while the
 container is stopped; resetting is deleting it and letting the next start recreate it.
 
 ## Create the application
@@ -341,9 +341,9 @@ Everything that needs clicking in Dokploy, in order. Roughly 10 minutes.
   makes the target `/home/leon:ro`, leaves `/home/leon` absent (the entrypoint then exits 1 on
   startup), and makes the mount writable. `docker inspect <container> --format '{{json .Mounts}}'`
   shows the landed `Destination`.
-- **Cloud data is still a host step.** `database/cloud.json` only appears after `/refresh-cloud`
-  runs on the host and writes into `/home/leon/acm-database` (or is copied there). Nothing in the
-  container produces it; the scanner only ingests it into `dashboard.db`.
-- **Rolling back past the SQLite phase loses settings and comments**, because they live in the
+- **A leftover `cloud.json` is inert.** Builds before
+  [ADR 0002](../docs/adr/0002-no-cloud-config-management.md) ingested it; the current scanner
+  ignores it, so deleting it from the data directory is safe.
+- **Rolling back past the SQLite phase loses settings**, because they live in the
   data directory. Copy `dashboard.db` before reverting. A rollback to a build that predates the
   store cannot read it at all, so the page falls back to its empty state.

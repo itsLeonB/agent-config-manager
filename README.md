@@ -4,27 +4,23 @@ Dashboard that inventories your Claude Code setup across:
 
 1. User-scope plugins/MCP servers/skills (this machine)
 2. Skills installed globally via the `npx skills` tool (vercel-labs/skills)
-3. Plugins/skills configured on claude.ai (cloud) — not MCP connectors, see notes
-4. Project-scope plugins/MCP servers/skills, scanned across `~/Projects`
-5. Standalone environment tools (RTK, Serena, i-have-adhd always-on) that
-   need manual setup in every environment, local and cloud alike
+3. Project-scope plugins/MCP servers/skills, scanned across `~/Projects`
+4. Standalone environment tools (RTK, Serena, i-have-adhd always-on) that
+   need manual setup in every environment
+
+Configuration on claude.ai is deliberately out of scope — see
+[docs/adr/0002](docs/adr/0002-no-cloud-config-management.md).
 
 ## Usage
 
 All state lives in one SQLite file, `database/dashboard.db`: scan snapshots, the
-settings from the `/settings` page, and your comments. Nothing else is written
-there except the cloud drop file below.
+settings from the `/settings` page. Nothing else is written there.
 
-Scan local state (items 1, 2, 4) into that file:
+Scan local state (items 1, 2, 3) into that file:
 
 ```
 node scan.cjs [projectsRoot]   # defaults to the stored projectsRoot, else ~/Projects
 ```
-
-Refresh cloud state (item 3) — ask Claude to run the `/refresh-cloud` slash
-command. It uses browser automation to scrape claude.ai and writes
-`database/cloud.json`; the scanner ingests that file into the database on its
-next run. This step is agent-driven, not part of `scan.cjs`.
 
 Run the dashboard (TanStack Start server reads the newest snapshots through a
 server function — see [AGENTS.md](AGENTS.md)):
@@ -58,8 +54,8 @@ owned by that uid (`sudo chown -R 1000:1000 database` if yours is not). The two
 mounts are all it needs. `HOST_HOME` is the only host-specific value:
 it is the home directory mounted at its own absolute path inside the container
 (so absolute skip paths keep meaning) and it becomes the container's `HOME`.
-The data directory stays the host's `database/`, so `dashboard.db` and
-`cloud.json` remain visible and droppable from the host.
+The data directory stays the host's `database/`, so `dashboard.db` remains
+visible and droppable from the host.
 
 ## Data: back up, restore, reset
 
@@ -78,8 +74,7 @@ you skip the checkpoint, copy `dashboard.db-wal` as well, and restore both. A le
 beside a replaced `dashboard.db` belongs to the old file, which is why restore and reset delete
 the sidecars rather than let SQLite replay them. A reset leaves an empty store; the scanner's
 first run recreates the snapshot and the dashboard shows the "no scan stored yet" message until
-then, with settings back on their defaults. `cloud.json` is not part of the store — it is the
-drop point for `/refresh-cloud` and can be deleted at any time.
+then, with settings back on their defaults.
 
 Upgrading from a pre-SQLite install: delete `database/local.json`,
 `database/scan-config.json` and `database/env-tools.json`. Nothing reads them
@@ -108,21 +103,15 @@ local restart/crash proof — is in [docs/deploy-dokploy.md](docs/deploy-dokploy
 ## Notes
 
 - `database/` holds real (redacted) local config and is gitignored — its
-  `dashboard.db` is written by `scan.cjs` and the settings page, and
-  `cloud.json` by `/refresh-cloud`.
-- Plugins/skills are matched between user-scope and cloud (by marketplace or
-  name) and rendered in one row. An unmatched entry gets a red-highlighted
-  "missing" cell with a comment input to note why. Comments are stored in the
-  database, so they follow the browser and survive clearing site data. When a
-  whole plugin marketplace group is missing on one side, the comment input
-  appears once on the group row instead of once per plugin.
+  `dashboard.db` is written by `scan.cjs` and the settings page.
+- Plugins are listed by marketplace, with their enabled state and version, and
+  their skills collapsed into a dropdown per plugin. Standalone skills are a
+  separate list.
 - claude.ai connectors (Figma, Notion, Google Drive, etc.) are **not**
   scanned or scraped. They sync automatically into Claude Code's local MCP
   server list (confirmed via `claude mcp list`, which shows them as
-  `claude.ai <Name>`) without ever being written to `~/.claude.json` —
-  tracking them as separate "cloud" data produced false "missing from user
-  scope" flags. The MCP servers section only lists what `scan.cjs` found in
-  `~/.claude.json`.
+  `claude.ai <Name>`) without ever being written to `~/.claude.json`. The MCP
+  servers section only lists what `scan.cjs` found in `~/.claude.json`.
 - MCP server credentials (env vars / headers matching token/key/secret/
   password/authorization/credential/bearer) are masked to their last 4
   characters before the snapshot is stored. This does not
@@ -142,9 +131,10 @@ local restart/crash proof — is in [docs/deploy-dokploy.md](docs/deploy-dokploy
 - The environment tools list is also stored config, edited on `/settings`:
   each tool has a `checkCommand` (run locally via the shell; exit code 0 means
   installed) and an `installCommand` shown as-is in the Environment tools
-  section for setting up a cloud/remote session. The tool id follows its name.
+  section, for setting the tool up on a machine that lacks it. The tool id
+  follows its name.
   npx skills is a subsection of Environment tools, not its own section —
-  each `npx skills` entry gets a per-skill Cloud install command,
+  each `npx skills` entry gets a per-skill install command,
   auto-generated from `~/.agents/.skill-lock.json` (no config needed, it's
   derived, not stored config like the env tools): `npx skills add
   <source> --skill "<name>" -g -a claude-code -y` (per the vercel-labs/skills

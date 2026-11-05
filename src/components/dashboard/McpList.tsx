@@ -1,9 +1,9 @@
 import type { UserScope } from '../../types/dashboard'
 
 // claude.ai connectors (Figma, Notion, Google Drive, ...) sync automatically
-// into Claude Code's live MCP list (`claude mcp list`) — they're not written
-// to ~/.claude.json and aren't tracked here, so there's nothing to compare
-// against a "cloud" side. This just lists what scan.js found locally.
+// into Claude Code's live MCP list (`claude mcp list`) — they're not written to
+// ~/.claude.json, so they never appear here. This just lists what scan.cjs found
+// locally.
 export function McpList({ userScope }: { userScope: UserScope }) {
   const entries = Object.entries(userScope.mcpServers || {})
 

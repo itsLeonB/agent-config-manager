@@ -30,11 +30,11 @@ test('the newest snapshot wins, independently per kind', () => {
     assert.strictEqual(store.readLatestSnapshot('local'), null)
 
     store.saveSnapshot('local', { n: 1 })
-    store.saveSnapshot('cloud', { n: 'cloud-1' })
+    store.saveSnapshot('other', { n: 'other-1' })
     store.saveSnapshot('local', { n: 2 })
 
     assert.deepStrictEqual(store.readLatestSnapshot('local'), { n: 2 })
-    assert.deepStrictEqual(store.readLatestSnapshot('cloud'), { n: 'cloud-1' })
+    assert.deepStrictEqual(store.readLatestSnapshot('other'), { n: 'other-1' })
     assert.strictEqual(store.readLatestSnapshot('nope'), null)
   } finally {
     store.close()
@@ -68,21 +68,6 @@ test('config round-trips and overwrites', () => {
 
     store.writeConfig('scanIntervalMinutes', 5)
     assert.strictEqual(store.readConfig('scanIntervalMinutes'), 5)
-  } finally {
-    store.close()
-  }
-})
-
-test('a comment is upserted, not appended', () => {
-  const store = openStore(tempDb())
-  try {
-    assert.deepStrictEqual(store.readComments(), {})
-
-    store.writeComment('plugin:b', 'first')
-    assert.deepStrictEqual(store.readComments(), { 'plugin:b': 'first' })
-
-    store.writeComment('plugin:b', 'second')
-    assert.deepStrictEqual(store.readComments(), { 'plugin:b': 'second' })
   } finally {
     store.close()
   }
@@ -127,35 +112,6 @@ test('a read during a write returns the old or the new snapshot, never a corrupt
     }
   } finally {
     await done
-    store.close()
-  }
-})
-
-test('the comment map reads back every stored comment', () => {
-  const store = openStore(tempDb())
-  try {
-    assert.deepStrictEqual(store.readComments(), {})
-
-    store.writeComment('plugins:group:official', 'cloud cannot install these')
-    store.writeComment('skills:foo', 'renamed in cloud')
-    assert.deepStrictEqual(store.readComments(), {
-      'plugins:group:official': 'cloud cannot install these',
-      'skills:foo': 'renamed in cloud',
-    })
-  } finally {
-    store.close()
-  }
-})
-
-test('an empty comment deletes the stored row instead of storing a blank', () => {
-  const store = openStore(tempDb())
-  try {
-    store.writeComment('skills:foo', 'renamed in cloud')
-    store.writeComment('skills:bar', 'still here')
-
-    store.writeComment('skills:foo', '')
-    assert.deepStrictEqual(store.readComments(), { 'skills:bar': 'still here' })
-  } finally {
     store.close()
   }
 })

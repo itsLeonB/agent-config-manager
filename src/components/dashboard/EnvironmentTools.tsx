@@ -35,7 +35,7 @@ export function EnvironmentTools({ tools, npx }: { tools: EnvironmentTool[]; npx
           <tr>
             <th>Tool</th>
             <th>Local</th>
-            <th>Cloud install command</th>
+            <th>Install command</th>
           </tr>
         </thead>
         <tbody>
@@ -67,7 +67,7 @@ export function EnvironmentTools({ tools, npx }: { tools: EnvironmentTool[]; npx
             <th>Source</th>
             <th>Claude Code</th>
             <th>Updated</th>
-            <th>Cloud install command</th>
+            <th>Install command</th>
           </tr>
         </thead>
         <tbody>

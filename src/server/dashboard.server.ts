@@ -4,7 +4,6 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { Store } from './store.cjs'
-import { commentKey } from '../lib/comments'
 import type { RescanResult } from '../types/dashboard'
 
 // Vite's dev SSR serves a .cjs source file as-is, so a static import of the store
@@ -41,21 +40,6 @@ const localDataValidator = z.looseObject({
 export function readLocalData() {
   const data = getStore().readLatestSnapshot('local')
   return data !== null && localDataValidator.safeParse(data).success ? data : null
-}
-
-// The scanner stores a cloud snapshot whenever /refresh-cloud rewrites
-// cloud.json; null means the operator has never run that command.
-export function readCloudData() {
-  return getStore().readLatestSnapshot('cloud')
-}
-
-// The whole map for one page load; the dashboard has many missing items but one round trip.
-export function readComments() {
-  return getStore().readComments()
-}
-
-export function writeComment(category: string, id: string, text: string) {
-  getStore().writeComment(commentKey(category, id), text)
 }
 
 // The scanner runs under the same interpreter as this server (Bun in dev, Node in the

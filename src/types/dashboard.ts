@@ -97,27 +97,6 @@ export interface ScanCounts {
 // A failed scan leaves the previous snapshot on disk, so the UI keeps showing it.
 export type RescanResult = { ok: true; counts: ScanCounts } | { ok: false; error: string }
 
-export interface CloudPlugin {
-  name: string
-  marketplace: string
-  description?: string
-}
-
-export interface CloudSkill {
-  name: string
-  description?: string
-  marketplace?: string
-}
-
-export interface CloudData {
-  lastUpdated: string
-  plugins: CloudPlugin[]
-  skills: CloudSkill[]
-}
-
 export interface DashboardData {
   local: LocalData | null
-  cloud: CloudData | null
-  // Missing-counterpart comments, keyed by commentKey; see lib/comments.
-  comments: Record<string, string>
 }
