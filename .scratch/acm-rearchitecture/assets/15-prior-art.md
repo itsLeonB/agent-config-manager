@@ -21,6 +21,7 @@ they count as primary for the spawn-shape question. Line numbers refer to the fi
 | **mcpm** (`pathintegral-institute/mcpm.sh`) | The most concrete file-writing multi-harness config model: one manager class per client, three base classes by file format. |
 | **1MCP** (`1mcp-app/agent`) | Single-writer runtime with explicit ownership/generation claims + stdio proxy + single-file SEA binaries + an admin SPA. |
 | **Continue** | Engine hosted inside the UI process (extension), plus a distinct third strategy for foreign config: import and normalize, never write. |
+| **T3 Code** (added on request) | Closest live analogue to ticket 14: one engine server that owns the store, an MCP surface on that server, and a stdio bridge only for harnesses that cannot speak HTTP. |
 
 Dropped, one line each: **Cherry Studio / Jan / ChatWise** — closed or heavy internals, no cheap
 primary source within this ticket's budget, and Codex already covers "Electron app owns engine".
@@ -247,6 +248,137 @@ Sources: [`core/context/mcp/MCPConnection.ts`](https://github.com/continuedev/co
   becomes `${{ secrets.VAR }}`, `command` becomes `type: stdio`, `url` becomes sse/http, env files are
   dropped with a warning ("envFile is not supported in Continue MCP configuration").
 
+## T3 Code (added on request)
+
+Sources: [`pingdotgg/t3code`](https://github.com/pingdotgg/t3code) at commit `337c5858`, read from source —
+`apps/server/package.json`, `apps/server/src/{config.ts,serverOwnership.ts,bin.ts,server.ts}`,
+`apps/server/src/mcp/{McpHttpServer.ts,AcpMcpStdioBridge.ts}`,
+`apps/server/src/provider/{CodexInstallation.ts,CodexManagedRuntime.ts,providerInstallation.ts}`,
+`apps/server/src/provider/Drivers/{ClaudeExecutable.ts,ClaudeHome.ts,CodexHomeLayout.ts}`,
+`packages/shared/src/{nodeRuntime.ts,shell.ts}`, `packages/provider-acp/src/server/adapter.ts`,
+`packages/provider-acp-registry/src/server/AcpRegistrySupport.ts`,
+`apps/desktop/src/{app/DesktopCliShim.ts,backend/DesktopBackendManager.ts,backend/DesktopBackendConfiguration.ts}`,
+`apps/server/src/persistence/Sqlite.ts`, and its own architecture/release docs
+(`docs/internals/overview.md`, `docs/user/outside-agents.md`, `docs/operations/release.md`).
+Included because this machine runs inside it, so its packaging claims could be checked against code
+rather than release notes.
+
+- **Topology.** Four kinds of process, one writer. (1) The **Electron shell** — owns windows, updates,
+  desktop prefs; takes Electron's `requestSingleInstanceLock`
+  (`apps/desktop/src/app/DesktopClerk.ts:115`). (2) The **server** — the package literally named
+  `t3` (`apps/server/package.json`, `bin: dist/bin.mjs`), **one per state directory**, owning SQLite,
+  provider children, terminals and Git. The desktop spawns it as `process.execPath` +
+  `[--require <compileCache>, <backendEntryPath>, "--bootstrap-fd", "3"]` with
+  `ELECTRON_RUN_AS_NODE: "1"`, reading its bootstrap off fd 3 rather than argv
+  (`DesktopBackendConfiguration.ts:523-548`) — the same code runs standalone as `t3 serve` or as an
+  OS service. (3) **Harness children** — one per live agent session, plus a short-lived stdio MCP
+  bridge child per ACP session. (4) **Clients** — the web SPA, the mobile app, the desktop renderer —
+  all speaking authenticated WebSocket RPC to (2). The server also serves the web client's static
+  files and the `/mcp` endpoint, so the browser is same-origin with RPC (`apps/server/src/http.ts:587-605`).
+- **Spawn shape.** Three channels to harnesses, plus a PATH shim for humans — and only the ACP one is
+  a child process.
+  - **Its own MCP surface, to ACP agents:** a stdio child described entirely in the agent's spawn
+    config — `command: self.command` (i.e. `process.execPath`), `args: [...selfInvocationArgs(self,
+    ["acp-mcp-bridge"])]`, `env: [{ELECTRON_RUN_AS_NODE:"1"}, {T3_ACP_MCP_ENDPOINT},
+    {T3_ACP_MCP_AUTHORIZATION}]` (`packages/provider-acp/src/server/adapter.ts:845-863`). No `cwd`
+    is passed. The entry path is `path.resolve(argv[1])` and only exists when the host is *not* a
+    packaged binary — `resolveSelfInvocation` returns `entrypoint: undefined` for those, with the
+    comment "Packaged binaries repeat the binary at argv[1]; callers must not assemble
+    execPath/argv[1] themselves" (`packages/shared/src/nodeRuntime.ts:35-47`, whose own comment also
+    records why the entry is absolute: "Children spawn from their own working directory, so the script
+    path must be absolute").
+  - **Its own MCP surface, to everything else: no spawn at all.** `McpHttpServer` mounts
+    `path: "/mcp"` on the server's own origin behind OAuth (`apps/server/src/mcp/McpHttpServer.ts:1189`,
+    `apps/server/src/auth/McpOAuth.ts`); outside agents are configured with
+    `claude mcp add --transport http t3 https://<env>/mcp` + `claude mcp login`, or
+    `codex mcp add t3 --url …` (`docs/user/outside-agents.md`). Nothing is installed, nothing is spawned.
+  - **Foreign agent CLIs:** resolved by name through `resolveCommandPath`, a PATH + `PATHEXT`-aware
+    resolver (`packages/shared/src/shell.ts:119`), or a user-set `binaryPath`, or — for Codex —
+    **provisioned by the app itself**: a pinned `0.166.0` per-target tarball from
+    `github.com/openai/codex/releases`, with `downloading` → `extracting` → `verifying` phases
+    (`apps/server/src/provider/CodexInstallation.ts:38-99,167`). ACP agents come from a registry whose
+    per-agent distribution is tried `["binary", "npx", "uvx"]` in preference order
+    (`AcpRegistrySupport.ts:429-460`).
+  - **Also a PATH shim, for humans:** in packaged builds the desktop *writes* a `t3` launcher to
+    `<baseDir>/bin/t3`, embedding the absolute app path, the absolute entry, `ELECTRON_RUN_AS_NODE=1`,
+    and — for AppImage — code that mounts the image itself because "AppImage mounts change each run"
+    (`apps/desktop/src/app/DesktopCliShim.ts:19-100`). It refuses to touch a launcher it did not write
+    (marker check) and rewrites atomically.
+- **What breaks.** The shim path is per-install and per-upgrade, so it bakes in failure: if the app
+  moves or is removed the shim prints "T3 Code has moved or been removed. Open the app once to update
+  this command" and exits 127. Windows needs a different launcher entirely (`.cmd`, `%` doubling,
+  codepage restore) because Electron's Windows binary "starts without stdin"
+  (`T3CODE_DESKTOP_CLI_LAUNCHER=1`). The Windows agent-launch problem is real on the provider side too:
+  Node ≥20.12 cannot spawn `.cmd`/`.bat`/`.ps1` shims, so T3 resolves *past* the shim into
+  `node_modules/@anthropic-ai/claude-code/cli.js` (or a newer `bin/claude.exe`) and warns when neither
+  exists (`apps/server/src/provider/Drivers/ClaudeExecutable.ts:12-78`). The ACP bridge exists at all
+  because "ACP mandates stdio MCP support; HTTP/SSE support varies", and it is dispatched before the
+  main CLI module graph loads because ACP agents spawn it on their first message
+  (`apps/server/src/bin.ts:1-8`).
+- **Engine vs MCP entry.** One package, one bin, many subcommands — `t3 serve`, `t3 update`, `t3
+  service …`, `t3 thread …`, plus two *unlisted* ones, `acp-mcp-bridge` and `acp-mcp-call`
+  (`apps/server/src/cli/acpMcpBridge.ts`). No import boundary is enforced between the MCP layer and
+  the engine, and none is wanted: `McpHttpServer` imports `ThreadCommandExecutor`,
+  `ThreadManagementService` and `ProviderRegistry` directly and runs in the server process, so the
+  MCP surface *is* the engine's front door rather than a separate client of it. The boundary that does
+  exist is a wire contract between clients and server, `packages/contracts/src/rpc.ts`, which is
+  independently versioned precisely because web/mobile/desktop ship on their own cadence
+  (`docs/internals/overview.md`).
+- **UI shape and what it bought.** Electron desktop is the primary surface and it **owns the server
+  lifecycle**: spawn, readiness probe (`BackendReadinessTimeoutError`), restart, plus network
+  exposure for LAN/Tailscale/remote clients (`apps/desktop/src/backend/Desktop{BackendManager,
+  BackendPool,ServerExposure}.ts`). Web is a client-side SPA (`apps/web`, `clientFiles: ["./src/main.tsx"]`)
+  served by that same server; mobile is a third client. What it bought: a one-click install with no
+  Node requirement, auto-update (`electron-updater`), single-origin RPC so the browser needs no CORS
+  story, and remote access for free. What it cost, visible in the repo: per-platform signing and
+  notarization, six desktop artifacts × two channels per release, AppImage mount gymnastics in the
+  launcher, a shim whose absolute paths embed the install location, and a single-instance lock.
+- **Multi-harness config.** Neither of the three strategies in §8 — T3 Code **writes no foreign
+  config file and shells out to no harness CLI**. It *redirects* each harness to a home T3 controls:
+  `CODEX_HOME` at a materialized shadow home (`CodexManagedRuntime.ts:119`) that **symlinks** Codex's
+  shared state (`sessions`, `sqlite`, `skills`, `plugins`, locks) while keeping `auth.json` a real
+  private file (`Drivers/CodexHomeLayout.ts:19-40,236,415-430`), and `CLAUDE_CONFIG_DIR` for Claude
+  with the comment "Changing HOME hides macOS Keychain credentials; use CLAUDE_CONFIG_DIR to keep
+  login access" (`Drivers/ClaudeHome.ts:40-46`). Per-launch behaviour is injected as inline `-c
+  key=value` overrides, never written to `config.toml` (`CodexManagedRuntime.ts:22-33,131`). It also
+  strips inherited Claude host-session variables so a spawned `claude` cannot think it is part of a
+  session that launched it (`ClaudeHome.ts:48-64`). Other harnesses are a *target*, and the user wires
+  the HTTP URL themselves.
+- **One server per instance, or a daemon? Both — but never two at once, per state dir.** `t3 serve`
+  (hand-run), the desktop-spawned child, and `t3 service install` (a launchd/systemd *user* service,
+  `docs/user/background-service.md`, `apps/server/src/cloud/bootService.ts`) are three ways to be the
+  one server for a `--base-dir`; the ownership lock refuses the second. Note the two locks are
+  different: the desktop's Electron single-instance lock guards the *UI*, `server-owner.sqlite` guards
+  the *state dir*.
+- **The ownership lock is SQLite itself, not a pidfile.** `server-owner.sqlite` is held for the
+  server's lifetime by `PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;` — fail-fast, never waits
+  (`apps/server/src/serverOwnership.ts:179-205,276`) — and contention maps to a dedicated exit code
+  `SERVER_EXIT_CODE_STATE_DIR_OWNED` "so supervisors stop restarting an already-owned server". The
+  message names the file and warns not to delete it, and a second server is told to use a separate T3
+  home and *pair* with the first rather than take over.
+- **State, and who reads it.** `<baseDir>/userdata/` (`dev` in dev builds): `statev2.sqlite`,
+  `server-owner.sqlite`, `settings.json`, `keybindings.json`, `attachments/`, `logs/`
+  (`apps/server/src/config.ts:144-168`). Exactly one process reads or writes any of it: the server.
+  SQLite settings are `journal_mode = WAL`, `busy_timeout = 5000`, `synchronous = NORMAL`
+  (`apps/server/src/persistence/Sqlite.ts:18-28`). Desktop-only preferences live separately in
+  `electron-store` (`apps/desktop/package.json`). The stdio MCP bridge is **stateless** — it reads
+  `T3_ACP_MCP_ENDPOINT` + `T3_ACP_MCP_AUTHORIZATION` from env and relays JSON-RPC, never opening the
+  database (`apps/server/src/mcp/AcpMcpStdioBridge.ts:333-350`), which is why the number of bridge
+  processes has no bearing on the single-writer question.
+- **Runtime: bundled, not required on PATH.** The server ships as a Node single-executable
+  (`scripts/build-cli-archive.ts`, `apps/server/scripts/cli.ts` `build-exe` → `vp pack` with
+  `T3CODE_PACK_EXE=1`), five targets, attached to each release with a `SHA256SUMS`. Its own release doc
+  states the rule: the archive "needs neither Node, npm, nor a compiler. It is the only form in which
+  T3 Code manages a runtime … nothing in the product installs from npm"
+  (`docs/operations/release.md:47-48`). The `t3` npm package is a downloader for that same archive
+  (`scripts/build-npm-launcher.ts`). On desktop the runtime is Electron's own Node via
+  `ELECTRON_RUN_AS_NODE=1`. Costs it admits: no macOS x64 archive ("Node single-executables are
+  unsupported on x64 macOS … the binary segfaults on start"), and the SEA "still resolves native
+  packages from a `node_modules` tree beside it". Where Node genuinely is absent, features degrade
+  with an honest message: "requires Node.js. Install Node.js and make sure node is on PATH"
+  (`packages/shared/src/nodeRuntime.ts:17-18`). Foreign agents are *not* bundled: Codex is downloaded
+  at a pinned version, Claude and ACP agents come from PATH or their registry.
+
 ---
 
 ## 7. Option space
@@ -261,6 +393,7 @@ Sources: [`core/context/mcp/MCPConnection.ts`](https://github.com/continuedev/co
 | mcpm | stateless CLI, no daemon | brew/pipx/uv/curl | manager, not a server | CLI/TUI | writes files directly; 15 clients; JSON/YAML/TOML/JSONC |
 | 1MCP | **one runtime per config dir**, ownership claims + generations; clients via HTTP or `proxy` | npm bin **and** per-platform SEA binaries | one package, many subcommands | React admin SPA served by the runtime; can restart backend | writes support files only (hooks/docs/skills), refuses `config.toml`, prints instructions |
 | Continue | engine in host process, children per server | `StdioClientTransport`; `cmd.exe /c` on Windows; cwd = workspace | monorepo packages, schema contract | VS Code extension / GUI owns engine | imports + normalizes foreign JSON; writes nothing foreign |
+| T3 Code | one server per **state dir** (desktop child, hand-run, or launchd/systemd user service), N harness children, stateless stdio bridges | own MCP = `/mcp` HTTP + OAuth (**no spawn**) or stdio `t3 acp-mcp-bridge` as execPath + absolute `argv[1]` + env, no `cwd`; foreign CLIs via PATH **or** app-provisioned (Codex pinned download); `t3` PATH shim for humans | one `t3` package: server + CLI + MCP + bridge; MCP runs *inside* the server, bridge is stateless | Electron desktop owns server lifecycle; web/mobile are clients of the same single-origin server | nothing foreign written: shadow home via `CODEX_HOME`/`CLAUDE_CONFIG_DIR` + inline `-c` overrides |
 
 ### 7b. Spawn shape → what actually breaks
 
@@ -273,6 +406,10 @@ Sources: [`core/context/mcp/MCPConnection.ts`](https://github.com/continuedev/co
 | Runtime bundled in the app | the app | only usable while the app is installed | Codex `cua_node` (127 MB `node`) |
 | Single-file binary (SEA) | nobody | release matrix per platform/arch | 1MCP `sea-config.json` + `sea:binary:*` |
 | Manifest + host-provided runtime | the host app | language-dependent gaps (Python compiled deps) | MCPB |
+| **No spawn: HTTP MCP endpoint + OAuth on the engine's own origin** | nobody | agent cannot reach the host, or cannot do OAuth → unavailable, not broken | T3 Code `/mcp` |
+| Absolute `argv[1]` entry, **no `cwd` pin**, endpoint + token in env | the app invoking itself | packaged binary has no `argv[1]` → must branch on `IsExecutable` | T3 Code `acp-mcp-bridge` |
+| App-provisioned foreign CLI (pinned version + per-target tarball + verify) | the app | pin ages; artifact matrix; no host/user control of the version | T3 Code Codex `0.166.0` |
+| Launcher shim the app installs on PATH | the app, at startup | shim path is per-install and per-upgrade; moved/removed → 127 | T3 Code `DesktopCliShim` |
 
 ### 7c. Shared-store concurrency, for the record
 
@@ -314,7 +451,16 @@ Sources: [`core/context/mcp/MCPConnection.ts`](https://github.com/continuedev/co
    falls back to PATH (Codex plugin); bare command on PATH (Serena, Pi); `npx`/SEA binary (1MCP ships
    both). The observable failure each guards against is the same one: the harness's spawn environment
    has a different PATH and a different cwd than the user's shell.
-5. **Config writing is a three-way choice, all three shipped.** Write files directly with one adapter
+5. **Don't spawn anything: expose the MCP surface as an HTTP endpoint on the server's own origin,**
+   and keep a stdio bridge only for harnesses that cannot speak HTTP (T3 Code's split). This is
+   orthogonal to options 1-3 — it changes *how a harness reaches the engine*, not who owns the store —
+   and it dissolves two problems at once: there is no interpreter to resolve and no `cwd` to pin,
+   because the child receives an endpoint URL and a bearer token in its environment and relays
+   JSON-RPC. The cost is that the server must stay up and reachable for the tool surface to exist
+   (T3 accepts this and adds OAuth, pairing codes and per-agent scopes), plus a stdio shim for the
+   harnesses that still require one, which must then be dispatched on a *fast path* so it does not pay
+   the CLI's full module-graph startup on an agent's first message.
+6. **Config writing is a three-way choice, all three shipped.** Write files directly with one adapter
    per harness (mcpm; 15 clients, three base classes and per-client overrides); shell out to each
    harness's own CLI (Serena `setup <client>`); or import-and-normalize without writing foreign files
    (Continue). A fourth, narrower stance is 1MCP's: write only the files no harness CLI owns (hooks,
@@ -359,6 +505,37 @@ Facts, not decisions. Each of these contradicts or qualifies something ticket 14
   design that writes Codex config directly owns keys (`approval_policy`, `sandbox_mode`,
   `features.codex_hooks`) that are not about MCP at all.
 
+- **Assumption: "the MCP server spawns as `process.execPath` + an absolute entry path with `cwd`
+  pinned to the repo root." T3 Code does exactly this for its stdio bridge — and shows two parts of it
+  are not load-bearing.** Its ACP spawn config is `command: process.execPath`, args
+  `[<absolute argv[1]>, "acp-mcp-bridge"]` (`adapter.ts:845-857`), which confirms the execPath +
+  absolute-entry half. But (a) the entry only exists when the host is not a packaged binary — a SEA
+  binary gets `entrypoint: undefined` and dispatches from `argv[2]` instead (`nodeRuntime.ts:35-47`) —
+  and (b) **no `cwd` is passed at all**, because the bridge carries the endpoint and bearer token in
+  its environment. Pinning `cwd` is a workaround for relative entries and relative data; if the entry
+  is absolute and the child needs no relative files, the pin is unnecessary. Also worth copying: the
+  child is given `ELECTRON_RUN_AS_NODE=1`, without which `process.execPath` in an Electron app starts
+  a second *app*, not a Node process.
+- **Assumption: "a single SQLite file can be written by both the dashboard process and MCP-server
+  processes." The closest live example of this product shape declined the arrangement.** T3 Code's
+  engine is one process per state dir, its MCP surface runs *inside* that process (so it shares the
+  writer by construction, not by discipline), and the one out-of-process MCP piece it does ship — the
+  stdio bridge — deliberately opens no database at all, reading its endpoint and token from env
+  (`AcpMcpStdioBridge.ts:333-350`). It also guards the state dir with `server-owner.sqlite` held by
+  `PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;` for the server's lifetime, with contention mapped to its
+  own exit code so supervisors do not restart-loop (`serverOwnership.ts:179-205`). This is the third
+  distinct answer to "who owns the store", alongside 1MCP's claim records and context-mode's
+  multi-writer WAL discipline — and it is the option that needs no `BEGIN IMMEDIATE` discipline in
+  application code, because SQLite's own transaction provides the mutual exclusion.
+- **Assumption: "the UI stays a server-rendered web dashboard." Nothing in T3 Code argues for a
+  desktop shell here, but one detail is worth stealing regardless of UI shape: single origin.** Its
+  server serves the web client's static files, the WebSocket RPC, and `/mcp` from one process on one
+  origin (`apps/server/src/http.ts:587-605`, `McpHttpServer.ts:1189`), so a browser client needs no
+  CORS configuration and the MCP URL an agent is given is the same address the human uses.
+  The desktop shell in T3 is justified by owning the *server lifecycle* (spawn, readiness probe,
+  restart, network exposure), not by the UI itself — which is the part this repo can get from a
+  supervisor instead.
+
 ## 10. Sources
 
 - MCPB: <https://github.com/modelcontextprotocol/mcpb/blob/main/README.md>, <https://github.com/modelcontextprotocol/mcpb/blob/main/MANIFEST.md>
@@ -370,3 +547,4 @@ Facts, not decisions. Each of these contradicts or qualifies something ticket 14
 - Pi's spawn shape (bare command / remote URL): `~/.pi/agent/mcp.json`
 - SQLite WAL limits: <https://sqlite.org/wal.html>
 - Multi-writer SQLite contract for a multi-client MCP server: <https://github.com/mksglu/context-mode/blob/main/docs/architecture/adr/0002-single-db-git-distribution.md>; implementation `~/.pi/agent/npm/node_modules/context-mode/build/db-base.js`
+- T3 Code (`pingdotgg/t3code` @ `337c5858`): `apps/server/package.json`; `apps/server/src/{config.ts,serverOwnership.ts,bin.ts,server.ts,http.ts}`; `apps/server/src/mcp/{McpHttpServer.ts,AcpMcpStdioBridge.ts}`; `apps/server/src/cli/acpMcpBridge.ts`; `apps/server/src/provider/{CodexInstallation.ts,CodexManagedRuntime.ts,providerInstallation.ts}`; `apps/server/src/provider/Drivers/{ClaudeExecutable.ts,ClaudeHome.ts,CodexHomeLayout.ts}`; `apps/server/src/persistence/Sqlite.ts`; `apps/server/scripts/cli.ts`; `packages/shared/src/{nodeRuntime.ts,shell.ts}`; `packages/provider-acp/src/server/adapter.ts`; `packages/provider-acp-registry/src/server/AcpRegistrySupport.ts`; `apps/desktop/package.json`; `apps/desktop/src/app/{DesktopCliShim.ts,DesktopClerk.ts}`; `apps/desktop/src/backend/{DesktopBackendManager.ts,DesktopBackendConfiguration.ts,DesktopBackendPool.ts,DesktopServerExposure.ts}`; `scripts/build-npm-launcher.ts`; `docs/internals/overview.md`; `docs/user/{outside-agents.md,background-service.md,install.md}`; `docs/operations/release.md`
