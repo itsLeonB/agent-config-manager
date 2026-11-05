@@ -68,12 +68,28 @@ that slice.
   scope is a derived 4-value bucket over an **adapter-declared tier** (ADR 0001); `knownFields` +
   digest replace "configuration state" so no secret is ever stored; management status dropped;
   capability is `(harness, category, tier)`, adapter-owned, gaps live on the plan.
+- [Harness adapter contract and capability model](issues/02-adapter-contract-and-capabilities.md):
+  adapter = descriptor (tiers, formats + pointer syntax, one `(category, tier)` table with
+  `read`/`write`/`verify` verdicts, `method`, `expressible` **allowlist**) + optional per-category
+  handlers, checked for agreement at load; `translate()` returns a discriminated union of *facts*
+  (`notTranslatable` | `manual` | `translatable` with `knownFields`, `unexpressible[]`, `writes[]`,
+  `preserved[]`) and never a severity — gap policy stays with the planner. Plans carry native
+  locations plus a target excerpt/diff, never a whole-file copy. **Versioning skipped**: detection
+  recorded as a fact, nothing gates on it, latest release only.
+- [Audit the existing codebase for reusable inventory](issues/06-audit-existing-code.md): no adapter
+  reuse — discovery is eight Claude-path functions in `scan.cjs` with no registry or scope/tier
+  concept, so all three adapters are greenfield; what carries is the machinery around it (redaction
+  trio, `readSkillMeta`, `walkProjects`, `createCloudSync`, `resolveConfig`). `store.cjs` has no
+  migration runner and no query surface (blob snapshots, `ORDER BY id DESC LIMIT 1`), WAL +
+  `busy_timeout = 5000` already suit a second writer; `origin-guard.ts` is HTTP-only, so an MCP
+  stdio client sends neither `Origin` nor `Sec-Fetch-Site` and the guard cannot authorise a call.
+  Inventory on `assets/06-codebase-inventory.md`.
 
 ## Not yet specified
 
 - **Equivalence per component category.** The *gap* rule graduated to [Capability-gap semantics](issues/11-capability-gap-semantics.md); what remains fog is the per-category translation table itself (MCP vs skills vs instructions vs plugins), which cannot be written until the domain model and the mirror plan exist.
 - **Which harness pairs matter most.** Source/target precedence and the highest-value first
-  pair depend on the research findings and on which harnesses are actually used day to day.
+  pair depend on which harnesses are actually used day to day — a human fact, not a research one.
 
 ## Out of scope
 
