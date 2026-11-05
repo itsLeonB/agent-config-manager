@@ -62,6 +62,12 @@ that slice.
   field patch; the CLI manages only `mcp add|auth|logout` and `plugin *`, global scope only, and
   there is no `mcp remove`; invalid config is dropped with **exit 0 and empty stderr**.
   Findings on `research/opencode-config`.
+- [Canonical domain model for mirroring](issues/01-canonical-domain-model.md): BRIEF §5–6 extended,
+  not adopted verbatim. Installation key is `(category, name, scope, nativeLocation)` with
+  `bindings: [{harness, tier, method, version, verification}]` replacing the flat harness field;
+  scope is a derived 4-value bucket over an **adapter-declared tier** (ADR 0001); `knownFields` +
+  digest replace "configuration state" so no secret is ever stored; management status dropped;
+  capability is `(harness, category, tier)`, adapter-owned, gaps live on the plan.
 
 ## Not yet specified
 
