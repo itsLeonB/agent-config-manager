@@ -178,6 +178,16 @@ that slice.
   target-only, executable, never `verified`. Also retires two 07 §3 claims: Codex `.env` is plain
   `env`, and `startup_timeout_sec` → OpenCode is a `unit` map, not a gap.
 
+- [Prior art: how comparable tools package an engine + MCP server + UI](issues/15-prior-art-engine-mcp-ui-packaging.md):
+  six projects plus T3 Code, from source. Five shipped spawn shapes, and the closest analogue (T3)
+  avoids spawning entirely — its MCP surface is an HTTP endpoint on the engine's own origin, its
+  engine owns the store, and its one stdio bridge opens no database. `execPath` + absolute entry
+  confirmed; the `cwd` pin is not load-bearing; a packaged binary has no `argv[1]` and an Electron
+  `execPath` needs `ELECTRON_RUN_AS_NODE=1`. Store-ownership now has three shipped answers
+  (single owner + `BEGIN EXCLUSIVE` lock, claim records, multi-writer WAL discipline). The
+  framework question collapsed to "official SDK, transport TBD". Findings on `research/prior-art`,
+  asset `assets/15-prior-art.md`. Ticket 14's round 1 is stale and is being re-asked.
+
 ## Not yet specified
 
 *(Empty. The decision frontier was cleared on 2026-11-05, but a review of the settled set found one

@@ -2,7 +2,7 @@
 
 Labels: wayfinder:research
 Type: research
-Status: claimed
+Status: resolved
 Blocked by: none
 Blocks: 14
 
