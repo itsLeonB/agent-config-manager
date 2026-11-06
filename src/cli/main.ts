@@ -112,8 +112,7 @@ interface MirrorOptions {
 }
 
 // A plan is one document on stdout: the caller carries it back to apply, so nothing is written and
-// no id is printed for a later lookup. The scan runs first so the source row and its digest are the
-// ones the target's preconditions are checked against.
+// no id is printed for a later lookup.
 function mirror(argv: string[]): number {
   const options = parseMirrorOptions(argv)
   if (options.id === undefined || options.target === undefined) {
@@ -125,7 +124,8 @@ function mirror(argv: string[]): number {
     return 1
   }
   const config = resolveDefaultConfig()
-  discover(config)
+  // No scan here. A planning pass writes nothing at all: the source is the snapshot the last scan
+  // stored, and a scan would persist — and tombstone — as a side effect of asking for a plan.
   const result = planMirror(config, options.id, options.target)
   if (result.kind === 'refused') {
     process.stderr.write(`refused: ${result.reason}\n`)

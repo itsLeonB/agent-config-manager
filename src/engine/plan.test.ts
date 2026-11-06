@@ -5,8 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { openStore } from '../server/store.cjs'
 import type { EngineConfig } from './config.ts'
+import { recordDiscovery } from './repo.ts'
 import { alsoReadBy, planIntact, type MirrorPlan } from './plan.ts'
 import type { Adapter } from './adapters/types.ts'
 import { discover, listInstallations, planMirror } from './service.ts'
@@ -147,15 +147,163 @@ test('a Pi server plans into Codex: fields partitioned, writes addressed, nothin
   assert.equal(fs.existsSync(codexFile(config)), false)
 })
 
-test('a reference-shaped env value is clean, so it is carried rather than withheld', () => {
+test('a reference-shaped env value becomes Codex passthrough, never a literal', () => {
   const config = fixture()
   piFixture(config, { serena: { command: 'serena', env: { GH_TOKEN: '${GH_TOKEN}' } } })
 
   const planned = plan(config, 'serena', 'codex:user')
+  const values = writeValues(planned)
 
-  assert.ok(planned.equivalence.carried.includes('env'))
+  // Codex interpolates nothing, so `${GH_TOKEN}` in `env` would reach the child process as those
+  // nine characters. The variable name travels in `env_vars` instead.
+  assert.deepEqual(planned.equivalence.mapped, [
+    { transform: 'infer', fields: ['transport'], targetField: null },
+    {
+      transform: 'extract',
+      fields: ['env'],
+      targetField: 'env_vars',
+      template: '^\\$\\{([A-Za-z_]\\w*)\\}$',
+    },
+  ])
+  assert.deepEqual(values.get('mcp_servers.serena.env_vars'), ['GH_TOKEN'])
+  assert.equal(
+    planned.writes.some((write) => JSON.stringify(write.value).includes('${')),
+    false,
+  )
   assert.deepEqual(planned.security.secrets, [])
-  assert.equal(writeValues(planned).get('mcp_servers.serena.env.GH_TOKEN'), '${GH_TOKEN}')
+})
+
+test('a write whose parent is a literal is refused instead of replacing it', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena', timeout: 30 } })
+  // `timeout = 30` is a scalar, so the OpenCode write to `timeout.startup` would delete it.
+  fs.writeFileSync(
+    path.join(config.home, '.config', 'opencode', 'opencode.json'),
+    JSON.stringify({ mcp: { servers: { serena: { command: ['serena'], timeout: 5 } } } }),
+  )
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'oc:user')
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /timeout is a literal 5/)
+})
+
+test('a source that would leave the other transport field in place is refused', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  fs.writeFileSync(
+    codexFile(config),
+    ['[mcp_servers.serena]', "url = 'https://example.test/mcp'", ''].join('\n'),
+  )
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'codex:user')
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /would leave the entry HTTP/)
+})
+
+test('a project override with no transport of its own is refused', () => {
+  const config = fixture()
+  fs.writeFileSync(
+    path.join(config.projectRoot, '.pi', 'mcp.json'),
+    JSON.stringify({ mcpServers: { serena: { enabled: false } } }),
+  )
+  discover(config)
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'codex:user')
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /project override of a base entry/)
+})
+
+test('a literal token already in the target is withheld from the diff', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  fs.writeFileSync(
+    codexFile(config),
+    [
+      '[mcp_servers.serena]',
+      "command = 'serena'",
+      '[mcp_servers.serena.env]',
+      'GH_TOKEN = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"',
+      '',
+    ].join('\n'),
+  )
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'codex:user')
+
+  assert.equal(result.kind, 'plan')
+  if (result.kind !== 'plan') return
+  assert.deepEqual(result.plan.conflicts, [])
+  assert.equal(JSON.stringify(result.plan).includes('ghp_'), false)
+})
+
+test('a Pi command retrieval is flagged executable and is not graded safe', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena', env: { TOKEN: '!op read op://vault/token' } } })
+  // The same entry is already in the project tier, so nothing conflicts — only the content runs.
+  fs.writeFileSync(
+    path.join(config.projectRoot, '.pi', 'mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        serena: { command: 'serena', env: { TOKEN: '!op read op://vault/token' } },
+      },
+    }),
+  )
+  discover(config)
+
+  const planned = plan(config, 'serena', 'pi:project')
+
+  const executable = planned.writes.filter((write) => write.executable)
+  assert.equal(executable.length, 1)
+  assert.equal(planned.security.grade, 'risky')
+  assert.deepEqual(planned.security.executables, [
+    { file: path.join(config.projectRoot, '.pi', 'mcp.json'), why: 'mcpServers.serena.env.TOKEN runs a command at harness runtime' },
+  ])
+})
+
+test('a Codex env and env_vars naming the same key leaves the passthrough preserved', () => {
+  const config = fixture()
+  codexFixture(
+    config,
+    [
+      '[mcp_servers.serena]',
+      "command = 'serena'",
+      "env_vars = ['ORG']",
+      '[mcp_servers.serena.env]',
+      'ORG = "${ORG}"',
+      '',
+    ].join('\n'),
+  )
+
+  const planned = plan(config, 'serena', 'pi:user')
+
+  // Pi's literal `env` map already holds ORG, so the passthrough has nowhere to land — and saying so
+  // is the difference between a reported field and a silently dropped one.
+  assert.deepEqual(planned.equivalence.preserved, ['envPassthrough'])
+  assert.equal(writeValues(planned).get('mcpServers.serena.env.ORG'), '${ORG}')
+  const claimed = [
+    ...planned.equivalence.carried,
+    ...planned.equivalence.mapped.flatMap((mapped) => mapped.fields),
+    ...planned.equivalence.gaps.map((gap) => gap.field),
+    ...planned.equivalence.preserved,
+  ]
+  assert.equal(new Set(claimed).size, claimed.length)
+})
+
+test('a server defined in two OpenCode candidate files is refused as ambiguous', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  const root = path.join(config.projectRoot, 'opencode.json')
+  const nested = path.join(config.projectRoot, '.opencode', 'opencode.json')
+  for (const file of [root, nested]) {
+    fs.writeFileSync(file, JSON.stringify({ mcp: { servers: { serena: { command: ['serena'] } } } }))
+  }
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'oc:project')
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /defined in both/)
 })
 
 test('an existing target reports its digest and its value as the diff, and is left unchanged', () => {
@@ -217,7 +365,7 @@ test('every source field appears exactly once across the partition', () => {
       args: ['start'],
       url: 'https://example.test/mcp',
       env: { LOG_LEVEL: 'debug' },
-      headers: { 'X-Org': 'acme' },
+      headers: { 'X-Org': '${ORG}' },
       timeout: 30,
       description: 'symbol tools',
       exposure: 'onDemand',
@@ -239,46 +387,129 @@ test('every source field appears exactly once across the partition', () => {
   assert.deepEqual([...claimed].sort(), [...sourceFields].sort())
   // `exposure` is Pi-only, so Codex reports it as a dropped field rather than writing it.
   assert.ok(planned.equivalence.gaps.some((gap) => gap.field === 'exposure'))
+  // A rename is named as one: `headers` is not carried, it is written to `http_headers`.
+  assert.ok(
+    planned.equivalence.mapped.some(
+      (mapped) => mapped.transform === 'rename' && mapped.targetField === 'http_headers',
+    ),
+  )
+  assert.equal(planned.equivalence.carried.includes('headers'), false)
 })
 
 test('a field no adapter names is preserved, never written and never claimed as a gap', () => {
   const config = fixture()
   piFixture(config, { serena: { command: 'serena' } })
-  const store = openStore(config.storePath)
-  try {
-    // A row a future adapter could store: one canonical field plus one this build has no rule for.
-    store.writeDiscovery({
-      at: new Date().toISOString(),
-      installations: [
-        {
-          id: `sha256:${'a'.repeat(64)}`,
-          category: 'mcp',
-          name: 'future',
-          aliases: [],
-          scope: 'user',
-          nativeFile: path.join(config.home, '.pi', 'agent', 'mcp.json'),
-          nativePointer: 'mcpServers.future',
-          knownFieldsJson: JSON.stringify({ command: 'future', futureField: 'kept' }),
-          contentDigest: `sha256:${'b'.repeat(64)}`,
-          bindings: [{ harness: 'pi', tierId: 'pi:user', method: 'file', verificationStatus: 'unverified' }],
-        },
-      ],
-      tombstones: [],
-      tierHealth: [{ harness: 'pi', tierId: 'pi:user', status: 'ok', detail: null }],
-    })
-  } finally {
-    store.close()
-  }
+  // A row a future adapter could store: one canonical field plus one this build has no rule for,
+  // recorded through the same boundary discovery uses.
+  recordDiscovery(
+    config.storePath,
+    [
+      {
+        harness: 'pi',
+        tierId: 'pi:user',
+        health: 'ok',
+        detail: null,
+        installations: [
+          {
+            category: 'mcp',
+            name: 'future',
+            scope: 'user',
+            tierId: 'pi:user',
+            nativeFile: path.join(config.home, '.pi', 'agent', 'mcp.json'),
+            nativePointer: 'mcpServers.future',
+            knownFieldsJson: JSON.stringify({ command: 'future', futureField: 'kept' }),
+            contentDigest: `sha256:${'b'.repeat(64)}`,
+          },
+        ],
+      },
+    ],
+    new Date().toISOString(),
+  )
 
-  const result = planMirror(config, 'aaaaaaa', 'codex:user')
-  assert.equal(result.kind, 'plan')
-  if (result.kind !== 'plan') return
-  assert.deepEqual(result.plan.equivalence.preserved, ['futureField'])
-  assert.ok(result.plan.equivalence.carried.includes('command'))
+  const planned = plan(config, 'future', 'codex:user')
+
+  assert.deepEqual(planned.equivalence.preserved, ['futureField'])
+  assert.ok(planned.equivalence.carried.includes('command'))
   assert.equal(
-    result.plan.writes.some((write) => write.pointer.includes('futureField')),
+    planned.writes.some((write) => write.pointer.includes('futureField')),
     false,
   )
+})
+
+test('a stored row that cannot be decoded is refused, not planned from nothing', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  recordDiscovery(
+    config.storePath,
+    [
+      {
+        harness: 'pi',
+        tierId: 'pi:user',
+        health: 'ok',
+        detail: null,
+        installations: [
+          {
+            category: 'mcp',
+            name: 'broken',
+            scope: 'user',
+            tierId: 'pi:user',
+            nativeFile: path.join(config.home, '.pi', 'agent', 'mcp.json'),
+            nativePointer: 'mcpServers.broken',
+            knownFieldsJson: 'not json at all',
+            contentDigest: `sha256:${'c'.repeat(64)}`,
+          },
+        ],
+      },
+    ],
+    new Date().toISOString(),
+  )
+
+  const result = planMirror(config, onlyId(config, 'broken'), 'codex:user')
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /known fields cannot be decoded/)
+})
+
+test('planning never tombstones an installation the scan no longer sees', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' }, gone: { command: 'gone' } })
+  const id = onlyId(config, 'serena')
+  const goneId = onlyId(config, 'gone')
+  // `gone` disappears from disk after the scan; only a scan may tombstone it.
+  fs.writeFileSync(
+    path.join(config.home, '.pi', 'agent', 'mcp.json'),
+    JSON.stringify({ mcpServers: { serena: { command: 'serena' } } }),
+  )
+
+  const planned = runCli(config, ['mirror', id.slice(0, 8), '--target', 'codex:user', '--plan'])
+  assert.equal(planned.status, 0)
+
+  const rows = listInstallations(config, { includeRemoved: true }).installations
+  assert.equal(rows.length, 2)
+  assert.deepEqual(
+    rows.map((row) => row.removedAt),
+    [null, null],
+  )
+
+  // Once a scan has tombstoned it, the row is no longer a source a plan can name.
+  discover(config)
+  const gone = planMirror(config, goneId, 'codex:user')
+  assert.equal(gone.kind, 'refused')
+  assert.match(gone.kind === 'refused' ? gone.reason : '', /was removed from/)
+})
+
+test('a withheld value is never concatenated into a command', () => {
+  const config = fixture()
+  piFixture(config, {
+    serena: { command: 'serena', args: ['start', 'sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaa'] },
+  })
+
+  const planned = plan(config, 'serena', 'oc:user')
+
+  assert.deepEqual(planned.equivalence.gaps, [
+    { field: 'args', reason: 'credential', replacement: 'dropped' },
+  ])
+  assert.equal(JSON.stringify(planned.writes).includes('withheld'), false)
 })
 
 test('a Pi bearer header becomes a bare Codex token variable, never a literal reference', () => {

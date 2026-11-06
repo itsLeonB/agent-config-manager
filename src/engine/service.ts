@@ -217,7 +217,10 @@ export function planMirror(
   }
   const lookup = findInstallation(config, idOrPrefix)
   if (lookup.kind === 'notFound') {
-    return { kind: 'refused', reason: `no installation matches ${JSON.stringify(idOrPrefix)}` }
+    return {
+      kind: 'refused',
+      reason: `no installation matches ${JSON.stringify(idOrPrefix)} in the last scan; run \`acm list\` to refresh the inventory`,
+    }
   }
   if (lookup.kind === 'ambiguous') {
     return {
@@ -226,6 +229,14 @@ export function planMirror(
     }
   }
   const row = lookup.row
+  // A tombstone is a source the last scan no longer found on disk; the plan would name bytes that
+  // are gone, and its target preconditions would still look satisfiable.
+  if (row.removedAt !== null) {
+    return {
+      kind: 'refused',
+      reason: `${row.id} was removed from ${JSON.stringify(row.nativeFile)} by a later scan; nothing left to mirror`,
+    }
+  }
   if (row.category !== 'mcp') {
     return { kind: 'refused', reason: `${row.category} has no mirror planner yet; only mcp does` }
   }

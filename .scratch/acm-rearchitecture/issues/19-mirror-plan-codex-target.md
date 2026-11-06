@@ -59,8 +59,26 @@ Choices worth knowing beyond the ticket:
 - **Refusals are caller input, not plan documents**: an unknown harness or tier, a tier that is
   `notState`/`elevationRequired`, a non-`mcp` source, an ambiguous id, and a target file that exists
   but does not parse all return `{kind:'refused', reason}` and the CLI exits 1 with nothing written.
-- `acm mirror` runs a scan first, like `list`: the source row and its digest are then the ones the
-  target's preconditions are stated against. `planMirror` itself never scans.
+- **Planning writes nothing, including to the store.** `acm mirror` performs no scan: a scan
+  persists, and would tombstone whatever the last pass no longer saw, as a side effect of asking
+  for a plan. The source is the snapshot the last scan stored, read read-only; a fresh store is
+  refused with the `acm list` hint, and a row a later scan tombstoned is refused too.
+- **The plan refuses rather than guesses when the target is structurally incompatible**: a write
+  whose parent pointer is a literal (`timeout = 30` under `timeout.startup`), a source that would
+  leave the other transport field in place (a stdio write into an entry that still names `url`
+  would be HTTP), a project override carrying neither `command` nor `url`, and an OpenCode server
+  defined in two candidate files (which the tier honours is unverified) are all caller-visible
+  refusals, not silent rewrites.
+- **A value the plan reads back is classified before it is shown.** `priorValue` and
+  `conflicts[].current` go through the same classifier on the pointer's canonical last two
+  segments, so a literal token already sitting in the target file is withheld; a `${VAR}` or
+  `!command` there stays readable.
+- **Codex gets no `${VAR}`**: an all-reference `env` becomes `env_vars` (`extract`), OpenCode's
+  becomes `{env:VAR}` (`wrap`), and a map mixing a reference with a literal is a `shapeOnly` gap
+  rather than a literal that would never interpolate. A withheld field is never consumed by a
+  multi-field rule, so a redacted `args` cannot be concatenated into an invented `command`.
+- **A Pi `!command` write is `executable`** and lands in `security.executables`, which is what keeps
+  a conflict-free plan from grading `safe`.
 - `planId` hashes the canonical JSON (sorted keys) of the body with the id removed, so
   `planIntact(plan)` is the whole integrity check ticket 20 will call; the plan also verifies itself
   through a JSON round trip, which is how the CLI's output is asserted.

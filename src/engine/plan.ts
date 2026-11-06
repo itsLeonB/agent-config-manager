@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { parse as parseToml } from 'smol-toml'
 import { z } from 'zod'
 import {
+  MCP_CREDENTIAL_POINTERS,
   MCP_FIELDS,
   factsFromKnownFields,
   pointerSegment,
@@ -14,7 +15,7 @@ import {
 import { matchRule, ruleValue, type McpWriteSurface, type Transform } from './adapters/mcp-write.ts'
 import { stripJsonc } from './adapters/opencode/read.ts'
 import type { Adapter, HarnessId, Tier, Writability } from './adapters/types.ts'
-import type { Verdict } from './secret.ts'
+import { classify, withheldMarker, type Verdict } from './secret.ts'
 
 // shortcut: a plan records the tool version that built it so an old blob can be told from a new one.
 // A constant until a build stamps the real one.
@@ -164,7 +165,7 @@ export interface PlanInput {
 export function buildPlan(input: PlanInput): PlanResult {
   const { source, target } = input
   const file = targetFile(target.tier)
-  const existing = readTargetDocument(file)
+  const existing = readTargetFile(file)
   if (existing.kind === 'unreadable') {
     return {
       kind: 'refused',
@@ -172,12 +173,36 @@ export function buildPlan(input: PlanInput): PlanResult {
     }
   }
   const known = factsFromKnownFields(source.knownFieldsJson)
-  const partition = partitionFields(known.facts, target.surface, target.tier.id)
+  if (known.kind === 'invalid') {
+    return {
+      kind: 'refused',
+      reason: `${source.nativeFile} known fields cannot be decoded: ${known.detail}`,
+    }
+  }
+  // A project entry may carry only `enabled`/`exposure` and inherit the rest from the user tier. On
+  // its own it names no transport, and OpenCode replaces whole entries rather than merging them, so
+  // a plan would write a server that cannot launch.
+  if (known.facts.command === undefined && known.facts.url === undefined) {
+    return {
+      kind: 'refused',
+      reason: `${source.nativePointer} carries neither command nor url: it is a project override of a base entry, and mirroring it alone would write a server that cannot start`,
+    }
+  }
   const entryPointer = `${target.surface.pointerPrefix}.${pointerSegment(source.name)}`
-  const precondition = { exists: existing.kind === 'parsed', digest: digestOf(file) }
-  const prior = existing.kind === 'parsed' ? existing.document : null
+  const ambiguous = ambiguousTarget(target.tier, file, entryPointer)
+  if (ambiguous !== null) return { kind: 'refused', reason: ambiguous }
+  const document = existing.kind === 'parsed' ? existing.document : null
+  const blocker = structuralBlocker(document, entryPointer, known.facts)
+  if (blocker !== null) return { kind: 'refused', reason: blocker }
+
+  const partition = partitionFields(known.facts, target.surface, target.tier.id)
+  const precondition = {
+    exists: existing.kind === 'parsed',
+    digest: existing.kind === 'parsed' ? existing.digest : null,
+  }
   const writes: PlanWrite[] = partition.writes.map((write) => {
     const pointer = `${entryPointer}.${write.target}`
+    const runs = z.string().safeParse(write.value)
     return {
       op: 'writeAtPointer',
       file,
@@ -185,18 +210,25 @@ export function buildPlan(input: PlanInput): PlanResult {
       value: write.value,
       precondition,
       reversible: true,
-      priorValue: pointerAt(prior, pointer),
-      executable: false,
+      priorValue: priorValueAt(document, pointer),
+      executable: runs.success && runs.data.startsWith('!'),
       secretValues: false,
       irreversible: false,
     }
   })
+  const blocked = writes
+    .map((write) => ancestorBlocker(document, write.pointer))
+    .find((found) => found !== null)
+  if (blocked !== null && blocked !== undefined) return { kind: 'refused', reason: blocked }
   const conflicts = writes.flatMap<PlanConflict>((write) => {
     if (write.priorValue === null || JSON.stringify(write.priorValue) === JSON.stringify(write.value)) {
       return []
     }
     return [{ file, pointer: write.pointer, current: write.priorValue, proposed: write.value }]
   })
+  const executables = writes
+    .filter((write) => write.executable)
+    .map((write) => ({ file, why: `${write.pointer} runs a command at harness runtime` }))
   const body: PlanBody = {
     createdAt: input.now,
     toolVersion: TOOL_VERSION,
@@ -221,7 +253,9 @@ export function buildPlan(input: PlanInput): PlanResult {
       carried: partition.carried,
       mapped: partition.mapped,
       gaps: partition.gaps,
-      preserved: known.unknown,
+      // A field no adapter names is preserved as it stands; so is a canonical field the target has
+      // no rule for and no declared absence.
+      preserved: [...known.unknown, ...partition.preserved],
     },
     prerequisites: [
       {
@@ -243,7 +277,7 @@ export function buildPlan(input: PlanInput): PlanResult {
     security: {
       grade: gradeOf(conflicts, writes, precondition.exists),
       secrets: partition.secrets,
-      executables: [],
+      executables,
     },
     writes,
     manualSteps: [...partition.manualSteps, ...tierManualSteps(target.tier.id)],
@@ -280,6 +314,25 @@ function tierManualSteps(tierId: string): PlanManualStep[] {
   return []
 }
 
+// Two structural refusals, both because this slice has no remove op: an entry that already names the
+// other transport would keep it, and a pointer whose parent is a literal cannot be written into.
+function structuralBlocker(
+  document: PlanValue | null,
+  entryPointer: string,
+  facts: McpFacts,
+): string | null {
+  if (document === null) return null
+  const url = resolvePointer(document, `${entryPointer}.url`)
+  const command = resolvePointer(document, `${entryPointer}.command`)
+  if (url !== undefined && facts.url === undefined) {
+    return `${entryPointer}.url already exists, so writing command would leave the entry HTTP; remove that url by hand first`
+  }
+  if (command !== undefined && facts.command === undefined) {
+    return `${entryPointer}.command already exists, so writing url would leave the entry stdio; remove that command by hand first`
+  }
+  return null
+}
+
 interface TargetWrite {
   target: string
   value: PlanValue
@@ -289,18 +342,20 @@ interface Partition {
   carried: string[]
   mapped: MappedField[]
   gaps: PlanGap[]
+  preserved: string[]
   writes: TargetWrite[]
   manualSteps: PlanManualStep[]
   secrets: { pointer: string; verdict: Verdict }[]
 }
 
-// Every canonical field the source holds lands in exactly one bucket: carried, mapped, or a gap. A
-// key no adapter names is not here at all — `factsFromKnownFields` hands it back as preserved.
+// Every canonical field the source holds lands in exactly one bucket: carried, mapped, a gap, or
+// preserved. A key no adapter names is not here at all — `factsFromKnownFields` hands it back.
 function partitionFields(facts: McpFacts, surface: McpWriteSurface, tierId: string): Partition {
   const partition: Partition = {
     carried: [],
     mapped: [],
     gaps: [],
+    preserved: [],
     writes: [],
     manualSteps: [],
     secrets: [],
@@ -313,6 +368,7 @@ function partitionFields(facts: McpFacts, surface: McpWriteSurface, tierId: stri
     const verdict = withheldVerdict(value)
     if (verdict !== 'clean') {
       // Never written, never claimed: the migrate-out instruction is the manual step.
+      consumed.add(field)
       partition.gaps.push({ field, reason: 'credential', replacement: 'dropped' })
       partition.secrets.push({ pointer: field, verdict })
       partition.manualSteps.push({
@@ -332,6 +388,17 @@ function partitionFields(facts: McpFacts, surface: McpWriteSurface, tierId: stri
     const rule = matchRule(surface, field, value, facts)
     if (rule !== undefined) {
       for (const name of rule.fields) consumed.add(name)
+      if (rule.gap !== undefined) {
+        partition.gaps.push({ field, reason: rule.gap, replacement: 'dropped' })
+        continue
+      }
+      const native = ruleValue(rule, facts)
+      // A rule with nothing left to write — every key it would set is already held by the field it
+      // shares a target with — leaves the field untouched rather than claiming it was carried.
+      if (rule.target !== '' && native === undefined) {
+        partition.preserved.push(field)
+        continue
+      }
       if (rule.transform === undefined) partition.carried.push(field)
       else {
         const mapped: MappedField = {
@@ -342,7 +409,6 @@ function partitionFields(facts: McpFacts, surface: McpWriteSurface, tierId: stri
         if (rule.template !== undefined) mapped.template = rule.template
         partition.mapped.push(mapped)
       }
-      const native = ruleValue(rule, facts)
       if (native !== undefined && rule.target !== '') {
         partition.writes.push(...targetWrites(rule.target, native))
       }
@@ -350,7 +416,11 @@ function partitionFields(facts: McpFacts, surface: McpWriteSurface, tierId: stri
     }
     if (surface.absent.includes(field)) {
       partition.gaps.push({ field, reason: 'fieldAbsent', replacement: 'dropped' })
+      continue
     }
+    // No rule and no declared absence: the target never saw this field, so nothing is claimed for
+    // it. Reporting it here is what keeps it out of the silent-diff category.
+    partition.preserved.push(field)
   }
   return partition
 }
@@ -376,10 +446,68 @@ function carriesCommandRetrieval(value: McpValue): boolean {
   return scalar.success && scalar.data.startsWith('!')
 }
 
-// The tier owns the file it writes: the first candidate that exists, or the first it declares when
-// nothing is on disk yet.
+// A prior value is read from a file this engine did not write, so it is classified before it can
+// reach the plan: a literal token already on disk is withheld exactly as the source's would be. The
+// classifier runs on the pointer's canonical last two segments (`env.GH_TOKEN`), because that is the
+// form its declared credential pointers match — and its reference rule runs first, so a `${VAR}` or
+// `!command` already at a credential address stays readable.
+function priorValueAt(document: PlanValue | null, pointer: string): PlanValue {
+  const value = resolvePointer(document ?? null, pointer)
+  if (value === undefined) return null
+  const scalar = z.string().safeParse(value)
+  if (!scalar.success) return value
+  const canonical = pointerSegments(pointer).slice(-2).join('.')
+  const { verdict } = classify(canonical, scalar.data, MCP_CREDENTIAL_POINTERS)
+  return verdict === 'clean' ? scalar.data : withheldMarker(verdict)
+}
+
+function resolvePointer(document: PlanValue | null, pointer: string): PlanValue | undefined {
+  let node: PlanValue | undefined = document ?? undefined
+  for (const segment of pointerSegments(pointer)) {
+    const object = planObjectSchema.safeParse(node)
+    if (!object.success) return undefined
+    node = object.data[segment]
+  }
+  return node
+}
+
+// A pointer whose parent is a literal value cannot be written into: the plan would replace the
+// literal with a table while its own `priorValue` read the literal as absent.
+function ancestorBlocker(document: PlanValue | null, pointer: string): string | null {
+  if (document === null) return null
+  const segments = pointerSegments(pointer)
+  let node: PlanValue | undefined = document
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const object = planObjectSchema.safeParse(node)
+    if (!object.success) {
+      if (node === undefined) return null
+      return `${segments.slice(0, index).join('.')} is a literal ${JSON.stringify(node)}, so ${pointer} cannot be written into it`
+    }
+    node = object.data[segments[index] ?? '']
+  }
+  // The last step reaches the leaf's own parent, which has to be a table as well.
+  if (node === undefined || planObjectSchema.safeParse(node).success) return null
+  return `${segments.slice(0, -1).join('.')} is a literal ${JSON.stringify(node)}, so ${pointer} cannot be written into it`
+}
+
+// The tier owns the file it writes: the file it already reads, or the first candidate it declares
+// when nothing is on disk yet.
 function targetFile(tier: Tier): string {
   return tier.configPaths.find((candidate) => existsSync(candidate)) ?? tier.configPaths[0] ?? ''
+}
+
+// A tier can hold the same server in more than one candidate file (OpenCode reads `opencode.json`
+// and `.opencode/opencode.json`), and which one wins is not verified. Writing the first while the
+// other defines the same entry would leave two definitions, so that is refused rather than guessed.
+function ambiguousTarget(tier: Tier, chosen: string, entryPointer: string): string | null {
+  for (const candidate of tier.configPaths) {
+    if (candidate === chosen || !existsSync(candidate)) continue
+    const other = readTargetFile(candidate)
+    if (other.kind !== 'parsed') continue
+    if (resolvePointer(other.document, entryPointer) === undefined) continue
+    return `${entryPointer} is defined in both ${chosen} and ${candidate}; which one ${tier.id} honours is not verified, so remove one by hand`
+  }
+  return null
 }
 
 // A location more than one harness reads has to be reported, because a write there lands for every
@@ -398,49 +526,34 @@ export function alsoReadBy(
   return [...new Set(others)]
 }
 
-function digestOf(file: string): string | null {
-  if (!existsSync(file)) return null
-  try {
-    return `sha256:${createHash('sha256').update(readFileSync(file)).digest('hex')}`
-  } catch {
-    return null
-  }
-}
-
-type TargetDocument =
+type TargetFile =
   | { kind: 'absent' }
-  | { kind: 'parsed'; document: PlanValue }
+  | { kind: 'parsed'; document: PlanValue; digest: string }
   | { kind: 'unreadable' }
 
-function readTargetDocument(file: string): TargetDocument {
+// One read of the target answers both questions the plan asks of it — what is there now, and what
+// bytes the precondition names — so the digest can never describe a different read than the values.
+function readTargetFile(file: string): TargetFile {
   if (file === '' || !existsSync(file)) return { kind: 'absent' }
-  let text: string
+  let bytes: Buffer
   try {
-    text = readFileSync(file, 'utf8')
+    bytes = readFileSync(file)
   } catch {
     return { kind: 'unreadable' }
   }
+  const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
   try {
+    const text = bytes.toString('utf8')
     const parsed = file.endsWith('.toml') ? parseToml(text) : JSON.parse(stripJsonc(text))
     const document = planValueSchema.safeParse(parsed)
-    return document.success ? { kind: 'parsed', document: document.data } : { kind: 'unreadable' }
+    return document.success ? { kind: 'parsed', document: document.data, digest } : { kind: 'unreadable' }
   } catch {
     return { kind: 'unreadable' }
   }
 }
 
-function pointerAt(document: PlanValue | null, pointer: string): PlanValue {
-  let node: PlanValue | undefined = document ?? undefined
-  for (const segment of pointerSegments(pointer)) {
-    const object = planObjectSchema.safeParse(node)
-    if (!object.success) return null
-    node = object.data[segment]
-  }
-  return node ?? null
-}
-
-// The engine grades the plan, not the caller: a location that is not on disk yet or a value that
-// disagrees with it both mean a human answer is required before apply.
+// The engine grades the plan, not the caller: a location that is not on disk yet, a value that
+// disagrees with it, or executable content all mean a human answer is required before apply.
 function gradeOf(
   conflicts: PlanConflict[],
   writes: PlanWrite[],

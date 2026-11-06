@@ -165,6 +165,10 @@ export interface KnownFacts {
   unknown: string[]
 }
 
+// A row that cannot be decoded is reported, not silently emptied: a plan built from nothing would
+// claim the source holds no fields at all.
+export type KnownFactsResult = ({ kind: 'ok' } & KnownFacts) | { kind: 'invalid'; detail: string }
+
 const factValue = z.union([
   z.string(),
   z.number(),
@@ -196,22 +200,24 @@ const storedFacts = z.object({
   codemode: z.boolean().optional(),
 })
 
-export function factsFromKnownFields(json: string): KnownFacts {
+export function factsFromKnownFields(json: string): KnownFactsResult {
   let document: unknown
   try {
     document = JSON.parse(json)
   } catch {
-    return { facts: {}, unknown: [] }
+    return { kind: 'invalid', detail: 'known fields are not valid JSON' }
   }
   const stored = z.record(z.string(), factValue).safeParse(document)
-  if (!stored.success) return { facts: {}, unknown: [] }
+  if (!stored.success) return { kind: 'invalid', detail: stored.error.issues[0]?.message ?? 'unexpected value shape' }
+  // A row whose values are not the shapes the vocabulary holds is not partly trusted either.
   const facts = storedFacts.safeParse(stored.data)
+  if (!facts.success) {
+    return { kind: 'invalid', detail: facts.error.issues[0]?.message ?? 'unexpected field shape' }
+  }
   return {
-    // A row this process cannot decode is not partly trusted: nothing is written from it.
-    facts: facts.success ? facts.data : {},
-    unknown: facts.success
-      ? Object.keys(stored.data).filter((key) => !MCP_FIELD_SET.has(key))
-      : Object.keys(stored.data),
+    kind: 'ok',
+    facts: facts.data,
+    unknown: Object.keys(stored.data).filter((key) => !MCP_FIELD_SET.has(key)),
   }
 }
 
