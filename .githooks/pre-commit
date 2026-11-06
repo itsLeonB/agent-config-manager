@@ -1,0 +1,4 @@
+#!/bin/sh
+# Lint, typecheck, and test on every commit. Cheap enough (about a second) that a red check should
+# never reach a branch; `bun install` points core.hooksPath here via the prepare script.
+exec bun run check

@@ -90,6 +90,10 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
 
 ## Gotchas
 
+- `bun run check` runs lint, typecheck, and the test suite; `.githooks/pre-commit` runs it and
+  `bun install` points `core.hooksPath` there. A manual `git commit --no-verify` skips it, so a
+  green local `bun run check` is still the thing to report.
+
 - `database/` is gitignored and holds `dashboard.db` — the only store. A fresh
   clone has no data until `node scan.cjs` runs once (or the
   container starts, which scans on boot); until then the store's snapshot table is empty and the

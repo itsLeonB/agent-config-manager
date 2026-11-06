@@ -11,7 +11,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "oxlint",
+    "typecheck": "tsc --noEmit",
     "test": "node --test",
+    "check": "bun run lint && bun run typecheck && bun run test",
+    "prepare": "git config core.hooksPath .githooks",
     "acm": "node src/cli/main.ts",
     "start": "node tools/entrypoint.mjs"
   },

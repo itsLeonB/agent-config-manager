@@ -2,6 +2,7 @@
   "ignorePatterns": [
     ".agents/**",
     ".claude/**",
+    ".codebuddy/**",
     "dist",
     "tools/oxlint/anti-slop/**",
     "scan.cjs",
