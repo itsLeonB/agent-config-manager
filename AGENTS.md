@@ -34,7 +34,21 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   `createServerFn`, and a loader must not self-fetch a relative URL during SSR.
 - **`src/server/store.cjs` is the only module that touches `node:sqlite`.** It stays plain
   CJS so the TypeScript app can load it and `scan.cjs` can require it, and it holds
-  everything the app persists: scan snapshots and the `config` rows behind `/settings`.
+  everything the app persists: scan snapshots, the `config` rows behind `/settings`, and the
+  engine's canonical tables. `PRAGMA user_version` gates an ordered migration list run on every
+  open, so a fresh database and an existing one reach the same schema; migration 1 is pure
+  `CREATE TABLE IF NOT EXISTS` next to `snapshots` / `config`, which therefore keep their rows.
+  Every write transaction opens with `BEGIN IMMEDIATE`, because the CLI, the MCP server, and the
+  scanner all open the file.
+- **The engine and the CLI are a second face over that store.** `src/engine/service.ts` exposes
+  `discover()` and `listInstallations()`; `src/engine/repo.ts` is the only module that calls
+  `store.cjs`; `src/engine/adapters/` holds one directory per harness (Pi only so far) and
+  `src/engine/adapters/registry.ts` fails at load when a claimed category has no handler. Roots
+  (home, project root, store path) arrive as an injected `EngineConfig`, never read from the
+  working directory; `ACM_HOME` / `ACM_PROJECT_ROOT` / `ACM_STORE` are the boundary overrides a
+  test uses to point the engine at a fixture. `src/cli/main.ts` is the `acm` bin
+  (`bun run acm -- list`, or `acm list` once linked), and it is a face over `service.ts`, exactly
+  as the MCP server will be. Nothing under `src/routes/` or `src/components/` imports it.
 - **`src/types/dashboard.ts`** hand-mirrors the JSON shapes `scan.cjs` emits —
   kept in sync by hand, not derived from it. `mcpJson` / `pluginInstalls` need
   the recursive `Json` type because a server function's return type must be
@@ -80,7 +94,8 @@ Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
   clone has no data until `node scan.cjs` runs once (or the
   container starts, which scans on boot); until then the store's snapshot table is empty and the
   UI shows the "no scan stored yet" empty state with a Rescan button. Backing up means copying
-  `dashboard.db` while the server is stopped; resetting means deleting it.
+  `dashboard.db` while the server is stopped; resetting means deleting it. Deleting it also drops
+  the engine's inventory, which `acm list` rebuilds from the native configs on its next run.
 - `scan.cjs` and `database/` are resolved from `process.cwd()`, so the server
   must run with the repo root as its working directory (true for `bun run dev`
   and for the container). The scanner writes only the SQLite file; there is no
