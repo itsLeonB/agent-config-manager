@@ -26,11 +26,12 @@ import { SKILL_FIELDS } from './adapters/skills.ts'
 import {
   HARNESSES,
   WRITABILITIES,
-  declaresPath,
+  declaresReadPath,
   mirrorTarget,
   type Adapter,
   type Category,
   type HarnessId,
+  type ScopeBucket,
   type Tier,
 } from './adapters/types.ts'
 import { digestOfBytes, digestOfPath } from './digest.ts'
@@ -615,8 +616,13 @@ function buildSkillPlan(input: PlanInput): PlanResult {
   } else if (existing === sourceDigest) {
     disposition = { kind: 'alreadyPresent', reason: `${targetDir} already holds this skill` }
   } else if (existing !== null) {
-    // Nothing is removed by a mirror, so two different skills under one name stay two.
+    // Nothing is removed by a mirror, so two different skills under one name stay two: the plan
+    // reports the conflict and says how a human clears it.
     conflicts.push({ file: targetDir, pointer: '', current: existing, proposed: sourceDigest })
+    manualSteps.push({
+      step: `remove ${targetDir} by hand, then plan this mirror again`,
+      why: 'the shared location already holds a different skill under this name, and this slice has no op that removes a directory',
+    })
   } else {
     writes.push({
       op: 'copyFile',
@@ -648,7 +654,12 @@ function buildSkillPlan(input: PlanInput): PlanResult {
         detail: existing === null ? `${targetDir} does not exist yet` : `${targetDir} exists`,
       },
     ],
-    permissions: { tierWritability: target.tier.writability, elevationRequired: false, trust: 'notRequired' },
+    permissions: {
+      tierWritability: target.tier.writability,
+      // Derived, not asserted: a plan for a managed or elevated tier never reaches here.
+      elevationRequired: target.tier.writability !== 'writable',
+      trust: trustRequired(target.tier.id, 'skills') ? 'required' : 'notRequired',
+    },
     conflicts,
     security: {
       grade: planGrade({ writes, conflicts, permissions: { elevationRequired: false } }),
@@ -656,7 +667,7 @@ function buildSkillPlan(input: PlanInput): PlanResult {
       executables: [],
     },
     writes,
-    manualSteps,
+    manualSteps: [...manualSteps, ...trustSteps(target.tier.id, 'skills')],
     verify: writes.map<PlanAssert>(() => ({ file: targetDir, digest: sourceDigest })),
     targetNativeLocation: targetDir,
     alsoReadBy: alsoReadBy(input.adapters, target.harness, targetDir),
@@ -708,6 +719,10 @@ function buildInstructionPlan(input: PlanInput): PlanResult {
   const manualSteps: PlanManualStep[] = []
   const writes: PlanWrite[] = []
   const written = digestOfBytes(Buffer.from(facts.body, 'utf8'))
+  const readers = alsoReadBy(input.adapters, target.harness, targetFile)
+  // Codex's own two shadows only matter where Codex reads the file: its own location, or a project
+  // one it shares with the other two.
+  const codexReads = target.harness === 'codex' || readers.includes('codex')
   let disposition: Disposition = { kind: 'mirror', reason: null }
   if (verdict !== 'clean') {
     const gap: PlanGap = { field: 'body', reason: 'credential', replacement: 'dropped' }
@@ -763,7 +778,7 @@ function buildInstructionPlan(input: PlanInput): PlanResult {
     permissions: {
       tierWritability: target.tier.writability,
       elevationRequired: false,
-      trust: target.tier.id === 'codex:project' ? 'required' : 'notRequired',
+      trust: trustRequired(target.tier.id, 'instructions') ? 'required' : 'notRequired',
     },
     conflicts,
     security: {
@@ -777,8 +792,8 @@ function buildInstructionPlan(input: PlanInput): PlanResult {
         ? manualSteps
         : [
             ...manualSteps,
-            ...instructionManualSteps(targetFile, facts.body, target.tier.scopeBucket),
-            ...instructionTierSteps(target.tier.id),
+            ...instructionManualSteps(targetFile, facts.body, target.tier.scopeBucket, codexReads),
+            ...trustSteps(target.tier.id, 'instructions'),
           ],
     verify: writes.map<PlanAssert>((write) =>
       write.op === 'symlink'
@@ -786,45 +801,78 @@ function buildInstructionPlan(input: PlanInput): PlanResult {
         : { file: targetFile, digest: written },
     ),
     targetNativeLocation: targetFile,
-    alsoReadBy: alsoReadBy(input.adapters, target.harness, targetFile),
+    alsoReadBy: readers,
   })
 }
 
-// Two files can shadow a written instruction file: Codex's own override beside it, and a project
-// document over the budget Codex documents. Both are steps for a human, not refusals.
+// The files a harness reads ahead of the one this plan writes, in the same directory. Same directory
+// only: these replace the file, whereas an ancestor's is combined with it.
+const SHADOWING_INSTRUCTIONS = ['AGENTS.override.md', 'AGENTS.MD', 'CLAUDE.md', 'CLAUDE.MD'] as const
+
+// What a human still has to know after the bytes land: a same-directory file that outranks this one,
+// Codex's project budget, and the ancestor instruction files every harness also loads.
 function instructionManualSteps(
   targetFile: string,
   body: string,
-  scopeBucket: string,
+  scopeBucket: ScopeBucket,
+  codexReads: boolean,
 ): PlanManualStep[] {
   const steps: PlanManualStep[] = []
-  const override = path.join(path.dirname(targetFile), 'AGENTS.override.md')
-  if (existsSync(override)) {
+  const directory = path.dirname(targetFile)
+  const shadows = SHADOWING_INSTRUCTIONS.map((name) => path.join(directory, name)).filter((file) =>
+    existsSync(file),
+  )
+  if (shadows.length > 0) {
     steps.push({
-      step: `review ${override}`,
-      why: 'Codex reads AGENTS.override.md ahead of AGENTS.md, so this write does not reach the model while that file exists',
+      step: `review ${shadows.join(', ')}`,
+      why: 'Pi reads AGENTS.override.md, AGENTS.MD and CLAUDE.md ahead of AGENTS.md in that directory, and Codex reads AGENTS.override.md ahead of it, so the file this plan writes is not the one that wins while these exist',
     })
   }
-  if (scopeBucket === 'project' && Buffer.byteLength(body, 'utf8') > 32768) {
+  if (codexReads && scopeBucket === 'project' && Buffer.byteLength(body, 'utf8') > 32768) {
     steps.push({
       step: "raise project_doc_max_bytes in Codex's user config, or shorten the project instruction file",
       why: 'Codex caps the project instructions it loads at 32 KiB by default, so the tail of this file is not read',
+    })
+  }
+  if (scopeBucket === 'project') {
+    steps.push({
+      step: 'review the AGENTS.md files in the directories above this project',
+      why: 'Pi, Codex and OpenCode each load every ancestor AGENTS.md too, so this file is one of several a session reads; a file closer to the working directory comes later and wins',
     })
   }
   return steps
 }
 
 // The layers that outrank a written file, named rather than assumed away.
-function instructionTierSteps(tierId: string): PlanManualStep[] {
-  if (tierId === 'codex:project') {
+// A trust gate makes a correct write inert, and only a human can lift it. Codex gates its whole
+// project layer; Pi gates a project's `.agents/skills` and its own project config, but not its
+// instruction-file discovery, so a project `AGENTS.md` needs no step there.
+function trustRequired(tierId: string, category: 'skills' | 'instructions'): boolean {
+  if (tierId === 'codex:project') return true
+  return tierId === 'pi:project' && category === 'skills'
+}
+
+function trustSteps(tierId: string, category: 'skills' | 'instructions'): PlanManualStep[] {
+  const what = category === 'skills' ? 'the copied skill directory' : 'this instruction file'
+  if (tierId === 'codex:project') return [codexTrustStep(what)]
+  if (tierId === 'pi:project' && category === 'skills') {
     return [
       {
-        step: 'add this project to [projects."<path>"] with trust_level = "trusted" in $CODEX_HOME/config.toml',
-        why: 'Codex ignores an untrusted project layer, so this instruction file is not loaded until the user config trusts the path',
+        step: 'trust this project in Pi (`/trust`), or set defaultProjectTrust',
+        why: `Pi loads no project or ancestor .agents/skills until a trust decision is saved in ~/.pi/agent/trust.json, so ${what} is inert`,
       },
     ]
   }
   return []
+}
+
+// One switch, whatever the plan writes: an untrusted project layer is inert for every category, so
+// the step differs only in what a human is being told is not loaded.
+function codexTrustStep(what: string): PlanManualStep {
+  return {
+    step: 'add this project to [projects."<path>"] with trust_level = "trusted" in $CODEX_HOME/config.toml',
+    why: `Codex treats an untrusted project config as inert, so ${what} is not loaded until the user config trusts the path`,
+  }
 }
 
 // A category no target can express is still one artefact type: a plan with no writes and one gap.
@@ -841,7 +889,12 @@ function categoryAbsentPlan(input: PlanInput, category: Category): PlanResult {
     prerequisites: [
       { check: 'target-tier-writable', detail: `${target.tier.id} is a declared writable tier` },
     ],
-    permissions: { tierWritability: target.tier.writability, elevationRequired: false, trust: 'notRequired' },
+    permissions: {
+      tierWritability: target.tier.writability,
+      // Derived, not asserted: a plan for a managed or elevated tier never reaches here.
+      elevationRequired: target.tier.writability !== 'writable',
+      trust: trustRequired(target.tier.id, 'skills') ? 'required' : 'notRequired',
+    },
     conflicts: [],
     security: { grade: 'safe', secrets: [], executables: [] },
     writes: [],
@@ -877,14 +930,7 @@ function readTextOrNull(file: string): string | null {
 // A write into a project-scope file is correct on disk and still inert until the harness's own
 // user-scope switch allows it, so the plan says so instead of claiming the mirror took effect.
 function tierManualSteps(tierId: string): PlanManualStep[] {
-  if (tierId === 'codex:project') {
-    return [
-      {
-        step: 'add this project to [projects."<path>"] with trust_level = "trusted" in $CODEX_HOME/config.toml',
-        why: 'Codex treats an untrusted project config as inert, so the MCP entry is not loaded until the user config trusts the path',
-      },
-    ]
-  }
+  if (tierId === 'codex:project') return [codexTrustStep('the MCP entry')]
   if (tierId === 'oc:project' || tierId === 'oc:user') {
     return [
       {
@@ -1314,7 +1360,7 @@ export function alsoReadBy(
 ): HarnessId[] {
   const others = adapters
     .filter((adapter) => adapter.harness !== targetHarness)
-    .filter((adapter) => adapter.tiers.some((tier) => declaresPath(tier, file)))
+    .filter((adapter) => adapter.tiers.some((tier) => declaresReadPath(tier, file)))
     .map((adapter) => adapter.harness)
   return [...new Set(others)]
 }

@@ -155,21 +155,33 @@ answers from; `target` is where a mirror into that tier lands.
 | `oc:user` | `~/.agents/skills`, `~/.config/opencode/skills` | `~/.agents/skills` | `~/.config/opencode/AGENTS.md` |
 | `oc:project` | `<repo>/.agents/skills`, `<repo>/.opencode/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
 
+`reads` is what `alsoReadBy` answers from and what the inventory shows; only `target` is writable.
+Containment holds a plan to the target (or a path beneath it), so a harness-owned `skills/` directory
+is a source a mirror may copy from and never a place it may write into.
+
 `.agents/skills` is read by all three harnesses and the project `AGENTS.md` is the same file for all
 three, so a write there is never a single-harness write: `target.alsoReadBy` names the other readers,
 and one installation carries one binding per harness. That is also why a second mirror writes nothing.
 
-| situation | `writes[]` | `disposition` |
+A trust gate can make a correct write inert, so the plan carries `permissions.trust` and a manual
+step: Codex gates its whole project layer, and Pi gates a project's `.agents/skills` (and its own
+project config) behind `/trust`. Pi's instruction-file discovery ignores trust, so a project
+`AGENTS.md` needs no step there.
+
+| situation | `writes[]` | `disposition.kind` |
 |---|---|---|
 | the target is the source location | `[]` | `alreadyShared` |
 | a skill tree or an instruction body that already matches | `[]` | `alreadyPresent` |
-| the target exists and differs | `[]`, with both digests in `conflicts[]` | `translated` |
-| the tier declares no location for the category | `[]`, one `categoryAbsent` gap | `translated` |
+| the tier declares no location for the category | `[]`, one `categoryAbsent` gap | `mirror` |
+| a skill tree differs | `[]`, with both digests in `conflicts[]` | `mirror` |
+| an instruction file differs | the body write, with both digests in `conflicts[]` | `mirror` |
 
 A `symlink` is used only where the spec permits one: the source and the target sit in the same scope
 bucket, the target is a declared path, nothing exists there, and the digest the plan names is the
 source's resolved content — which is exactly what verification re-reads. A skill is never linked:
 symlinked skill *directories* are unverified for all three harnesses, so a skill is always copied.
 An instruction file mirrored across buckets is written instead, because a link would point out of the
-scope it is meant to belong to. A differing target is never overwritten: this slice has no removal op
-to undo one, so the plan reports the conflict and leaves the replacement to an explicit request.
+scope it is meant to belong to. A differing target is never overwritten without an explicit
+`onConflict: replace`: a whole instruction file carries the write that answers the conflict, while a
+differing skill directory carries only the conflict, because replacing it would need the removal op
+this slice does not have.

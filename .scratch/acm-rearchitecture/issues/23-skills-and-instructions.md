@@ -72,3 +72,45 @@ Choices worth knowing beyond the ticket:
 - **Codex's project instruction cap and its own override file are manual steps**, not refusals: an
   `AGENTS.override.md` beside the target shadows it, and a project document over 32 KiB is truncated
   by Codex's `project_doc_max_bytes`.
+
+### Review follow-up (spec axis)
+
+Six holes closed after the first landing, and two limits accepted out loud:
+
+- **A read root is not a write path.** Containment now holds a plan to the tier's `writePaths` for the
+  plan's category — the config files for `mcp`, the declared `target` for `skills`/`instructions` —
+  while `alsoReadBy` keeps answering from the reads. Without that split, `~/.pi/agent/skills`, which
+  the ticket calls readable-but-never-a-target, passed containment from a hand-edited document.
+  `declaredPaths` and `writePaths` are both exhaustive switches over `Category`.
+- **Trust is per (tier, category), not per tier.** Codex gates its whole project layer; Pi gates a
+  project's `.agents/skills` (and its own project config) behind `/trust`; Pi's instruction-file
+  discovery does not consult trust at all. So a `pi:project` skill copy is `trust: required` with a
+  step naming `/trust`, and a `pi:project` instruction write is not — while `codex:project` is both.
+  The shared Codex trust step is one helper now instead of two copies.
+- **A differing skill can no longer be "replaced" into a silent no-op.** The conflict carries a manual
+  step naming the directory to remove, and `apply` refuses `onConflict: replace` when a conflicted
+  file has no write to answer it: this slice has no removal op, so claiming a replacement would be a
+  lie. (A differing instruction file carries its write, so `replace` works there.)
+- **Same-directory shadows are named, and the ancestor ones are stated.** A plan for an instruction
+  file lists whichever of `AGENTS.override.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD` sits beside the
+  target — they outrank it for Pi and Codex — and, at project scope, says that every ancestor
+  `AGENTS.md` is loaded too. Ancestor files are combined rather than replacing, so they are one note
+  rather than one step per file.
+- **Codex-only note no longer fires on every harness.** The `project_doc_max_bytes` step follows
+  whether Codex actually reads the target (`target.harness === 'codex'` or it is in `alsoReadBy`).
+- **The tree digest has no depth cap.** The walk is bounded by the resolved directories on the way to
+  a file, so a link back to an ancestor ends there while two sibling links to one directory are both
+  described. A cap that silently skipped a deep subtree would have made verification pass on a copy
+  that differs only below it.
+
+Limits, stated rather than hidden:
+
+- **A copy creates the directory it lands in.** §4 lists no create-directory *op*; a `copyFile` into
+  `.agents/skills/<name>` still has to make that path, and the plan grades every new location risky.
+- **The spec itself was amended** (§4's shape block for `category`, `sourceDigest` and the digest
+  assertion; §5's sentence about which writes a non-eliciting face hands back), because without them
+  a copy or a link could never be planned or performed.
+- **Accepting the consequence of that §5 amendment:** on the CLI — a face with no elicitation — a
+  risky copy or link now lands `client-policy` instead of coming back as a manual step, because it is
+  a write this engine performs. The plan is still graded `risky`, so a client that can ask a human
+  still asks.

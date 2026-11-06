@@ -1,5 +1,4 @@
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import type { Stats } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { digestOfPath, relativeFiles } from '../digest.ts'
 import { declaredPaths, type DiscoveredInstallation, type Tier, type TierRead } from './types.ts'
@@ -9,7 +8,7 @@ import { declaredPaths, type DiscoveredInstallation, type Tier, type TierRead } 
 // instead of becoming a gap.
 export const SKILL_FIELDS = ['files'] as const
 
-export interface SkillFacts {
+interface SkillFacts {
   files: string[]
 }
 
@@ -26,12 +25,9 @@ export function readSkillTier(tier: Tier): TierRead {
       return { health: 'unreadable', detail: `${root} could not be read`, installations: [] }
     }
     for (const name of names.sort()) {
-      const dir = path.join(root, name)
-      // A skill directory is a directory; a loose file in the root is not one. `statSync` follows a
-      // link, because a package manager may install a skill as a symlink.
-      const stats = statOf(dir)
-      if (stats === null || !stats.isDirectory()) continue
-      const installation = skillInstallation(tier, dir)
+      // A directory is a skill only when it carries a `SKILL.md`, so a loose file in the root is not
+      // one and a package manager's symlinked skill is (the existence test follows the link).
+      const installation = skillInstallation(tier, path.join(root, name))
       if (installation !== null) installations.push(installation)
     }
   }
@@ -40,7 +36,7 @@ export function readSkillTier(tier: Tier): TierRead {
 
 // A directory is a skill when it carries a `SKILL.md`; the name is the directory's, because that is
 // both the address it is loaded under and the name a mirror reproduces in the shared location.
-export function skillInstallation(tier: Tier, dir: string): DiscoveredInstallation | null {
+function skillInstallation(tier: Tier, dir: string): DiscoveredInstallation | null {
   const facts = skillFacts(dir)
   if (facts === null) return null
   return {
@@ -55,18 +51,10 @@ export function skillInstallation(tier: Tier, dir: string): DiscoveredInstallati
   }
 }
 
-export function skillFacts(dir: string): SkillFacts | null {
+function skillFacts(dir: string): SkillFacts | null {
   if (!existsSync(path.join(dir, 'SKILL.md'))) return null
   try {
     return { files: relativeFiles(dir) }
-  } catch {
-    return null
-  }
-}
-
-function statOf(dir: string): Stats | null {
-  try {
-    return statSync(dir)
   } catch {
     return null
   }

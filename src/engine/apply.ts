@@ -16,7 +16,13 @@ import {
   writeSync,
 } from 'node:fs'
 import path from 'node:path'
-import { declaresPathFor, type Adapter, type HarnessId, type Tier } from './adapters/types.ts'
+import {
+  declaresWritePath,
+  writePaths,
+  type Adapter,
+  type HarnessId,
+  type Tier,
+} from './adapters/types.ts'
 import { pointerSegments } from './adapters/mcp-facts.ts'
 import type { EngineConfig } from './config.ts'
 import { digestOfPath } from './digest.ts'
@@ -217,6 +223,17 @@ export function executePlan(
         `${effective.conflicts.length} value(s) in ${plan.target.nativeLocation} disagree with this plan (${shown}); nothing was written, pass onConflict: replace to overwrite them`,
       )
     }
+    // A conflict no write answers cannot be replaced: this slice has no op that removes what is
+    // there, so reporting success would claim a replacement that never happened.
+    const unanswered = effective.conflicts.filter(
+      (conflict) => !effective.writes.some((write) => write.file === conflict.file),
+    )
+    if (unanswered.length > 0) {
+      return refusal(
+        'refused',
+        `${unanswered.map((conflict) => conflict.file).join(', ')} already holds something this plan does not write, so replacing it is not an op: remove it by hand and plan again`,
+      )
+    }
     const { landed, failed } = landWrites(effective)
     const verification = verifyPlan(effective)
     return {
@@ -292,8 +309,8 @@ export function containmentFault(
     ...plan.verify.asserts.map((assert) => assert.file),
   ])
   for (const file of files) {
-    if (!declaresPathFor(owned.tier, plan.category, file)) {
-      const declared = owned.tier.configPaths.join(', ')
+    if (!declaresWritePath(owned.tier, plan.category, file)) {
+      const declared = writePaths(owned.tier, plan.category).join(', ') || 'nothing'
       return `${file} is not one of the paths ${owned.tier.id} declares for ${plan.category} (${declared})`
     }
     const fault = pathFault(config, file, linked.has(file), copied.has(file))

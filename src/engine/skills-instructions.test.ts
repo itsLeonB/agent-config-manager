@@ -312,3 +312,87 @@ test('a link to somewhere outside the engine roots is refused, even inside a val
   assert.match(outside.reason ?? '', /outside the home directory and the project root/)
   assert.equal(fs.existsSync(userAgentMd(config)), false)
 })
+
+test('a differing instruction file needs replacement asked for explicitly', () => {
+  const config = fixture()
+  const body = '# House rules\n\nRun `bun run check` before you commit.\n'
+  fs.writeFileSync(codexAgentMd(config), body)
+  fs.writeFileSync(projectAgentMd(config), '# Somebody else wrote this\n')
+  discover(config)
+
+  const planned = plan(config, codexAgentMd(config), 'oc:project')
+  assert.equal(planned.conflicts.length, 1)
+  assert.equal(planned.writes.length, 1)
+
+  // The default is a refusal that shows both digests; nothing on disk moves.
+  const refused = applyPlan(config, planned)
+  assert.equal(refused.outcome, 'refused')
+  assert.match(refused.reason ?? '', /disagree with this plan/)
+  assert.equal(fs.readFileSync(projectAgentMd(config), 'utf8'), '# Somebody else wrote this\n')
+
+  const replaced = applyPlan(config, planned, { onConflict: 'replace' })
+  assert.equal(replaced.outcome, 'applied', replaced.reason ?? '')
+  assert.equal(fs.readFileSync(projectAgentMd(config), 'utf8'), body)
+})
+
+test('a harness-owned skill directory is a source, never a place a plan may write', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  discover(config)
+  const planned = plan(config, piSkill, 'codex:user')
+  const [copy] = planned.writes
+  assert.ok(copy !== undefined && copy.op === 'copyFile')
+
+  // The read root is declared, but it is not the target a mirror lands in.
+  const outside = applyPlan(
+    config,
+    resign(planned, [{ ...copy, file: path.join(config.home, '.pi', 'agent', 'skills', 'other') }]),
+  )
+
+  assert.equal(outside.outcome, 'refused')
+  assert.match(outside.reason ?? '', /declares for skills/)
+  assert.equal(fs.existsSync(path.join(config.home, '.pi', 'agent', 'skills', 'other')), false)
+})
+
+test('a differing skill cannot be replaced, and the refusal says to remove it by hand', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  writeSkill(path.join(sharedSkills(config), 'review'), { description: 'somebody else wrote this one' })
+  discover(config)
+
+  const planned = plan(config, piSkill, 'codex:user')
+
+  const replaced = applyPlan(config, planned, { onConflict: 'replace' })
+  assert.equal(replaced.outcome, 'refused')
+  assert.match(replaced.reason ?? '', /remove it by hand/)
+  assert.equal(planned.manualSteps.some((step) => step.step.includes('by hand')), true)
+})
+
+test('a project skill copy names the trust gate that makes it inert', () => {
+  const config = fixture()
+  const projectSkill = path.join(config.projectRoot, '.pi', 'skills', 'review')
+  writeSkill(projectSkill)
+  discover(config)
+
+  const planned = plan(config, projectSkill, 'pi:project')
+
+  assert.equal(planned.permissions.trust, 'required')
+  assert.match(planned.manualSteps.map((step) => step.step).join(' '), /trust this project in Pi/)
+  // The copy still lands; what it cannot claim is that Pi loads it yet.
+  const { verification } = applyAndVerify(config, planned)
+  assert.equal(verification?.outcome, 'unverified')
+})
+
+test('a same-directory instruction file that outranks the target is named as a step', () => {
+  const config = fixture()
+  fs.writeFileSync(codexAgentMd(config), '# Rules\n')
+  fs.writeFileSync(path.join(config.home, '.pi', 'agent', 'CLAUDE.md'), '# Pi reads this first\n')
+  discover(config)
+
+  const planned = plan(config, codexAgentMd(config), 'pi:user')
+
+  const steps = planned.manualSteps.map((step) => step.step).join(' ')
+  assert.match(steps, /CLAUDE\.md/)
+})

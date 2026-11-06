@@ -7,8 +7,6 @@ import { declaredPaths, type DiscoveredInstallation, type Tier, type TierRead } 
 // An instruction file's canonical vocabulary is its body, exactly as the spec's `expressible` list
 // says. The body is a credential-bearing whole file, so it is scanned line by line before it can
 // reach the store: a value that is not clean is persisted as its marker, and a mirror then stops.
-export const INSTRUCTION_FIELDS = ['body'] as const
-
 export function readInstructionTier(tier: Tier): TierRead {
   const installations: DiscoveredInstallation[] = []
   for (const file of declaredPaths(tier, 'instructions')) {
@@ -19,7 +17,7 @@ export function readInstructionTier(tier: Tier): TierRead {
     } catch {
       return { health: 'unreadable', detail: `${file} could not be read`, installations: [] }
     }
-    const verdict = classifyWholeFile('AGENTS.md', text)
+    const verdict = classifyWholeFile(path.basename(file), text)
     installations.push({
       category: 'instructions',
       name: path.basename(file),

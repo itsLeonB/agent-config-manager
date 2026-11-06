@@ -1,7 +1,8 @@
 import path from 'node:path'
 import type { McpWriteSurface } from './mcp-write.ts'
 
-export type Category = 'mcp' | 'skills' | 'instructions' | 'hooks'
+export const CATEGORIES = ['mcp', 'skills', 'instructions', 'hooks'] as const
+export type Category = (typeof CATEGORIES)[number]
 export const HARNESSES = ['pi', 'codex', 'opencode'] as const
 export type HarnessId = (typeof HARNESSES)[number]
 export type ScopeBucket = 'user' | 'project' | 'project-local' | 'system'
@@ -32,25 +33,50 @@ export interface Tier {
 }
 
 // Every location one category of one tier declares: the config files for `mcp`, the markdown files
-// and skill roots for the rest.
+// and skill roots for the rest. Written as an exhaustive switch so a category added later fails
+// typecheck here instead of silently reading another category's paths.
 export function declaredPaths(tier: Tier, category: Category): readonly string[] {
-  if (category === 'mcp') return tier.configPaths
-  if (category === 'skills') return tier.categoryPaths?.skills?.reads ?? []
-  return tier.categoryPaths?.instructions?.reads ?? []
+  switch (category) {
+    case 'mcp':
+      return tier.configPaths
+    case 'skills':
+      return tier.categoryPaths?.skills?.reads ?? []
+    case 'instructions':
+      return tier.categoryPaths?.instructions?.reads ?? []
+    case 'hooks':
+      return []
+  }
+}
+
+// Where a mirror into this tier may land for a category — declared apart from the reads, because a
+// harness-owned `skills/` directory is a source a mirror may copy from and never a target it may
+// write into. Containment reads this list; `alsoReadBy` reads the reads.
+export function writePaths(tier: Tier, category: Category): readonly string[] {
+  switch (category) {
+    case 'mcp':
+      return tier.configPaths
+    case 'skills':
+    case 'instructions': {
+      const target = tier.categoryPaths?.[category]?.target
+      return target === undefined ? [] : [target]
+    }
+    case 'hooks':
+      return []
+  }
 }
 
 // A write may reach a declared path itself or anything beneath it: a mirrored skill is
 // `<root>/<name>`, and the root is what the tier declares.
-export function declaresPathFor(tier: Tier, category: Category, file: string): boolean {
-  return declaredPaths(tier, category).some(
-    (entry) => entry === file || file.startsWith(`${entry}${path.sep}`),
-  )
+function under(declared: readonly string[], file: string): boolean {
+  return declared.some((entry) => entry === file || file.startsWith(`${entry}${path.sep}`))
 }
 
-export function declaresPath(tier: Tier, file: string): boolean {
-  return (['mcp', 'skills', 'instructions', 'hooks'] as const).some((category) =>
-    declaresPathFor(tier, category, file),
-  )
+export function declaresWritePath(tier: Tier, category: Category, file: string): boolean {
+  return under(writePaths(tier, category), file)
+}
+
+export function declaresReadPath(tier: Tier, file: string): boolean {
+  return CATEGORIES.some((category) => under(declaredPaths(tier, category), file))
 }
 
 export function mirrorTarget(
