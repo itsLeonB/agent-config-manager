@@ -199,6 +199,17 @@ that slice.
   `user_version`, amended into ticket 10. No UI in the slice; when one exists it is `acm serve` — one
   origin, reading through `service.ts`. [ADR 0004](../../docs/adr/0004-one-binary-engine-as-library.md).
 
+- [Apply and verify a safe plan](issues/20-apply-and-verify-safe-plan.md): `apply` is an address
+  edit, not a re-serialisation — `src/engine/edit.ts` splices only the addressed value (a JSON span
+  scan / a TOML table walk), so comments, key order and sibling entries survive, and a new address is
+  created whole in one insertion. Every precondition is read under one `<store>.apply.lock` file
+  before the first byte; a lock whose holder is gone is broken rather than waited on, and a live one
+  returns `busy`. Containment is one rule: a write may only reach a path its target tier declares.
+  `partial` stops the run with the landed writes and their digests and no rollback, and a run that
+  stopped short can never verify. The store work is one transaction after the bytes land: the
+  operation row, the target's `mirrored_plan_id`, and the binding's verification status together.
+  `acm apply` / `acm verify` take the document itself (file or stdin), never a plan id.
+
 ## Not yet specified
 
 *(Empty. Every ticket on this map is resolved and nothing is left to decide before someone builds the

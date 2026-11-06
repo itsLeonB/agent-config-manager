@@ -1,12 +1,23 @@
 import { z } from 'zod'
 import { createAdapters } from './adapters/registry.ts'
 import type { Category, ScopeBucket, Writability } from './adapters/types.ts'
+import { executePlan, verifyPlan, type ApplyResult, type VerifyResult } from './apply.ts'
 import type { EngineConfig } from './config.ts'
-import { buildPlan, type PlanResult, type PlanSource } from './plan.ts'
-import { readInventory, recordDiscovery } from './repo.ts'
+import {
+  buildPlan,
+  validatePlan,
+  type ApplyablePlan,
+  type PlanResult,
+  type PlanSource,
+} from './plan.ts'
+import type { Json } from '../types/dashboard'
+import { readInventory, recordApply, recordDiscovery } from './repo.ts'
 import type { TierReport } from './repo.ts'
 import { storedVerdict, type Verdict } from './secret.ts'
 import type { InstallationRow, TierHealthRow } from '../server/store.cjs'
+
+export { verifyPlan }
+export type { ApplyResult, VerifyResult }
 
 export interface DiscoverResult {
   scannedAt: string
@@ -258,6 +269,65 @@ export function planMirror(
     target: { harness: adapter.harness, tier, surface },
     now: new Date().toISOString(),
   })
+}
+
+// Applying takes the document a caller was given and executes it; nothing is re-derived, so a plan
+// that no longer matches its targets is reported stale instead of being quietly re-planned.
+export function applyPlan(config: EngineConfig, rawPlan: Json | ApplyablePlan): ApplyResult {
+  // A plan is a JSON document: normalising here is what makes one built in process and one parsed
+  // from a file hash the same way.
+  const validated = validatePlan(JSON.parse(JSON.stringify(rawPlan)))
+  if (validated.kind === 'refused') {
+    return {
+      outcome: 'refused',
+      planId: '',
+      reason: validated.reason,
+      landed: [],
+      failed: null,
+      verification: null,
+      manualSteps: [],
+    }
+  }
+  const plan = validated.plan
+  const result = executePlan(config, createAdapters(config), plan)
+  if (result.outcome === 'applied' || result.outcome === 'partial') recordMirror(config, plan, result)
+  return result
+}
+
+// The audit trail, and the target's own state with it: a landed write changes a native config, so
+// the inventory is re-read before the operation is recorded against the row it now shows.
+function recordMirror(config: EngineConfig, plan: ApplyablePlan, result: ApplyResult): void {
+  discover(config)
+  const [file, pointer] = splitLocation(plan.target.nativeLocation)
+  const target = readInventory(config.storePath, { harness: plan.target.harness }).installations.find(
+    (row) => row.nativeFile === file && row.nativePointer === pointer,
+  )
+  recordApply(config.storePath, {
+    at: new Date().toISOString(),
+    planId: plan.planId,
+    grade: plan.security.grade,
+    outcome: result.outcome,
+    toolVersion: plan.toolVersion,
+    sourceInstallationId: plan.source.installationId,
+    targetInstallationId: target?.id ?? null,
+    landed: result.landed,
+    binding:
+      target === undefined
+        ? null
+        : {
+            installationId: target.id,
+            harness: plan.target.harness,
+            tierId: plan.target.tierId,
+            // A target found by the scan after the write carries the verification the plan's own
+            // asserts produced, never a status the write cannot back up.
+            status: result.verification?.outcome ?? 'unverified',
+          },
+  })
+}
+
+function splitLocation(location: string): [string, string] {
+  const at = location.lastIndexOf('#')
+  return at === -1 ? [location, ''] : [location.slice(0, at), location.slice(at + 1)]
 }
 
 // A known-fields document decoded leaf by leaf: the store holds JSON, and a shape this process

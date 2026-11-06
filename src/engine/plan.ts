@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { parse as parseToml } from 'smol-toml'
 import { z } from 'zod'
+import type { Json } from '../types/dashboard'
 import {
   MCP_CREDENTIAL_POINTERS,
   MCP_FIELDS,
@@ -24,7 +25,7 @@ export const TOOL_VERSION = '0.1.0'
 // Any value a plan carries: a native config value, a prior value, an assertion's expectation.
 export type PlanValue = string | number | boolean | null | PlanValue[] | { [key: string]: PlanValue }
 
-const planValueSchema: z.ZodType<PlanValue> = z.lazy(() =>
+export const planValueSchema: z.ZodType<PlanValue> = z.lazy(() =>
   z.union([
     z.string(),
     z.number(),
@@ -35,7 +36,7 @@ const planValueSchema: z.ZodType<PlanValue> = z.lazy(() =>
   ]),
 )
 
-const planObjectSchema = z.record(z.string(), planValueSchema)
+export const planObjectSchema = z.record(z.string(), planValueSchema)
 
 export interface MappedField {
   transform: Transform
@@ -160,6 +161,72 @@ export interface PlanInput {
   source: PlanSource
   target: PlanTarget
   now: string
+}
+
+const planWriteSchema = z.object({
+  // One op only: the engine refuses a write it cannot perform, so a document carrying a future op
+  // is refused as caller input rather than half-applied.
+  op: z.literal('writeAtPointer'),
+  file: z.string(),
+  pointer: z.string(),
+  value: planValueSchema,
+  precondition: z.object({ exists: z.boolean(), digest: z.string().nullable() }),
+  reversible: z.boolean(),
+  priorValue: planValueSchema,
+  executable: z.boolean(),
+  secretValues: z.boolean(),
+  irreversible: z.boolean(),
+})
+
+// The document arrives from a caller, so apply pins every field it reads — and the one op it can
+// perform — before a byte is written. Sections apply never reads (equivalence, prerequisites,
+// conflicts) are the planner's own; so is `source.knownFields`, which only planning reads.
+const mirrorPlanSchema = z.object({
+  planId: z.string(),
+  createdAt: z.string(),
+  toolVersion: z.string(),
+  kind: z.literal('mirror'),
+  source: z.object({ installationId: z.string(), harness: z.string(), tierId: z.string() }),
+  target: z.object({
+    harness: z.enum(['pi', 'codex', 'opencode']),
+    tierId: z.string(),
+    nativeLocation: z.string(),
+  }),
+  security: z.object({ grade: z.enum(['safe', 'risky']) }),
+  writes: z.array(planWriteSchema),
+  manualSteps: z.array(z.object({ step: z.string(), why: z.string() })),
+  verify: z.object({
+    asserts: z.array(z.object({ file: z.string(), pointer: z.string(), equals: planValueSchema })),
+  }),
+})
+
+// A plan is validated in one place, so `acm apply` and the later `apply_plan` tool refuse the same
+// documents for the same reasons. Only the sections a write depends on are pinned by the schema;
+// the rest is the planner's own shape and travels untouched.
+export type ApplyablePlan = z.infer<typeof mirrorPlanSchema>
+
+export type ValidatedPlan =
+  | { kind: 'refused'; reason: string }
+  | { kind: 'plan'; plan: ApplyablePlan }
+
+export function validatePlan(raw: Json): ValidatedPlan {
+  const parsed = mirrorPlanSchema.safeParse(raw)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    const at = issue === undefined || issue.path.length === 0 ? '' : ` at ${issue.path.join('.')}`
+    return {
+      kind: 'refused',
+      reason: `this is not a plan document${at}: ${issue?.message ?? 'the schema did not match'}`,
+    }
+  }
+  // The id covers the whole document, not only the part a write reads, so an edited `equivalence`
+  // or `conflicts` section is a different document even when no write depends on it.
+  const document = planValueSchema.safeParse(raw)
+  if (document.success && intactDocument(document.data)) return { kind: 'plan', plan: parsed.data }
+  return {
+    kind: 'refused',
+    reason: `the plan body does not hash to its planId (${parsed.data.planId}), so it was edited after planning`,
+  }
 }
 
 export function buildPlan(input: PlanInput): PlanResult {
@@ -452,13 +519,30 @@ function carriesCommandRetrieval(value: McpValue): boolean {
 // form its declared credential pointers match — and its reference rule runs first, so a `${VAR}` or
 // `!command` already at a credential address stays readable.
 function priorValueAt(document: PlanValue | null, pointer: string): PlanValue {
-  const value = resolvePointer(document ?? null, pointer)
-  if (value === undefined) return null
+  return classifyAt(pointer, resolvePointer(document ?? null, pointer)) ?? null
+}
+
+// A value read back from a file this engine did not write is classified before it is shown or
+// compared: a literal token already on disk stays withheld, exactly as the source's would be.
+function classifyAt(pointer: string, value: PlanValue | undefined): PlanValue | undefined {
+  if (value === undefined) return undefined
   const scalar = z.string().safeParse(value)
   if (!scalar.success) return value
   const canonical = pointerSegments(pointer).slice(-2).join('.')
   const { verdict } = classify(canonical, scalar.data, MCP_CREDENTIAL_POINTERS)
   return verdict === 'clean' ? scalar.data : withheldMarker(verdict)
+}
+
+// One pointer read from a file as it stands now, which is how verification asserts a plan and how a
+// re-read after a manual step re-asserts it.
+export function readPointer(
+  file: string,
+  pointer: string,
+): { kind: 'ok'; value: PlanValue | undefined } | { kind: 'unreadable' } {
+  const target = readTargetFile(file)
+  if (target.kind === 'unreadable') return { kind: 'unreadable' }
+  const document = target.kind === 'parsed' ? target.document : null
+  return { kind: 'ok', value: classifyAt(pointer, resolvePointer(document, pointer)) }
 }
 
 function resolvePointer(document: PlanValue | null, pointer: string): PlanValue | undefined {
@@ -581,8 +665,12 @@ export function canonicalJson(value: PlanValue): string {
 
 // `planId` is recomputed from everything else, so an edited body fails this check.
 export function planIntact(plan: MirrorPlan): boolean {
-  const { planId, ...body } = plan
-  return planIdOf(toPlanValue(body)) === planId
+  return intactDocument(toPlanValue(plan))
+}
+
+function intactDocument(document: PlanValue): boolean {
+  const { planId, ...body } = planObjectSchema.parse(document)
+  return planIdOf(body) === planId
 }
 
 // Anything a plan carries, as the JSON tree the value schema accepts: optional fields the plan did

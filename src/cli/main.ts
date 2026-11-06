@@ -1,9 +1,19 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util'
+import { readFileSync } from 'node:fs'
 import { resolveDefaultConfig } from '../engine/config.ts'
-import { discover, inspectInstallation, listInstallations, planMirror } from '../engine/service.ts'
+import {
+  applyPlan,
+  discover,
+  inspectInstallation,
+  listInstallations,
+  planMirror,
+  verifyPlan,
+} from '../engine/service.ts'
 import type { Inspection } from '../engine/service.ts'
+import { validatePlan } from '../engine/plan.ts'
 import type { InstallationRow } from '../server/store.cjs'
+import type { Json } from '../types/dashboard'
 
 const USAGE = `usage: acm <command>
 
@@ -13,6 +23,10 @@ const USAGE = `usage: acm <command>
            <id|prefix> [--json]
   mirror   print the plan for moving one installation into a target tier, writing nothing
            <id|prefix> --target <harness:tier> --plan
+  apply    execute the plan document exactly as given, and record what landed
+           <plan.json|->
+  verify   re-read the target and report each of the plan's assertions
+           <plan.json|->
 `
 
 interface ListOptions {
@@ -29,6 +43,8 @@ function main(argv: string[]): number {
   if (command === 'list') return list(rest)
   if (command === 'inspect') return inspect(rest)
   if (command === 'mirror') return mirror(rest)
+  if (command === 'apply') return apply(rest)
+  if (command === 'verify') return verify(rest)
   process.stderr.write(USAGE)
   return 1
 }
@@ -120,7 +136,7 @@ function mirror(argv: string[]): number {
     return 1
   }
   if (!options.plan) {
-    process.stderr.write('acm mirror writes nothing yet: pass --plan (apply lands with ticket 20)\n')
+    process.stderr.write('acm mirror writes nothing: pass --plan, then apply that document\n')
     return 1
   }
   const config = resolveDefaultConfig()
@@ -146,6 +162,45 @@ function parseMirrorOptions(argv: string[]): MirrorOptions {
   } catch {
     return { plan: false }
   }
+}
+
+// A plan is carried by the caller, so both faces take the document itself — from a file or from
+// stdin — and neither takes a plan id.
+function readPlan(argv: string[]): Json | null {
+  let source: string | undefined
+  try {
+    source = parseArgs({ args: argv, allowPositionals: true, options: {} }).positionals[0]
+  } catch {
+    return null
+  }
+  try {
+    const text = source === undefined || source === '-' ? readFileSync(0, 'utf8') : readFileSync(source, 'utf8')
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+function apply(argv: string[]): number {
+  const raw = readPlan(argv)
+  if (raw === null) {
+    process.stderr.write('acm apply reads one plan document from a file or from stdin\n')
+    return 1
+  }
+  const result = applyPlan(resolveDefaultConfig(), raw)
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+  return result.outcome === 'applied' ? 0 : 1
+}
+
+function verify(argv: string[]): number {
+  const validated = validatePlan(readPlan(argv))
+  if (validated.kind === 'refused') {
+    process.stderr.write(`refused: ${validated.reason}\n`)
+    return 1
+  }
+  const result = verifyPlan(validated.plan)
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+  return result.outcome === 'failed' ? 1 : 0
 }
 
 interface InspectOptions {
