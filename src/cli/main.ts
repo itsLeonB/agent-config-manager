@@ -197,7 +197,7 @@ function verify(argv: string[]): number {
     process.stderr.write('acm verify reads one plan document from a file or from stdin\n')
     return 1
   }
-  const result = verifyPlanDocument(raw)
+  const result = verifyPlanDocument(resolveDefaultConfig(), raw)
   if (result.kind === 'refused') {
     process.stderr.write(`refused: ${result.reason}\n`)
     return 1

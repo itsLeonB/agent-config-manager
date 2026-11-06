@@ -1,16 +1,20 @@
 import { createHash } from 'node:crypto'
 import {
+  accessSync,
   closeSync,
+  constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
   writeSync,
 } from 'node:fs'
 import path from 'node:path'
-import type { Adapter } from './adapters/types.ts'
+import type { Adapter, HarnessId, Tier } from './adapters/types.ts'
 import { pointerSegments } from './adapters/mcp-facts.ts'
 import type { EngineConfig } from './config.ts'
 import { formatOf, parses, writePointer } from './edit.ts'
@@ -108,9 +112,7 @@ export function executePlan(
     verification: null,
     manualSteps: plan.manualSteps,
   })
-  const owned = adapters
-    .flatMap((adapter) => adapter.tiers.map((tier) => ({ harness: adapter.harness, tier })))
-    .find((entry) => entry.tier.id === plan.target.tierId)
+  const owned = ownedTier(adapters, plan)
   if (owned === undefined) return refusal('refused', `${plan.target.tierId} is not a declared tier`)
   if (owned.harness !== plan.target.harness) {
     return refusal('refused', `${plan.target.tierId} belongs to ${owned.harness}, not ${plan.target.harness}`)
@@ -118,12 +120,10 @@ export function executePlan(
   if (owned.tier.writability !== 'writable') {
     return refusal('refused', `${owned.tier.id} is ${owned.tier.writability}: a mirror target must be writable`)
   }
-  // Containment, in one rule: a write may only reach a path the target tier declares. Nothing else
-  // is reachable, so no credential store or symlinked directory is even an option.
-  const outside = plan.writes.find((write) => !owned.tier.configPaths.includes(write.file))
-  if (outside !== undefined) {
-    return refusal('refused', `${outside.file} is not a path ${owned.tier.id} declares`)
-  }
+  // Preflight every address before the first byte: containment, then whether the file can be
+  // written at all. An unwritable target is refused here rather than discovered half way through.
+  const fault = containmentFault(config, adapters, plan) ?? preflightFault(plan)
+  if (fault !== null) return refusal('refused', fault)
   const lock = acquireLock(config.storePath)
   if (lock === null) return refusal('busy', 'another apply is in flight for this store')
   try {
@@ -145,6 +145,102 @@ export function executePlan(
   } finally {
     lock()
   }
+}
+
+// Where a plan may point, for the files it writes and the files it asserts alike: a credential
+// location, a symlink on the way to one, or a path outside the engine's own roots is never a mirror
+// target, however the plan describes it.
+const CREDENTIAL_LOCATIONS = ['.ssh', '.gnupg', '.aws', path.join('.config', 'gh')]
+
+export function containmentFault(
+  config: EngineConfig,
+  adapters: readonly Adapter[],
+  plan: MirrorPlan,
+): string | null {
+  const owned = ownedTier(adapters, plan)
+  if (owned === undefined) {
+    return `${plan.target.tierId} is not a tier ${plan.target.harness} declares`
+  }
+  const files = new Set([
+    ...plan.writes.map((write) => write.file),
+    ...plan.verify.asserts.map((assert) => assert.file),
+  ])
+  for (const file of files) {
+    if (!owned.tier.configPaths.includes(file)) {
+      const declared = owned.tier.configPaths.join(', ')
+      return `${file} is not one of the paths ${owned.tier.id} declares (${declared})`
+    }
+    const fault = pathFault(config, file)
+    if (fault !== null) return fault
+  }
+  return null
+}
+
+export function ownedTier(
+  adapters: readonly Adapter[],
+  plan: MirrorPlan,
+): { harness: HarnessId; tier: Tier } | undefined {
+  return adapters
+    .flatMap((adapter) => adapter.tiers.map((tier) => ({ harness: adapter.harness, tier })))
+    .find((entry) => entry.tier.id === plan.target.tierId)
+}
+
+// Spec §5's checks for one path, in order: inside a root, not a credential location, no symlink
+// anywhere on the way to it, and a regular file if it already exists.
+function pathFault(config: EngineConfig, file: string): string | null {
+  const lexical = path.resolve(file)
+  const roots = [config.home, config.projectRoot].map((root) => path.resolve(root))
+  if (!roots.some((root) => lexical.startsWith(`${root}${path.sep}`))) {
+    return `${file} is outside the home directory and the project root`
+  }
+  // A credential location is refused by where it is, not by what its values look like.
+  const fromHome = path.relative(path.resolve(config.home), lexical)
+  const credential = CREDENTIAL_LOCATIONS.some(
+    (location) => fromHome === location || fromHome.startsWith(`${location}${path.sep}`),
+  )
+  if (credential) return `${file} is a credential location`
+  // `lstat`, not `exists`: a dangling symlink is a way out of the path it appears to be.
+  const existing = deepestExisting(lexical)
+  let resolved: string
+  try {
+    resolved = realpathSync(existing)
+  } catch {
+    return `${existing} cannot be resolved, so ${file} has no trustworthy location`
+  }
+  if (resolved !== existing) {
+    return `${existing} resolves through a symlink, so ${file} would land somewhere else`
+  }
+  if (existing !== lexical) return null
+  if (!lstatSync(lexical).isFile()) return `${file} is not a regular file`
+  return null
+}
+
+function deepestExisting(lexical: string): string {
+  let candidate = lexical
+  for (;;) {
+    try {
+      lstatSync(candidate)
+      return candidate
+    } catch {
+      const parent = path.dirname(candidate)
+      if (parent === candidate) return candidate
+      candidate = parent
+    }
+  }
+}
+
+// Whether the bytes could be written at all, asked before any of them are: a read-only target is
+// refused up front instead of being discovered half way through a run.
+export function preflightFault(plan: MirrorPlan): string | null {
+  for (const file of new Set(plan.writes.map((write) => write.file))) {
+    const existing = deepestExisting(file) === file
+    try {
+      accessSync(existing ? file : path.dirname(file), constants.W_OK)
+    } catch {
+      return `${file} cannot be written: the file or its directory is read-only`
+    }
+  }
+  return null
 }
 
 // Every target is read once, before the first write: a file someone else edited since planning
@@ -202,7 +298,21 @@ function landWrites(plan: MirrorPlan): Landed {
     }
     // Only what was actually addressed is written: a file whose every write failed is not touched.
     if (applied > 0) {
-      writeFileSync(file, text)
+      try {
+        writeFileSync(file, text)
+      } catch (caught) {
+        // Preflight said this was writable, so this is a race, not a prediction: nothing of this
+        // file landed, and the files before it stay where they are.
+        const message = z.instanceof(Error).safeParse(caught)
+        return {
+          landed,
+          failed: {
+            file,
+            pointer: writes[0]?.pointer ?? '',
+            reason: message.success ? message.data.message : 'the write failed',
+          },
+        }
+      }
       const digest = digestOf(readFileSync(file))
       for (const write of writes.slice(0, applied)) landed.push({ file, pointer: write.pointer, digest })
     }

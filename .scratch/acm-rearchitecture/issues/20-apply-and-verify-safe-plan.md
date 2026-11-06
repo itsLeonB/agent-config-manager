@@ -61,3 +61,24 @@ Choices worth knowing beyond the ticket:
 - **Verification never launches a harness**; it re-reads the files in `verify.asserts[]` through the
   same classifier the plan uses for a prior value, so a credential-shaped value found at an asserted
   pointer comes back withheld rather than printed.
+
+### Review follow-up (spec axis)
+
+Three holes were found after the first landing and closed here, all in `src/engine/apply.ts`:
+
+- **Containment was one string compare**, so a declared config path that was a *symlink* applied
+  happily and wrote the file it pointed at, outside `$HOME` and the project root. `pathFault` now
+  runs spec §5's checks per path, for the writes *and* the plan's assertions: inside the home
+  directory or the project root, not a credential location (`~/.ssh`, `~/.gnupg`, `~/.aws`,
+  `~/.config/gh`), the deepest existing ancestor's realpath equal to its lexical path (so no symlink
+  anywhere on the way, a dangling one included, which is why the existence test is `lstat`), and a
+  regular file if it already exists.
+- **A `writeFileSync` that threw escaped apply as an exception** — the CLI died with a stack trace
+  and no operation row. An unwritable target is now caught by `preflightFault` (an `accessSync` on
+  the file, or on its directory when it does not exist yet) and refused before the first byte; the
+  write itself catches anyway, because preflight is a prediction about a race, and returns `partial`
+  with the landed writes and the failing file.
+- **`verify_plan` was an uncontained reader**: a self-consistent document could assert
+  `~/.aws/credentials.json` and get its contents back as `actual`. Verification now runs the same
+  containment over `verify.asserts[].file` — a path the target tier does not declare (or one inside a
+  credential location) is refused before anything is read.

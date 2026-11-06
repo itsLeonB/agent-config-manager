@@ -95,14 +95,17 @@ function plan(config: EngineConfig, name: string, target: string): MirrorPlan {
 
 // A plan is self-identifying, so a plan built by hand here is stamped the way the planner stamps
 // one: the same integrity check apply runs, never a bypass of it.
-function resign(planned: MirrorPlan, writes: PlanWrite[]): MirrorPlan {
-  const body: Record<string, PlanValue> = JSON.parse(JSON.stringify({ ...planned, writes }))
+function resign(
+  planned: MirrorPlan,
+  change: Partial<Pick<MirrorPlan, 'writes' | 'verify'>>,
+): MirrorPlan {
+  const body: Record<string, PlanValue> = JSON.parse(JSON.stringify({ ...planned, ...change }))
   delete body.planId
-  return { ...planned, writes, planId: planIdOf(body) }
+  return { ...planned, ...change, planId: planIdOf(body) }
 }
 
-function verifyOutcome(planned: MirrorPlan): string {
-  const result = verifyPlanDocument(planned)
+function verifyOutcome(config: EngineConfig, planned: MirrorPlan): string {
+  const result = verifyPlanDocument(config, planned)
   return result.kind === 'ok' ? result.verification.outcome : `refused: ${result.reason}`
 }
 
@@ -216,7 +219,7 @@ test('verification re-reads the target and reports every assertion', () => {
     assert.deepEqual(assertion.actual, assertion.expected)
   }
   // A later re-assert reads the file again, and lands on the same answer.
-  assert.equal(verifyOutcome(planned), 'verified')
+  assert.equal(verifyOutcome(config, planned), 'verified')
 })
 
 test('a target edited after planning is stale, and nothing is written', () => {
@@ -255,7 +258,7 @@ test('a write that fails mid-plan is partial: the earlier writes stay, with thei
     secretValues: false,
     irreversible: false,
   }
-  const result = applyPlan(config, resign(planned, [...planned.writes, blocked]))
+  const result = applyPlan(config, resign(planned, { writes: [...planned.writes, blocked] }))
 
   assert.equal(result.outcome, 'partial')
   assert.equal(result.failed?.pointer, blocked.pointer)
@@ -336,15 +339,15 @@ test('a tampered plan and a write outside the declared tier are both refused', (
   assert.equal(refused.outcome, 'refused')
   assert.match(refused.reason ?? '', /does not hash to its planId/)
   // Verifying a document nobody applied is refused the same way, before any file is read.
-  assert.match(verifyOutcome(edited), /^refused: /)
+  assert.match(verifyOutcome(config, edited), /^refused: /)
 
   const elsewhere = structuredClone(planned.writes[0])
   const outside = applyPlan(
     config,
-    resign(planned, [{ ...elsewhere, file: path.join(config.home, '.ssh', 'config') }]),
+    resign(planned, { writes: [{ ...elsewhere, file: path.join(config.home, '.ssh', 'config') }] }),
   )
   assert.equal(outside.outcome, 'refused')
-  assert.match(outside.reason ?? '', /is not a path codex:user declares/)
+  assert.match(outside.reason ?? '', /is not one of the paths codex:user declares/)
 
   assert.deepEqual(fs.readFileSync(codexFile(config), 'utf8'), '# empty codex config\n')
 })
@@ -388,4 +391,59 @@ test('acm apply and acm verify are faces over the same document', () => {
   const replayed = cli(config, ['apply', planFile])
   assert.equal(replayed.status, 1)
   assert.equal(applyReport.parse(JSON.parse(replayed.stdout)).outcome, 'stale')
+})
+
+test('a target that resolves through a symlink is refused, and nothing outside it is written', () => {
+  const config = fixture()
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-outside-'))
+  const real = path.join(elsewhere, 'config.toml')
+  fs.writeFileSync(real, '# somebody else\'s file\n')
+  fs.symlinkSync(real, codexFile(config))
+  piServers(config, { serena: { command: 'serena' } })
+  discover(config)
+
+  const planned = plan(config, 'serena', 'codex:user')
+  const result = applyPlan(config, planned)
+
+  assert.equal(result.outcome, 'refused')
+  assert.match(result.reason ?? '', /resolves through a symlink/)
+  assert.deepEqual(result.landed, [])
+  assert.equal(fs.readFileSync(real, 'utf8'), "# somebody else's file\n")
+})
+
+test('a read-only target is refused before a byte of it is written', () => {
+  const config = fixture()
+  codexFile_(config, '# empty codex config\n')
+  piServers(config, { serena: { command: 'serena' } })
+  discover(config)
+
+  const planned = plan(config, 'serena', 'codex:user')
+  fs.chmodSync(codexFile(config), 0o444)
+  const result = applyPlan(config, planned)
+  fs.chmodSync(codexFile(config), 0o644)
+
+  assert.equal(result.outcome, 'refused')
+  assert.match(result.reason ?? '', /read-only/)
+  assert.equal(fs.readFileSync(codexFile(config), 'utf8'), '# empty codex config\n')
+})
+
+test('verify refuses a document whose assertions name a path the tier does not declare', () => {
+  const config = fixture()
+  codexFile_(config, '# empty codex config\n')
+  piServers(config, { serena: { command: 'serena' } })
+  discover(config)
+  const aws = path.join(config.home, '.aws')
+  fs.mkdirSync(aws, { recursive: true })
+  const credentials = path.join(aws, 'credentials.json')
+  fs.writeFileSync(credentials, '{"aws_secret_access_key":"abc123"}')
+
+  const planned = plan(config, 'serena', 'codex:user')
+  const sneaky = resign(planned, {
+    verify: { asserts: [{ file: credentials, pointer: 'aws_secret_access_key', equals: 'abc123' }] },
+  })
+  const result = verifyPlanDocument(config, sneaky)
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /not one of the paths/)
+  assert.doesNotMatch(JSON.stringify(result), /abc123/)
 })

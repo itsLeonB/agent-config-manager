@@ -3,7 +3,13 @@ import { createAdapters } from './adapters/registry.ts'
 import { pointerSegment, pointerSegments } from './adapters/mcp-facts.ts'
 import type { Adapter } from './adapters/types.ts'
 import type { Category, ScopeBucket, Writability } from './adapters/types.ts'
-import { executePlan, verifyPlan, type ApplyResult, type VerifyResult } from './apply.ts'
+import {
+  containmentFault,
+  executePlan,
+  verifyPlan,
+  type ApplyResult,
+  type VerifyResult,
+} from './apply.ts'
 import type { EngineConfig } from './config.ts'
 import {
   buildPlan,
@@ -307,10 +313,16 @@ export type VerifyDocumentResult =
   | { kind: 'ok'; verification: VerifyResult }
 
 // Verification of a document nobody has applied yet is the same face as apply: validate the
-// document, then re-read the targets it asserts.
-export function verifyPlanDocument(rawPlan: Json | MirrorPlan): VerifyDocumentResult {
+// document, run the same containment over the files it names, then re-read them. A plan is a
+// caller-supplied document, so its assertions are not a licence to read any path it likes.
+export function verifyPlanDocument(
+  config: EngineConfig,
+  rawPlan: Json | MirrorPlan,
+): VerifyDocumentResult {
   const validated = validatePlan(asDocument(rawPlan))
   if (validated.kind === 'refused') return { kind: 'refused', reason: validated.reason }
+  const fault = containmentFault(config, createAdapters(config), validated.plan)
+  if (fault !== null) return { kind: 'refused', reason: fault }
   return { kind: 'ok', verification: verifyPlan(validated.plan) }
 }
 
