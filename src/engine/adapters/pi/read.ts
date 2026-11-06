@@ -57,9 +57,10 @@ export function readPiMcpJson(text: string): PiMcpReadOutcome {
   }
 }
 
+// Pi checks `url` before `command` when `type` is absent, so an entry carrying both is HTTP (see
+// the harness's own entry validation).
 function toFacts(entry: z.infer<typeof entrySchema>): McpFacts {
-  const transport =
-    entry.command !== undefined ? 'stdio' : entry.url !== undefined ? 'http' : undefined
+  const transport = entry.url !== undefined ? 'http' : entry.command !== undefined ? 'stdio' : undefined
   return {
     transport,
     command: entry.command,

@@ -73,12 +73,16 @@ const MIGRATIONS = [
 ];
 
 function migrate(db) {
-  let version = db.prepare('PRAGMA user_version').get().user_version;
-  while (version < MIGRATIONS.length) {
-    // The CLI, the MCP server, and the scanner all open this file, so the guard and the step it
-    // guards run in one immediate transaction rather than racing each other.
+  for (;;) {
     db.exec('BEGIN IMMEDIATE');
     try {
+      // Read the version under the lock: another opener may have applied this step while the
+      // transaction waited, and running a step from a stale read is what the guard prevents.
+      const version = db.prepare('PRAGMA user_version').get().user_version;
+      if (version >= MIGRATIONS.length) {
+        db.exec('COMMIT');
+        return;
+      }
       db.exec(MIGRATIONS[version]);
       db.exec(`PRAGMA user_version = ${version + 1}`);
       db.exec('COMMIT');
@@ -86,7 +90,6 @@ function migrate(db) {
       db.exec('ROLLBACK');
       throw error;
     }
-    version += 1;
   }
 }
 

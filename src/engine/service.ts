@@ -14,21 +14,39 @@ export interface DiscoverResult {
 // a single code path for "inventory" and no separate live-query mode.
 export function discover(config: EngineConfig): DiscoverResult {
   const scannedAt = new Date().toISOString()
-  const reports: TierReport[] = []
+  const reports = new Map<string, TierReport>()
   for (const adapter of createAdapters(config)) {
     for (const category of adapter.claimedCategories) {
       const handler = adapter.handlers[category]
       if (handler === undefined) continue
       for (const tier of adapter.tiers) {
-        reports.push({ ...handler.read(tier), harness: adapter.harness, tierId: tier.id })
+        const read = handler.read(tier)
+        const merged = reports.get(`${adapter.harness}/${tier.id}`)
+        // Tombstoning is per (harness, tier), so every category's installations for one tier reach
+        // the store in one report; a second report for the same tier would tombstone the first
+        // category's rows.
+        if (merged === undefined) {
+          reports.set(`${adapter.harness}/${tier.id}`, {
+            ...read,
+            harness: adapter.harness,
+            tierId: tier.id,
+          })
+          continue
+        }
+        merged.installations.push(...read.installations)
+        if (read.health !== 'ok') {
+          merged.health = read.health
+          merged.detail = read.detail
+        }
       }
     }
   }
-  recordDiscovery(config.storePath, reports, scannedAt)
+  const merged = [...reports.values()]
+  recordDiscovery(config.storePath, merged, scannedAt)
   return {
     scannedAt,
-    installations: reports.reduce((total, report) => total + report.installations.length, 0),
-    tierHealth: reports.map((report) => ({
+    installations: merged.reduce((total, report) => total + report.installations.length, 0),
+    tierHealth: merged.map((report) => ({
       harness: report.harness,
       tierId: report.tierId,
       status: report.health,

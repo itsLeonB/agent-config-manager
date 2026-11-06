@@ -87,7 +87,14 @@ function formatRow(row: InstallationRow, home: string): string {
   const tiers = row.bindings.map((binding) => binding.tierId).join(',')
   const location = `${shorten(row.nativeFile, home)}#${row.nativePointer ?? ''}`
   const removed = row.removedAt === null ? '' : '  (removed)'
-  return [row.category, row.name, row.scope, tiers, location, shortDigest(row.contentDigest)].join('  ') + removed
+  return [row.category, printable(row.name), row.scope, tiers, printable(location), shortDigest(row.contentDigest)].join('  ') + removed
+}
+
+// A server name and its path come from a config file, so control characters in them would forge or
+// corrupt the row they are printed in.
+function printable(value: string): string {
+  // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?')
 }
 
 function shortDigest(digest: string | null): string {
@@ -95,7 +102,8 @@ function shortDigest(digest: string | null): string {
 }
 
 function shorten(file: string, home: string): string {
-  return file.startsWith(home) ? `~${file.slice(home.length)}` : file
+  // The separator matters: `/home/ann` is not the home directory of `/home/anna`.
+  return file === home || file.startsWith(`${home}/`) ? `~${file.slice(home.length)}` : file
 }
 
 process.exitCode = main(process.argv.slice(2))

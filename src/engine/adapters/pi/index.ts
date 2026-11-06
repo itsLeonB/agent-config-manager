@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { EngineConfig } from '../../config.ts'
 import type { Adapter, Tier, TierRead } from '../types.ts'
@@ -36,14 +36,16 @@ export function createPiAdapter(config: EngineConfig): Adapter {
   }
 }
 
-// A missing file is a healthy empty tier; a file that cannot be read is not, because a tier that
-// did not report cleanly may tombstone nothing.
+// A missing file is a healthy empty tier. Any other read error is not: treated as empty it would
+// silently tombstone every row the tier had, so it surfaces as an unreadable tier instead.
 function readMcpTier(tier: Tier): TierRead {
-  if (!existsSync(tier.configPath)) return { health: 'ok', detail: null, installations: [] }
   let text: string
   try {
     text = readFileSync(tier.configPath, 'utf8')
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('ENOENT')) {
+      return { health: 'ok', detail: null, installations: [] }
+    }
     return { health: 'unreadable', detail: `${tier.configPath} could not be read`, installations: [] }
   }
   const read = readPiMcpJson(text)
@@ -51,15 +53,24 @@ function readMcpTier(tier: Tier): TierRead {
   return {
     health: 'ok',
     detail: null,
-    installations: read.servers.map((server) => ({
-      category: 'mcp',
-      name: server.name,
-      scope: tier.scopeBucket,
-      tierId: tier.id,
-      nativeFile: tier.configPath,
-      nativePointer: `mcpServers.${server.name}`,
-      knownFieldsJson: JSON.stringify(knownFieldsForStorage(server.facts)),
-      contentDigest: factsDigest(server.facts),
-    })),
+    installations: read.servers
+      // Only a project entry may carry neither command nor url (it overrides enabled/exposure of
+      // the user entry of the same name), so a user-tier entry like that is not a server at all.
+      .filter(
+        (server) =>
+          tier.scopeBucket !== 'user' ||
+          server.facts.command !== undefined ||
+          server.facts.url !== undefined,
+      )
+      .map((server) => ({
+        category: 'mcp',
+        name: server.name,
+        scope: tier.scopeBucket,
+        tierId: tier.id,
+        nativeFile: tier.configPath,
+        nativePointer: `mcpServers.${server.name}`,
+        knownFieldsJson: JSON.stringify(knownFieldsForStorage(server.facts)),
+        contentDigest: factsDigest(server.facts),
+      })),
   }
 }

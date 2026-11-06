@@ -66,7 +66,24 @@ test('discovery records Pi MCP servers and the listing reads them back from the 
 
   const inventory = listInstallations(config, {})
   assert.equal(inventory.scannedAt, scan.scannedAt)
+  // Scan time survives a filter that matches nothing: it comes from tier health, not from rows.
   assert.equal(listInstallations(config, { harness: 'codex' }).scannedAt, scan.scannedAt)
+  assert.deepEqual(
+    listInstallations(config, { harness: 'codex' }).installations,
+    [],
+  )
+  assert.deepEqual(
+    listInstallations(config, { scope: 'project' }).installations.map((row) => row.name),
+    ['local'],
+  )
+  assert.deepEqual(
+    listInstallations(config, { category: 'mcp' }).installations.map((row) => row.name),
+    ['local', 'serena'],
+  )
+  assert.deepEqual(
+    listInstallations(config, { category: 'skills' }).installations,
+    [],
+  )
   const serena = rowsByName(config).get('serena')
   assert.ok(serena)
   assert.equal(serena.category, 'mcp')
@@ -191,20 +208,83 @@ test('an existing dashboard database gains the canonical tables without losing i
   assert.deepEqual(schemaOf(config.storePath), schemaOf(fresh.storePath))
 })
 
-// Every table and index, so one migration path landing somewhere else shows up as a diff.
+// Every table, its columns and constraints, and its indexes: two migration paths that disagree
+// about nullability or uniqueness then show up as a diff, while the pre-existing dashboard tables
+// (created before the migration, so their stored SQL text differs) still compare by structure.
 function schemaOf(file: string): string[] {
   const db = new DatabaseSync(file)
   try {
-    return db
-      .prepare(
-        "SELECT type || ':' || name AS entry FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
-      )
+    const entries: string[] = []
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
       .all()
-      .map((row) => String(row.entry))
+    for (const table of tables) {
+      const name = String(table.name)
+      const columns = db
+        .prepare('SELECT name, type, "notnull", pk FROM pragma_table_info(?)')
+        .all(name)
+        .map((column) => `${column.name} ${column.type} notnull=${column.notnull} pk=${column.pk}`)
+      entries.push(`table ${name}(${columns.join(', ')})`)
+      for (const index of db.prepare('SELECT name, "unique" FROM pragma_index_list(?)').all(name)) {
+        const indexName = String(index.name)
+        const indexColumns = db
+          .prepare('SELECT name FROM pragma_index_info(?)')
+          .all(indexName)
+          .map((column) => String(column.name))
+        entries.push(`index ${indexName} unique=${index.unique}(${indexColumns.join(', ')})`)
+      }
+    }
+    return entries
   } finally {
     db.close()
   }
 }
+
+test('a user-tier entry with neither command nor url is not a server, a project override is', () => {
+  const config = fixture()
+  writeMcp(userMcpFile(config), { serena: { command: 'serena' }, toggle: { enabled: false } })
+  writeMcp(path.join(config.projectRoot, '.pi', 'mcp.json'), { serena: { enabled: false } })
+  discover(config)
+
+  const names = listInstallations(config, { includeRemoved: true }).installations.map((row) => row.name)
+  assert.deepEqual(names, ['serena', 'serena'])
+  assert.deepEqual(
+    listInstallations(config, { scope: 'project' }).installations.map((row) => row.name),
+    ['serena'],
+  )
+})
+
+test('credential-shaped values in a fixture are withheld from the store and the CLI output', () => {
+  const config = fixture()
+  writeMcp(userMcpFile(config), {
+    a: {
+      command: 'x',
+      env: { GITHUB_TOKEN: 'ghp_fixturetoken' },
+      headers: { Authorization: 'Bearer sk-fixturetoken' },
+      url: 'https://user:pass@example.test/mcp',
+    },
+  })
+  discover(config)
+
+  const stored = listInstallations(config, {}).installations[0]?.knownFieldsJson ?? ''
+  assert.equal(stored.includes('fixturetoken'), false)
+  assert.equal(stored.includes('user:pass'), false)
+  assert.match(stored, /"\[withheld\]"/)
+
+  const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
+  const run = spawnSync(process.execPath, [cli, 'list', '--json'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ACM_HOME: config.home,
+      ACM_PROJECT_ROOT: config.projectRoot,
+      ACM_STORE: config.storePath,
+    },
+  })
+  assert.equal(run.status, 0)
+  assert.equal(run.stdout.includes('fixturetoken'), false)
+  assert.equal(run.stdout.includes('user:pass'), false)
+})
 
 test('acm list prints the stored inventory from a fixture home', () => {
   const config = fixture()
@@ -230,4 +310,17 @@ test('acm list prints the stored inventory from a fixture home', () => {
     ['remote', 'serena'],
   )
   assert.ok(output.scan.scannedAt)
+
+  const filtered = spawnSync(process.execPath, [cli, 'list', '--json', '--scope', 'project'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ACM_HOME: config.home,
+      ACM_PROJECT_ROOT: config.projectRoot,
+      ACM_STORE: config.storePath,
+    },
+  })
+  assert.equal(filtered.status, 0)
+  const filteredOutput: { installations: { name: string }[] } = JSON.parse(filtered.stdout)
+  assert.deepEqual(filteredOutput.installations, [])
 })
