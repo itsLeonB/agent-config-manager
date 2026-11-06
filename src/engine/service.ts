@@ -1,12 +1,30 @@
 import { z } from 'zod'
 import { createAdapters } from './adapters/registry.ts'
+import { pointerSegment, pointerSegments } from './adapters/mcp-facts.ts'
+import type { Adapter } from './adapters/types.ts'
 import type { Category, ScopeBucket, Writability } from './adapters/types.ts'
+import {
+  containmentFault,
+  executePlan,
+  verifyPlan,
+  type ApplyResult,
+  type VerifyResult,
+} from './apply.ts'
 import type { EngineConfig } from './config.ts'
-import { buildPlan, type PlanResult, type PlanSource } from './plan.ts'
-import { readInventory, recordDiscovery } from './repo.ts'
+import {
+  buildPlan,
+  validatePlan,
+  type MirrorPlan,
+  type PlanResult,
+  type PlanSource,
+} from './plan.ts'
+import type { Json } from '../types/dashboard'
+import { readInventory, recordApply, recordDiscovery } from './repo.ts'
 import type { TierReport } from './repo.ts'
 import { storedVerdict, type Verdict } from './secret.ts'
 import type { InstallationRow, TierHealthRow } from '../server/store.cjs'
+
+export type { ApplyResult, VerifyResult }
 
 export interface DiscoverResult {
   scannedAt: string
@@ -258,6 +276,114 @@ export function planMirror(
     target: { harness: adapter.harness, tier, surface },
     now: new Date().toISOString(),
   })
+}
+
+// A plan is a JSON document: normalising here is what makes one built in process and one parsed
+// from a file hash the same way.
+function asDocument(rawPlan: Json | MirrorPlan): Json {
+  return JSON.parse(JSON.stringify(rawPlan))
+}
+
+// Applying takes the document a caller was given and executes it; nothing is re-derived, so a plan
+// that no longer matches its targets is reported stale instead of being quietly re-planned.
+export function applyPlan(config: EngineConfig, rawPlan: Json | MirrorPlan): ApplyResult {
+  const validated = validatePlan(asDocument(rawPlan))
+  if (validated.kind === 'refused') {
+    return {
+      outcome: 'refused',
+      planId: null,
+      reason: validated.reason,
+      landed: [],
+      failed: null,
+      verification: null,
+      manualSteps: [],
+    }
+  }
+  const adapters = createAdapters(config)
+  const plan = validated.plan
+  const result = executePlan(config, adapters, plan)
+  if (result.outcome === 'applied' || result.outcome === 'partial') {
+    recordMirror(config, adapters, plan, result)
+  }
+  return result
+}
+
+export type VerifyDocumentResult =
+  | { kind: 'refused'; reason: string }
+  | { kind: 'ok'; verification: VerifyResult }
+
+// Verification of a document nobody has applied yet is the same face as apply: validate the
+// document, run the same containment over the files it names, then re-read them. A plan is a
+// caller-supplied document, so its assertions are not a licence to read any path it likes.
+export function verifyPlanDocument(
+  config: EngineConfig,
+  rawPlan: Json | MirrorPlan,
+): VerifyDocumentResult {
+  const validated = validatePlan(asDocument(rawPlan))
+  if (validated.kind === 'refused') return { kind: 'refused', reason: validated.reason }
+  const fault = containmentFault(config, createAdapters(config), validated.plan)
+  if (fault !== null) return { kind: 'refused', reason: fault }
+  return { kind: 'ok', verification: verifyPlan(validated.plan) }
+}
+
+// The audit trail, and the target's own state with it: a landed write changes a native config, so
+// the inventory is re-read before the operation is recorded against the row it now shows.
+function recordMirror(
+  config: EngineConfig,
+  adapters: readonly Adapter[],
+  plan: MirrorPlan,
+  result: ApplyResult,
+): void {
+  discover(config)
+  const location = targetLocation(plan, adapters)
+  const target =
+    location === null
+      ? undefined
+      : readInventory(config.storePath, { harness: plan.target.harness }).installations.find(
+          (row) => row.nativeFile === location.file && row.nativePointer === location.pointer,
+        )
+  recordApply(config.storePath, {
+    at: new Date().toISOString(),
+    planId: plan.planId,
+    grade: plan.security.grade,
+    outcome: result.outcome,
+    toolVersion: plan.toolVersion,
+    sourceInstallationId: plan.source.installationId,
+    landed: result.landed,
+    binding:
+      target === undefined
+        ? null
+        : {
+            installationId: target.id,
+            harness: plan.target.harness,
+            tierId: plan.target.tierId,
+            // A target found by the scan after the write carries the verification the plan's own
+            // asserts produced, never a status the write cannot back up.
+            status: result.verification?.outcome ?? 'unverified',
+          },
+  })
+}
+
+interface NativeAddress {
+  file: string
+  pointer: string
+}
+
+// The target entry's address, rebuilt from the first write and the tier's own pointer prefix. The
+// plan's `nativeLocation` is one string written for a human, and splitting it back apart would have
+// to guess which `#` separated the two halves.
+function targetLocation(plan: MirrorPlan, adapters: readonly Adapter[]): NativeAddress | null {
+  const write = plan.writes[0]
+  const surface = adapters.find((adapter) => adapter.harness === plan.target.harness)?.mcpWrite
+  if (write === undefined || surface === undefined) return null
+  const prefix = pointerSegments(surface.pointerPrefix)
+  const segments = pointerSegments(write.pointer)
+  if (segments.length <= prefix.length) return null
+  const pointer = segments
+    .slice(0, prefix.length + 1)
+    .map(pointerSegment)
+    .join('.')
+  return { file: write.file, pointer }
 }
 
 // A known-fields document decoded leaf by leaf: the store holds JSON, and a shape this process

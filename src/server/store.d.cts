@@ -1,5 +1,8 @@
 import type { Json, LocalData } from '../types/dashboard'
 
+// The binding's latest status: what an apply leaves behind, and the only four values the store holds.
+export type VerificationStatus = 'verified' | 'unverified' | 'failed' | 'notApplicable'
+
 export interface DiscoveryBinding {
   harness: string
   tierId: string
@@ -67,6 +70,34 @@ export interface TierHealthRow {
   at: string
 }
 
+// One apply as it is recorded: the operation row plus, when the target was found again, the write
+// back onto the target installation and its binding.
+export interface MirrorRecord {
+  id: string
+  at: string
+  kind: string
+  planId: string
+  grade: string
+  outcome: string
+  toolVersion: string
+  sourceInstallationId: string
+  targetInstallationId: string | null
+  landed: unknown[]
+  binding: { installationId: string; harness: string; tierId: string; status: VerificationStatus } | null
+}
+
+export interface OperationRow {
+  id: string
+  at: string
+  kind: string
+  planId: string
+  grade: string
+  outcome: string
+  sourceInstallationId: string | null
+  targetInstallationId: string | null
+  landed: unknown[]
+}
+
 // The store only round-trips JSON; typing the 'local' kind means readers get LocalData
 // back without a cast.
 export interface Store {
@@ -78,6 +109,8 @@ export interface Store {
   listInstallations(filter: InstallationFilter): InstallationRow[]
   listLiveInstallationIdsForTier(harness: string, tierId: string): string[]
   readTierHealth(): TierHealthRow[]
+  recordMirror(record: MirrorRecord): void
+  listOperations(): OperationRow[]
   close(): void
 }
 

@@ -1,9 +1,11 @@
 import type { McpWriteSurface } from './mcp-write.ts'
 
 export type Category = 'mcp' | 'skills' | 'instructions' | 'hooks'
-export type HarnessId = 'pi' | 'codex' | 'opencode'
+export const HARNESSES = ['pi', 'codex', 'opencode'] as const
+export type HarnessId = (typeof HARNESSES)[number]
 export type ScopeBucket = 'user' | 'project' | 'project-local' | 'system'
-export type Writability = 'writable' | 'elevationRequired' | 'notState' | 'managed'
+export const WRITABILITIES = ['writable', 'elevationRequired', 'notState', 'managed'] as const
+export type Writability = (typeof WRITABILITIES)[number]
 export type TierHealthStatus = 'ok' | 'unreadable'
 
 // A tier is the harness's own configuration layer. `id` is prefixed with the harness so a row in

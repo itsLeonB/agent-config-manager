@@ -158,6 +158,22 @@ function openStore(filePath) {
     WHERE b.harness = ? AND b.tier_id = ? AND i.removed_at IS NULL
   `);
   const readTierHealth = db.prepare('SELECT * FROM tier_health ORDER BY harness, tier_id');
+  const insertOperation = db.prepare(`
+    INSERT INTO operations (id, at, kind, plan_id, grade, outcome, source_installation_id,
+      target_installation_id, landed_writes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const readOperations = db.prepare('SELECT * FROM operations ORDER BY at, id');
+  // The plan's hash persists on the target's provenance as well as on the operation row: there is no
+  // plans table, so this is what ties a row back to the document that wrote it.
+  const stampMirror = db.prepare(`
+    UPDATE installations
+    SET mirrored_from_id = ?, mirrored_plan_id = ?, mirrored_at = ?, mirrored_tool_version = ?
+    WHERE id = ?
+  `);
+  const setBindingVerification = db.prepare(
+    'UPDATE bindings SET verification_status = ? WHERE installation_id = ? AND harness = ? AND tier_id = ?'
+  );
 
   return {
     saveSnapshot(kind, data) {
@@ -276,6 +292,50 @@ function openStore(filePath) {
         status: row.status,
         detail: row.detail,
         at: row.at,
+      }));
+    },
+    // The audit row and the target's own state land together or not at all: an operation recorded
+    // without its binding status would claim a write the inventory does not show.
+    recordMirror(record) {
+      writeTransaction(db, () => {
+        insertOperation.run(
+          record.id,
+          record.at,
+          record.kind,
+          record.planId,
+          record.grade,
+          record.outcome,
+          record.sourceInstallationId,
+          record.targetInstallationId,
+          JSON.stringify(record.landed)
+        );
+        if (record.binding === null) return;
+        stampMirror.run(
+          record.sourceInstallationId,
+          record.planId,
+          record.at,
+          record.toolVersion,
+          record.binding.installationId
+        );
+        setBindingVerification.run(
+          record.binding.status,
+          record.binding.installationId,
+          record.binding.harness,
+          record.binding.tierId
+        );
+      });
+    },
+    listOperations() {
+      return readOperations.all().map((row) => ({
+        id: row.id,
+        at: row.at,
+        kind: row.kind,
+        planId: row.plan_id,
+        grade: row.grade,
+        outcome: row.outcome,
+        sourceInstallationId: row.source_installation_id,
+        targetInstallationId: row.target_installation_id,
+        landed: JSON.parse(row.landed_writes),
       }));
     },
     close() {

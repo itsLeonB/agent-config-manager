@@ -41,17 +41,24 @@ settled decisions.
 
 - **`src/server/store.cjs` is the only module that touches `node:sqlite`.** It stays plain
   CJS so the TypeScript app can load it and `scan.cjs` can require it, and it holds
-  everything the app persists: scan snapshots, the `config` rows behind `/settings`, and the
-  engine's canonical tables. `PRAGMA user_version` gates an ordered migration list run on every
+  everything the app persists: scan snapshots, the `config` rows behind `/settings`, the engine's
+  canonical tables, and the operations an apply records — one transaction per apply, so the audit
+  row, the target's plan hash, and its binding's verification status land together or not at all.
+  `PRAGMA user_version` gates an ordered migration list run on every
   open, so a fresh database and an existing one reach the same schema; migration 1 is pure
   `CREATE TABLE IF NOT EXISTS` next to `snapshots` / `config`, which therefore keep their rows.
   Every write transaction opens with `BEGIN IMMEDIATE`, because the CLI, the MCP server, and the
   scanner all open the file.
 - **The engine and the CLI are a second face over that store.** `src/engine/service.ts` exposes
-  `discover()`, `listInstallations()`, `inspectInstallation()`, and `planMirror()`;
-  `src/engine/repo.ts` is the only module that calls `store.cjs`; `src/engine/plan.ts` builds the
-  mirror plan document from a stored row and the target file alone (it writes nothing);
-  `src/engine/adapters/` holds one directory per harness (Pi, Codex, OpenCode), shared
+  `discover()`, `listInstallations()`, `inspectInstallation()`, `planMirror()`, and
+  `applyPlan()` / `verifyPlan()`; `src/engine/repo.ts` is the only module that calls `store.cjs`;
+  `src/engine/plan.ts` builds the mirror plan document from a stored row and the target file alone
+  (it writes nothing); `src/engine/apply.ts` executes exactly that document — one lock per store,
+  every precondition read before the first byte, one file at a time, `partial` with no rollback
+  when a write fails — and re-reads the target to verify it; `src/engine/edit.ts` is the
+  pointer-level native editor, so a write lands only on the addresses the plan named and comments
+  and sibling entries survive; `src/engine/adapters/`
+  holds one directory per harness (Pi, Codex, OpenCode), shared
   MCP fact storage in `mcp-facts.ts`, the per-harness MCP write surfaces and transforms in
   `mcp-write.ts`, and per-tier file reading in `tier.ts`; and
   `src/engine/adapters/registry.ts` fails at load when a claimed category has no handler. Roots

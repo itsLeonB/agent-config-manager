@@ -1,9 +1,11 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { openStore } from '../server/store.cjs'
 import type {
   DiscoveryBatch,
   InstallationFilter,
   InstallationRow,
+  MirrorRecord,
+  OperationRow,
   TierHealthRow,
 } from '../server/store.cjs'
 import type { DiscoveredInstallation, TierRead } from './adapters/types.ts'
@@ -77,6 +79,35 @@ export function recordDiscovery(storePath: string, reports: TierReport[], at: st
 export interface StoreInventory {
   installations: InstallationRow[]
   tierHealth: TierHealthRow[]
+}
+
+// What an apply leaves behind: one operation row, and — when the target entry is in the inventory
+// again — the plan's hash on the target and its verification status on the binding. The operation's
+// target id is the binding's, so it has one source rather than two.
+export type ApplyRecord = Omit<MirrorRecord, 'id' | 'kind' | 'targetInstallationId'>
+
+export function recordApply(storePath: string, record: ApplyRecord): void {
+  const store = openStore(storePath)
+  try {
+    const row: MirrorRecord = {
+      id: randomUUID(),
+      kind: 'mirror',
+      targetInstallationId: record.binding?.installationId ?? null,
+      ...record,
+    }
+    store.recordMirror(row)
+  } finally {
+    store.close()
+  }
+}
+
+export function listOperations(storePath: string): OperationRow[] {
+  const store = openStore(storePath)
+  try {
+    return store.listOperations()
+  } finally {
+    store.close()
+  }
 }
 
 export function readInventory(storePath: string, filter: InstallationFilter): StoreInventory {

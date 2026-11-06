@@ -5,7 +5,8 @@
 // Entropy is split by alphabet on purpose: hex caps at 4.0 bits per character and a base64 key
 // sits at 4.33-4.75, so one threshold either flags every hash or misses every hex key.
 
-export type Verdict = 'clean' | 'suspect' | 'secret'
+export const VERDICTS = ['clean', 'suspect', 'secret'] as const
+export type Verdict = (typeof VERDICTS)[number]
 
 export interface Classification {
   verdict: Verdict
