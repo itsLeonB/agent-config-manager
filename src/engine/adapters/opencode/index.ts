@@ -36,9 +36,12 @@ export function openCodeTiers(config: EngineConfig): Tier[] {
         path.join(projectConfigDir, 'opencode.jsonc'),
       ],
       categoryPaths: {
-        // OpenCode also discovers `.claude/skills` and `~/.claude/skills`, which are another tool's
-        // locations: read-only neighbours, not a place a mirror may write.
-        skills: { reads: [projectSkills, path.join(projectConfigDir, 'skills')], target: projectSkills },
+        // OpenCode also discovers `.claude/skills`, which is another tool's location: a source it
+        // reads and never a place a mirror may write.
+        skills: {
+          reads: [projectSkills, path.join(projectConfigDir, 'skills'), path.join(projectRoot, '.claude', 'skills')],
+          target: projectSkills,
+        },
         instructions: { reads: [projectAgentsMd], target: projectAgentsMd },
       },
       writability: 'writable',
@@ -53,7 +56,10 @@ export function openCodeTiers(config: EngineConfig): Tier[] {
         path.join(userConfigDir, 'opencode.jsonc'),
       ],
       categoryPaths: {
-        skills: { reads: [userSkills, path.join(userConfigDir, 'skills')], target: userSkills },
+        skills: {
+          reads: [userSkills, path.join(userConfigDir, 'skills'), path.join(config.home, '.claude', 'skills')],
+          target: userSkills,
+        },
         instructions: { reads: [userAgentsMd], target: userAgentsMd },
       },
       writability: 'writable',

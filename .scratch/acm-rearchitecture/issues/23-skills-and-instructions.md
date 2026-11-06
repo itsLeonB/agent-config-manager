@@ -114,3 +114,47 @@ Limits, stated rather than hidden:
   risky copy or link now lands `client-policy` instead of coming back as a manual step, because it is
   a write this engine performs. The plan is still graded `risky`, so a client that can ask a human
   still asks.
+
+### Review follow-up (inline comments)
+
+Applied:
+
+- **Every text file in a copied skill is classified**, not just `SKILL.md`: one unclean
+  `references/*.md` is a `credential` gap naming that file and nothing is written. `carried` stays
+  empty for a withheld tree, exactly as an instruction body does.
+- **A `SKILL.md` that cannot be read refuses the plan** instead of copying a tree the engine cannot
+  describe, and a skill directory the scan cannot list makes its tier `unreadable` — so it tombstones
+  nothing, which is what the tier-health rule is for.
+- **A copy's source is resolved before it is judged.** `rootFault` now runs on the realpath of a
+  `copyFile`/`symlink` source, and every link inside a copied tree is resolved and held to the same
+  roots, because `cpSync` reproduces links rather than following them.
+- **One file written two ways by one plan is refused in preflight**, before the first byte, rather
+  than dispatched on its first write.
+- **An instruction source edited since the scan is refused** — its body travels inside the plan, so a
+  stale body would land on a target whose digest could not reveal it.
+- **Shadow and size steps are emitted for a no-write plan too**, so an already-present 40 KiB shared
+  `AGENTS.md` still names Codex's 32 KiB cap and can never read as verified.
+- **A shadow is named only for the harnesses it outranks**: `AGENTS.override.md` for Pi and Codex,
+  `AGENTS.MD`/`CLAUDE.md`/`CLAUDE.MD` for Pi. An OpenCode-only target no longer warns about an
+  adjacent `CLAUDE.md`.
+- **OpenCode reads `.claude/skills` too**, at both scopes, as a source and never a write target.
+- **Containment is an exact path match for every category but `skills`**, whose target is a root.
+- **Spec §4's bullets were aligned**: assertions are pointer-or-digest, and a skill directory is
+  never linked.
+
+Skipped, with the reason:
+
+- **Validating instruction sources against the roots before reading them.** They are adapter-declared
+  absolute paths, not caller input; there is no untrusted resolution to guard, and apply already
+  refuses to write outside the roots.
+- **Rolling back a partially copied skill.** Ticket 20 settled `partial` with no rollback; the landed
+  writes and their digests are reported, and the operation row records the grade.
+- **Including empty directories in the tree digest.** Both sides of a comparison are the same walk,
+  and an empty directory carries nothing a harness loads.
+- **Flagging a copied skill that contains scripts as executable content.** A skill's scripts are
+  latent — neither the copy nor loading a skill runs them — whereas `!command` and hook commands run
+  at harness runtime, which is the line ticket 13's rule table draws. Grading those as executable
+  would make every real skill with a `scripts/` directory unverifiable, and gated so no non-eliciting
+  client could apply it.
+- **Recording a binding status for a plan with no writes.** Nothing changed, nothing is asserted; the
+  match is stated on the plan's `disposition` instead.

@@ -588,23 +588,30 @@ function buildSkillPlan(input: PlanInput): PlanResult {
   if (sourceDigest === null) {
     return { kind: 'refused', reason: `${source.nativeFile} cannot be read, so there is nothing to copy` }
   }
-  // A skill's `SKILL.md` is a credential-bearing whole file: a copy would carry the value into every
-  // harness that reads the shared location, so it is never copied.
-  const skillMd = readTextOrNull(path.join(source.nativeFile, 'SKILL.md'))
-  const verdict = skillMd === null ? 'clean' : classifyWholeFile('SKILL.md', skillMd)
+  // The skill is described by a directory the engine cannot read? Then there is nothing to plan from:
+  // a copy of an unknown tree would claim a content it never saw.
+  if (readTextOrNull(path.join(source.nativeFile, 'SKILL.md')) === null) {
+    return {
+      kind: 'refused',
+      reason: `${path.join(source.nativeFile, 'SKILL.md')} cannot be read, so the skill cannot be described`,
+    }
+  }
+  // Every text file in the tree is credential-bearing content, not just the entry point: a copy
+  // would carry a value in `references/` into every harness that reads the shared location.
+  const unclean = uncleanTree(source.nativeFile, facts.files)
   const conflicts: PlanConflict[] = []
   const gaps: PlanGap[] = []
   const manualSteps: PlanManualStep[] = []
   const writes: PlanWrite[] = []
   const existing = digestOfPath(targetDir)
   let disposition: Disposition = { kind: 'mirror', reason: null }
-  if (verdict !== 'clean') {
-    const gap: PlanGap = { field: 'SKILL.md', reason: 'credential', replacement: 'dropped' }
+  if (unclean !== null) {
+    const gap: PlanGap = { field: unclean.file, reason: 'credential', replacement: 'dropped' }
     gaps.push(gap)
     // The policy table decides whether a gap owes the human a step, not this branch.
     if (gapDisposition(gap.reason) === 'manualStep') {
       manualSteps.push({
-        step: `remove the credential from ${path.join(source.nativeFile, 'SKILL.md')} and read it through the source harness's own indirection`,
+        step: `remove the credential from ${path.join(source.nativeFile, unclean.file)} and read it through the source harness's own indirection`,
         why: 'the skill directory holds a credential-shaped value, and copying it would put that value in every harness that reads the shared location',
       })
     }
@@ -641,7 +648,8 @@ function buildSkillPlan(input: PlanInput): PlanResult {
   return sealPlan(input, {
     disposition,
     equivalence: {
-      carried: [...SKILL_FIELDS],
+      // A withheld file is a gap, never something carried: nothing in this plan holds its value.
+      carried: unclean === null ? [...SKILL_FIELDS] : [],
       mapped: [],
       gaps,
       preserved: [],
@@ -663,7 +671,7 @@ function buildSkillPlan(input: PlanInput): PlanResult {
     conflicts,
     security: {
       grade: planGrade({ writes, conflicts, permissions: { elevationRequired: false } }),
-      secrets: verdict === 'clean' ? [] : [{ pointer: 'SKILL.md', verdict }],
+      secrets: unclean === null ? [] : [{ pointer: unclean.file, verdict: unclean.verdict }],
       executables: [],
     },
     writes,
@@ -695,6 +703,27 @@ function writeBody(
   }
 }
 
+// Files a copy would carry that are worth classifying: the entry point and anything whose name says
+// it is text. An image or a font is copied as it stands — the classifier has nothing to judge in it.
+const TEXT_FILE =
+  /\.(?:md|mdx|txt|sh|bash|zsh|py|js|jsx|ts|tsx|rb|go|rs|pl|php|ps1|ya?ml|json|jsonc|toml|ini|cfg|conf|html|css|sql|lua)$/i
+
+// The first file of a tree the classifier will not call clean. A file this process cannot read is
+// the same answer as an unclean one: a copy it cannot describe is not one it may offer.
+function uncleanTree(
+  dir: string,
+  files: readonly string[],
+): { file: string; verdict: Verdict } | null {
+  for (const relative of files) {
+    if (!TEXT_FILE.test(relative) && relative !== 'SKILL.md') continue
+    const text = readTextOrNull(path.join(dir, relative))
+    if (text === null) return { file: relative, verdict: 'suspect' }
+    const verdict = classifyWholeFile(relative, text)
+    if (verdict !== 'clean') return { file: relative, verdict }
+  }
+  return null
+}
+
 // An instruction file is one markdown file, so the plan writes or links it. A link is the spec's
 // one permitted use: the source and the target sit in the same scope bucket, the target path is
 // declared, and nothing exists there. Across buckets a link would point out of the bucket it is
@@ -711,7 +740,19 @@ function buildInstructionPlan(input: PlanInput): PlanResult {
     }
   }
   const verdict = storedVerdict(facts.body)
-  const sourceDigest = digestOfPath(source.nativeFile) ?? source.contentDigest
+  // The body travels inside the plan, so the row it came from has to still be what is on disk: a
+  // source edited since the scan would otherwise be written as the old text, into a target whose own
+  // digest would never reveal it.
+  const sourceDigest = digestOfPath(source.nativeFile)
+  if (sourceDigest === null) {
+    return { kind: 'refused', reason: `${source.nativeFile} cannot be read, so there is nothing to mirror` }
+  }
+  if (sourceDigest !== source.contentDigest) {
+    return {
+      kind: 'refused',
+      reason: `${source.nativeFile} changed since the last scan, so the stored body is stale; run \`acm list\` and plan again`,
+    }
+  }
   const existing = digestOfPath(targetFile)
   const samePath = path.resolve(targetFile) === path.resolve(source.nativeFile)
   const conflicts: PlanConflict[] = []
@@ -719,10 +760,9 @@ function buildInstructionPlan(input: PlanInput): PlanResult {
   const manualSteps: PlanManualStep[] = []
   const writes: PlanWrite[] = []
   const written = digestOfBytes(Buffer.from(facts.body, 'utf8'))
-  const readers = alsoReadBy(input.adapters, target.harness, targetFile)
-  // Codex's own two shadows only matter where Codex reads the file: its own location, or a project
-  // one it shares with the other two.
-  const codexReads = target.harness === 'codex' || readers.includes('codex')
+  const alsoRead = alsoReadBy(input.adapters, target.harness, targetFile)
+  // Every harness that loads this file, the target first: a shadow only matters to one of them.
+  const readers: HarnessId[] = [target.harness, ...alsoRead]
   let disposition: Disposition = { kind: 'mirror', reason: null }
   if (verdict !== 'clean') {
     const gap: PlanGap = { field: 'body', reason: 'credential', replacement: 'dropped' }
@@ -787,54 +827,70 @@ function buildInstructionPlan(input: PlanInput): PlanResult {
       executables: [],
     },
     writes,
-    manualSteps:
-      writes.length === 0
-        ? manualSteps
-        : [
-            ...manualSteps,
-            ...instructionManualSteps(targetFile, facts.body, target.tier.scopeBucket, codexReads),
-            ...trustSteps(target.tier.id, 'instructions'),
-          ],
+    // The shadows and the size cap are facts about the target whatever this plan writes, so an
+    // already-present plan names them too — an oversized shared `AGENTS.md` is truncated whichever
+    // harness asked for the mirror, and nothing about that plan may read as verified.
+    manualSteps: [
+      ...manualSteps,
+      ...instructionManualSteps(
+        targetFile,
+        facts.body,
+        target.tier.scopeBucket,
+        readers,
+        writes.length > 0,
+      ),
+      ...trustSteps(target.tier.id, 'instructions'),
+    ],
     verify: writes.map<PlanAssert>((write) =>
       write.op === 'symlink'
         ? { file: targetFile, digest: sourceDigest }
         : { file: targetFile, digest: written },
     ),
     targetNativeLocation: targetFile,
-    alsoReadBy: readers,
+    alsoReadBy: alsoRead,
   })
 }
 
-// The files a harness reads ahead of the one this plan writes, in the same directory. Same directory
-// only: these replace the file, whereas an ancestor's is combined with it.
-const SHADOWING_INSTRUCTIONS = ['AGENTS.override.md', 'AGENTS.MD', 'CLAUDE.md', 'CLAUDE.MD'] as const
+// The files a harness reads ahead of the one this plan writes, in the same directory, each with the
+// harnesses it outranks. Same directory only: these replace the file, whereas an ancestor's is
+// combined with it.
+const SHADOWING_INSTRUCTIONS: readonly { name: string; readers: readonly HarnessId[] }[] = [
+  { name: 'AGENTS.override.md', readers: ['pi', 'codex'] },
+  { name: 'AGENTS.MD', readers: ['pi'] },
+  { name: 'CLAUDE.md', readers: ['pi'] },
+  { name: 'CLAUDE.MD', readers: ['pi'] },
+]
 
-// What a human still has to know after the bytes land: a same-directory file that outranks this one,
-// Codex's project budget, and the ancestor instruction files every harness also loads.
+// What a human still has to know after the bytes land: a same-directory file that outranks this one
+// for a harness that reads it, Codex's project budget, and — only when something is written — the
+// ancestor instruction files every harness also loads.
 function instructionManualSteps(
   targetFile: string,
   body: string,
   scopeBucket: ScopeBucket,
-  codexReads: boolean,
+  readers: readonly HarnessId[],
+  writing: boolean,
 ): PlanManualStep[] {
   const steps: PlanManualStep[] = []
   const directory = path.dirname(targetFile)
-  const shadows = SHADOWING_INSTRUCTIONS.map((name) => path.join(directory, name)).filter((file) =>
-    existsSync(file),
-  )
-  if (shadows.length > 0) {
+  const shadows = SHADOWING_INSTRUCTIONS.filter(
+    (shadow) =>
+      shadow.readers.some((harness) => readers.includes(harness)) &&
+      existsSync(path.join(directory, shadow.name)),
+  ).map((shadow) => ({ rank: shadow, file: path.join(directory, shadow.name) }))
+  for (const { rank, file } of shadows) {
     steps.push({
-      step: `review ${shadows.join(', ')}`,
-      why: 'Pi reads AGENTS.override.md, AGENTS.MD and CLAUDE.md ahead of AGENTS.md in that directory, and Codex reads AGENTS.override.md ahead of it, so the file this plan writes is not the one that wins while these exist',
+      step: `review ${file}`,
+      why: `${rank.readers.join(' and ')} read${rank.readers.length === 1 ? 's' : ''} ${rank.name} ahead of AGENTS.md in that directory, so the file this plan writes is not the one that wins there while that file exists`,
     })
   }
-  if (codexReads && scopeBucket === 'project' && Buffer.byteLength(body, 'utf8') > 32768) {
+  if (readers.includes('codex') && scopeBucket === 'project' && Buffer.byteLength(body, 'utf8') > 32768) {
     steps.push({
       step: "raise project_doc_max_bytes in Codex's user config, or shorten the project instruction file",
       why: 'Codex caps the project instructions it loads at 32 KiB by default, so the tail of this file is not read',
     })
   }
-  if (scopeBucket === 'project') {
+  if (writing && scopeBucket === 'project') {
     steps.push({
       step: 'review the AGENTS.md files in the directories above this project',
       why: 'Pi, Codex and OpenCode each load every ancestor AGENTS.md too, so this file is one of several a session reads; a file closer to the working directory comes later and wins',

@@ -72,7 +72,11 @@ function under(declared: readonly string[], file: string): boolean {
 }
 
 export function declaresWritePath(tier: Tier, category: Category, file: string): boolean {
-  return under(writePaths(tier, category), file)
+  const declared = writePaths(tier, category)
+  // A skill is a directory, so its target is a root and a mirror lands beneath it. Every other
+  // category names the file itself, so nothing below it can be a write.
+  if (category === 'skills') return under(declared, file)
+  return declared.includes(file)
 }
 
 export function declaresReadPath(tier: Tier, file: string): boolean {

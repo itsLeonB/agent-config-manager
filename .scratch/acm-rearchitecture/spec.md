@@ -312,8 +312,10 @@ One JSON document, stateless, content-addressed. Nothing is stored; the agent ca
   removal, no restart.
 - `symlink` is allowed only when source and target share a scope bucket, the target path is declared,
   nothing exists at the target, and the precondition digest is of the resolved content. Verification
-  resolves the link. Skills use it only when the source is already a directory both harnesses read.
-- Expected resulting state is `verify.asserts[]` only — pointer assertions, never a whole-file copy.
+  resolves the link. A skill directory is never linked (ticket 23): symlinked skill directories are
+  unverified for all three harnesses, so a skill is always copied.
+- Expected resulting state is `verify.asserts[]` only — assertions on the value at a pointer, or on
+  the digest of the file or tree the write put there. Never a whole-file copy of the source.
 - Rollback is described (`reversible`, `priorValue`), never executed. `runCommand` is always
   irreversible. No `.bak` files.
 - `apply` validates in order and refuses at the first failure: plan schema, recomputed `planId`,
@@ -434,7 +436,9 @@ project scope is inert until the *user* config trusts the path → manual step. 
 Retired with the map: unknown frontmatter keys are preserved by a file copy, not a gap.
 
 **Skills** — `copyFile`, or `symlink` under the rule above. All three implement the Agent Skills
-spec, so the target is the shared `.agents/skills/<name>/` at both scopes for all three harnesses.
+spec, so the target is the shared `.agents/skills/<name>/` at both scopes for all three harnesses. A
+copy is never offered when any text file in the tree classifies unclean, or when a link inside it
+resolves outside the engine's roots.
 One copy, several bindings; a second mirror into a harness that already reads it is `already shared`
 with no writes. `verify` asserts digest equality on the written directory. A harness-scoped copy
 (under the harness's own config dir) is possible but is a deliberate different target, not the

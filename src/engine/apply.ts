@@ -8,6 +8,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -168,7 +169,8 @@ export function executePlan(
   }
   // Preflight every address before the first byte: containment, then whether the file can be
   // written at all. An unwritable target is refused here rather than discovered half way through.
-  const fault = containmentFault(config, adapters, plan) ?? preflightFault(plan)
+  const fault =
+    containmentFault(config, adapters, plan) ?? mixedOpsFault(plan) ?? preflightFault(plan)
   if (fault !== null) return refusal('refused', fault)
   // A write flagged executable, secret-bearing, irreversible, or an op this engine does not perform
   // needs a human's own answer, and this face cannot ask for one. Those writes become manual steps.
@@ -316,10 +318,61 @@ export function containmentFault(
     const fault = pathFault(config, file, linked.has(file), copied.has(file))
     if (fault !== null) return fault
   }
-  // A copy reads bytes from somewhere too, and a plan is the only thing that names where.
+  // A copy reads bytes from somewhere too, and a plan is the only thing that names where. The source
+  // is judged where it really is, not where its path claims to be: a link is the one way a declared
+  // path can stand for a file somewhere else.
   for (const write of plan.writes) {
     if (write.op !== 'copyFile' && write.op !== 'symlink') continue
-    const fault = rootFault(config, write.source)
+    let source: string
+    try {
+      source = realpathSync(write.source)
+    } catch {
+      return `${write.source} cannot be resolved, so what this plan would copy is unknown`
+    }
+    const fault = rootFault(config, source)
+    if (fault !== null) return fault
+    // A copied tree keeps its links, so each one is a path this mirror would put on disk: it has to
+    // be held to the same rule as the write that carries it.
+    if (write.op === 'copyFile') {
+      const inside = treeFault(config, source)
+      if (inside !== null) return inside
+    }
+  }
+  return null
+}
+
+// Every link inside a directory a plan copies, resolved and held to the roots. A link to a directory
+// is not followed: a copy reproduces the link, not the tree beyond it.
+function treeFault(config: EngineConfig, dir: string, chain = new Set<string>()): string | null {
+  let real: string
+  try {
+    real = realpathSync(dir)
+  } catch {
+    return `${dir} cannot be resolved, so what this plan would copy is unknown`
+  }
+  if (chain.has(real)) return null
+  const next = new Set(chain).add(real)
+  let entries
+  try {
+    entries = readdirSync(real, { withFileTypes: true })
+  } catch {
+    return `${dir} cannot be listed, so what this plan would copy is unknown`
+  }
+  for (const entry of entries) {
+    const child = path.join(real, entry.name)
+    if (entry.isSymbolicLink()) {
+      let resolved: string
+      try {
+        resolved = realpathSync(child)
+      } catch {
+        return `${child} cannot be resolved, so what this plan would copy is unknown`
+      }
+      const fault = rootFault(config, resolved)
+      if (fault !== null) return `${child} links to ${resolved}, and ${fault}`
+      continue
+    }
+    if (!entry.isDirectory()) continue
+    const fault = treeFault(config, child, next)
     if (fault !== null) return fault
   }
   return null
@@ -398,6 +451,20 @@ function deepestExisting(lexical: string): string {
   }
 }
 
+// One file either takes several addressed leaves or one whole-file write: a plan that asks for both
+// at one address is refused before its first byte, because no executor can honour both.
+export function mixedOpsFault(plan: MirrorPlan): string | null {
+  const byFile = new Map<string, PlanWrite['op']>()
+  for (const write of plan.writes) {
+    const seen = byFile.get(write.file)
+    if (seen !== undefined && seen !== write.op) {
+      return `${write.file} would be written two ways by one plan (${seen} and ${write.op}), which cannot be applied as one document`
+    }
+    byFile.set(write.file, write.op)
+  }
+  return null
+}
+
 // Whether the bytes could be written at all, asked before any of them are: a read-only target is
 // refused up front instead of being discovered half way through a run. A target under a directory
 // that does not exist yet is checked at the nearest ancestor that does, because a copy creates the
@@ -458,8 +525,6 @@ function landWrites(plan: MirrorPlan): Landed {
   for (const [file, writes] of byFile) {
     const head = writes[0]
     if (head === undefined) continue
-    // One file either takes several addressed leaves or one whole-file write; a plan never asks for
-    // both at the same address.
     const outcome =
       head.op === 'writeAtPointer'
         ? editPointers(

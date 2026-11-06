@@ -152,8 +152,8 @@ answers from; `target` is where a mirror into that tier lands.
 | `pi:project` | `<repo>/.agents/skills`, `<repo>/.pi/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
 | `codex:user` | `~/.agents/skills` | `~/.agents/skills` | `$CODEX_HOME/AGENTS.md` |
 | `codex:project` | `<repo>/.agents/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
-| `oc:user` | `~/.agents/skills`, `~/.config/opencode/skills` | `~/.agents/skills` | `~/.config/opencode/AGENTS.md` |
-| `oc:project` | `<repo>/.agents/skills`, `<repo>/.opencode/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
+| `oc:user` | `~/.agents/skills`, `~/.config/opencode/skills`, `~/.claude/skills` | `~/.agents/skills` | `~/.config/opencode/AGENTS.md` |
+| `oc:project` | `<repo>/.agents/skills`, `<repo>/.opencode/skills`, `<repo>/.claude/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
 
 `reads` is what `alsoReadBy` answers from and what the inventory shows; only `target` is writable.
 Containment holds a plan to the target (or a path beneath it), so a harness-owned `skills/` directory
@@ -175,6 +175,16 @@ project config) behind `/trust`. Pi's instruction-file discovery ignores trust, 
 | the tier declares no location for the category | `[]`, one `categoryAbsent` gap | `mirror` |
 | a skill tree differs | `[]`, with both digests in `conflicts[]` | `mirror` |
 | an instruction file differs | the body write, with both digests in `conflicts[]` | `mirror` |
+
+A copy is offered only when the whole tree is clean: every text file in it — `SKILL.md`, the scripts,
+the references — goes through the classifier, and one unclean file is a `credential` gap naming that
+file, with nothing written, because a copy would put the value in every harness that reads the shared
+location. Every link inside the tree is resolved too, and one that lands outside `$HOME` or the
+project root refuses the copy.
+
+An instruction body travels inside the plan, so its source is checked against the last scan: a file
+edited since then is a refusal (`run acm list and plan again`) rather than a stale body written over
+a target whose own digest would never reveal it.
 
 A `symlink` is used only where the spec permits one: the source and the target sit in the same scope
 bucket, the target is a declared path, nothing exists there, and the digest the plan names is the

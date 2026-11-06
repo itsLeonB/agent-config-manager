@@ -12,6 +12,13 @@ interface SkillFacts {
   files: string[]
 }
 
+// A directory without a `SKILL.md` is simply not a skill; a directory the scan cannot list is a
+// different answer, because reporting it as absent would tombstone what it hides.
+type SkillListing =
+  | { kind: 'skill'; facts: SkillFacts }
+  | { kind: 'notASkill' }
+  | { kind: 'unreadable'; detail: string }
+
 // All three harnesses implement the Agent Skills spec, so one reader serves all three: only the
 // directories each tier declares differ (`~/.agents/skills` is shared, `~/.pi/agent/skills` is not).
 export function readSkillTier(tier: Tier): TierRead {
@@ -25,10 +32,13 @@ export function readSkillTier(tier: Tier): TierRead {
       return { health: 'unreadable', detail: `${root} could not be read`, installations: [] }
     }
     for (const name of names.sort()) {
-      // A directory is a skill only when it carries a `SKILL.md`, so a loose file in the root is not
-      // one and a package manager's symlinked skill is (the existence test follows the link).
-      const installation = skillInstallation(tier, path.join(root, name))
-      if (installation !== null) installations.push(installation)
+      const dir = path.join(root, name)
+      const listing = skillListing(dir)
+      if (listing.kind === 'unreadable') {
+        return { health: 'unreadable', detail: listing.detail, installations: [] }
+      }
+      if (listing.kind === 'notASkill') continue
+      installations.push(skillInstallation(tier, dir, listing.facts))
     }
   }
   return { health: 'ok', detail: null, installations }
@@ -36,9 +46,11 @@ export function readSkillTier(tier: Tier): TierRead {
 
 // A directory is a skill when it carries a `SKILL.md`; the name is the directory's, because that is
 // both the address it is loaded under and the name a mirror reproduces in the shared location.
-function skillInstallation(tier: Tier, dir: string): DiscoveredInstallation | null {
-  const facts = skillFacts(dir)
-  if (facts === null) return null
+function skillInstallation(
+  tier: Tier,
+  dir: string,
+  facts: SkillFacts,
+): DiscoveredInstallation {
   return {
     category: 'skills',
     name: path.basename(dir),
@@ -51,11 +63,13 @@ function skillInstallation(tier: Tier, dir: string): DiscoveredInstallation | nu
   }
 }
 
-function skillFacts(dir: string): SkillFacts | null {
-  if (!existsSync(path.join(dir, 'SKILL.md'))) return null
+function skillListing(dir: string): SkillListing {
+  // A loose file in the root carries no `SKILL.md`, so the existence test is the whole check; it
+  // follows a link, because a package manager may install a skill as one.
+  if (!existsSync(path.join(dir, 'SKILL.md'))) return { kind: 'notASkill' }
   try {
-    return { files: relativeFiles(dir) }
+    return { kind: 'skill', facts: { files: relativeFiles(dir) } }
   } catch {
-    return null
+    return { kind: 'unreadable', detail: `${dir} could not be listed` }
   }
 }

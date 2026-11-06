@@ -396,3 +396,164 @@ test('a same-directory instruction file that outranks the target is named as a s
   const steps = planned.manualSteps.map((step) => step.step).join(' ')
   assert.match(steps, /CLAUDE\.md/)
 })
+
+test('a link inside a copied skill that points outside the roots refuses the copy', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  const outside = path.join(os.tmpdir(), `acm-outside-${process.pid}.md`)
+  fs.writeFileSync(outside, 'not part of the skill\n')
+  fs.symlinkSync(outside, path.join(piSkill, 'elsewhere.md'))
+  discover(config)
+
+  const planned = plan(config, piSkill, 'codex:user')
+  const applied = applyPlan(config, planned)
+
+  assert.equal(applied.outcome, 'refused')
+  assert.match(applied.reason ?? '', /links to .* and .* outside the home directory and the project root/)
+  assert.equal(fs.existsSync(path.join(sharedSkills(config), 'review')), false)
+  fs.rmSync(outside, { force: true })
+})
+
+test('a credential in any text file of a skill stops the copy, not just in SKILL.md', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  fs.mkdirSync(path.join(piSkill, 'references'))
+  fs.writeFileSync(
+    path.join(piSkill, 'references', 'api.md'),
+    'Use the key ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789\n',
+  )
+  discover(config)
+
+  const planned = plan(config, piSkill, 'codex:user')
+
+  assert.deepEqual(planned.writes, [])
+  assert.deepEqual(planned.equivalence.carried, [])
+  assert.deepEqual(planned.equivalence.gaps, [
+    { field: 'references/api.md', reason: 'credential', replacement: 'dropped' },
+  ])
+  assert.deepEqual(planned.security.secrets, [{ pointer: 'references/api.md', verdict: 'secret' }])
+  assert.equal(JSON.stringify(planned).includes('ghp_'), false)
+})
+
+test('a skill directory whose entry point cannot be read is refused, not copied', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  // A directory named `SKILL.md` exists but yields no text: the skill cannot be described.
+  fs.mkdirSync(path.join(piSkill, 'SKILL.md'), { recursive: true })
+  discover(config)
+
+  const row = listInstallations(config, {}).installations.find(
+    (candidate) => candidate.nativeFile === piSkill,
+  )
+  assert.ok(row)
+  const result = planMirror(config, row.id, 'codex:user')
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /cannot be read, so the skill cannot be described/)
+})
+
+test('an instruction source edited since the scan is refused instead of mirrored stale', () => {
+  const config = fixture()
+  fs.writeFileSync(codexAgentMd(config), '# Rules\n\none\n')
+  discover(config)
+  fs.appendFileSync(codexAgentMd(config), '\ntwo\n')
+
+  const result = planMirror(
+    config,
+    listInstallations(config, {}).installations.find((row) => row.nativeFile === codexAgentMd(config))?.id ??
+      '',
+    'pi:user',
+  )
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /changed since the last scan/)
+})
+
+test('an oversized shared instruction file is unverified even with nothing to write', () => {
+  const config = fixture()
+  const body = `# House rules\n\n${'x'.repeat(40 * 1024)}\n`
+  fs.writeFileSync(codexAgentMd(config), body)
+  fs.writeFileSync(projectAgentMd(config), body)
+  discover(config)
+
+  const planned = plan(config, codexAgentMd(config), 'oc:project')
+
+  assert.equal(planned.disposition.kind, 'alreadyPresent')
+  assert.deepEqual(planned.writes, [])
+  assert.match(planned.manualSteps.map((step) => step.step).join(' '), /project_doc_max_bytes/)
+  const verified = verifyPlanDocument(config, planned)
+  assert.equal(verified.kind === 'ok' ? verified.verification.outcome : 'refused', 'unverified')
+})
+
+test('an OpenCode-only target is not warned about an adjacent CLAUDE.md', () => {
+  const config = fixture()
+  const body = '# Rules\n'
+  fs.writeFileSync(codexAgentMd(config), body)
+  fs.writeFileSync(path.join(config.home, '.config', 'opencode', 'CLAUDE.md'), '# OpenCode ignores this\n')
+  discover(config)
+
+  const planned = plan(config, codexAgentMd(config), 'oc:user')
+
+  assert.equal(planned.writes[0]?.op, 'symlink')
+  assert.equal(planned.manualSteps.some((step) => step.step.includes('CLAUDE.md')), false)
+})
+
+test('one file written two ways by one plan is refused before anything lands', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  discover(config)
+  const planned = plan(config, piSkill, 'codex:user')
+  const [copy] = planned.writes
+  assert.ok(copy !== undefined && copy.op === 'copyFile')
+
+  const mixed = applyPlan(
+    config,
+    resign(planned, [
+      copy,
+      {
+        op: 'writeAtPointer',
+        file: copy.file,
+        pointer: 'SKILL.md',
+        value: 'half a skill',
+        precondition: { exists: false, digest: null },
+        reversible: true,
+        priorValue: null,
+        executable: false,
+        secretValues: false,
+        irreversible: false,
+      },
+    ]),
+  )
+
+  assert.equal(mixed.outcome, 'refused')
+  assert.match(mixed.reason ?? '', /written two ways by one plan/)
+  assert.equal(fs.existsSync(copy.file), false)
+})
+
+test('a skill directory the scan cannot list makes the tier unreadable, and tombstones nothing', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill, { script: '#!/bin/sh\n' })
+  discover(config)
+  const before = listInstallations(config, { category: 'skills' }).installations.length
+  assert.equal(before, 1)
+
+  const unreadable = path.join(piSkill, 'scripts')
+  fs.chmodSync(unreadable, 0o000)
+  try {
+    const scan = discover(config)
+    assert.equal(
+      scan.tierHealth.find((health) => health.tierId === 'pi:user')?.status,
+      'unreadable',
+    )
+    // An unreadable tier tombstones nothing: the skill it could not list is still in the inventory.
+    const after = listInstallations(config, { category: 'skills' }).installations
+    assert.equal(after.length, 1)
+    assert.equal(after[0]?.removedAt, null)
+  } finally {
+    fs.chmodSync(unreadable, 0o755)
+  }
+})
