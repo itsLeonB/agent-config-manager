@@ -7,6 +7,7 @@ import {
   containmentFault,
   executePlan,
   verifyPlan,
+  type ApplyOptions,
   type ApplyResult,
   type VerifyResult,
 } from './apply.ts'
@@ -286,13 +287,19 @@ function asDocument(rawPlan: Json | MirrorPlan): Json {
 
 // Applying takes the document a caller was given and executes it; nothing is re-derived, so a plan
 // that no longer matches its targets is reported stale instead of being quietly re-planned.
-export function applyPlan(config: EngineConfig, rawPlan: Json | MirrorPlan): ApplyResult {
+export function applyPlan(
+  config: EngineConfig,
+  rawPlan: Json | MirrorPlan,
+  options: ApplyOptions = {},
+): ApplyResult {
   const validated = validatePlan(asDocument(rawPlan))
   if (validated.kind === 'refused') {
     return {
       outcome: 'refused',
       planId: null,
       reason: validated.reason,
+      grade: null,
+      consent: null,
       landed: [],
       failed: null,
       verification: null,
@@ -301,7 +308,7 @@ export function applyPlan(config: EngineConfig, rawPlan: Json | MirrorPlan): App
   }
   const adapters = createAdapters(config)
   const plan = validated.plan
-  const result = executePlan(config, adapters, plan)
+  const result = executePlan(config, adapters, plan, options)
   if (result.outcome === 'applied' || result.outcome === 'partial') {
     recordMirror(config, adapters, plan, result)
   }
@@ -345,7 +352,8 @@ function recordMirror(
   recordApply(config.storePath, {
     at: new Date().toISOString(),
     planId: plan.planId,
-    grade: plan.security.grade,
+    // The grade apply computed, not the claim the document carried.
+    grade: result.grade ?? plan.security.grade,
     outcome: result.outcome,
     toolVersion: plan.toolVersion,
     sourceInstallationId: plan.source.installationId,

@@ -23,7 +23,7 @@ const USAGE = `usage: acm <command>
   mirror   print the plan for moving one installation into a target tier, writing nothing
            <id|prefix> --target <harness:tier> --plan
   apply    execute the plan document exactly as given, and record what landed
-           <plan.json|->
+           <plan.json|-> [--on-conflict abort|replace]
   verify   re-read the target and report each of the plan's assertions
            <plan.json|->
 `
@@ -180,13 +180,34 @@ function readPlan(argv: string[]): Json | null {
   }
 }
 
+// Overwriting a value a human already wrote at that address is a named act: the flag is the ask, and
+// its absence is the default refusal.
+function readApply(argv: string[]): { raw: Json; onConflict: 'abort' | 'replace' } | null {
+  let values: { 'on-conflict'?: string }
+  let positionals: string[]
+  try {
+    const parsed = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { 'on-conflict': { type: 'string' } },
+    })
+    values = parsed.values
+    positionals = parsed.positionals
+  } catch {
+    return null
+  }
+  const raw = readPlan(positionals)
+  if (raw === null) return null
+  return { raw, onConflict: values['on-conflict'] === 'replace' ? 'replace' : 'abort' }
+}
+
 function apply(argv: string[]): number {
-  const raw = readPlan(argv)
-  if (raw === null) {
+  const input = readApply(argv)
+  if (input === null) {
     process.stderr.write('acm apply reads one plan document from a file or from stdin\n')
     return 1
   }
-  const result = applyPlan(resolveDefaultConfig(), raw)
+  const result = applyPlan(resolveDefaultConfig(), input.raw, { onConflict: input.onConflict })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
   return result.outcome === 'applied' ? 0 : 1
 }
