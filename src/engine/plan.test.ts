@@ -71,6 +71,12 @@ function plan(config: EngineConfig, name: string, target: string): MirrorPlan {
   return result.kind === 'plan' ? result.plan : assert.fail('unreachable')
 }
 
+// The prefix `acm list` prints, which is what a caller types. Slicing the raw id would take eight
+// characters of `sha256:` and leave a one-character prefix that can match two rows.
+function shortId(id: string): string {
+  return id.replace(/^sha256:/, '').slice(0, 8)
+}
+
 function writeValues(plan: MirrorPlan): Map<string, unknown> {
   return new Map(plan.writes.map((write) => [write.pointer, write.value]))
 }
@@ -514,8 +520,8 @@ test('planning never tombstones an installation the scan no longer sees', () => 
     JSON.stringify({ mcpServers: { serena: { command: 'serena' } } }),
   )
 
-  const planned = runCli(config, ['mirror', id.slice(0, 8), '--target', 'codex:user', '--plan'])
-  assert.equal(planned.status, 0)
+  const planned = runCli(config, ['mirror', shortId(id), '--target', 'codex:user', '--plan'])
+  assert.equal(planned.status, 0, planned.stderr)
 
   const rows = listInstallations(config, { includeRemoved: true }).installations
   assert.equal(rows.length, 2)
@@ -741,19 +747,19 @@ test('the CLI prints the plan document and writes nothing; without --plan it ref
   piFixture(config, { serena: { command: 'serena' } })
   const id = onlyId(config, 'serena')
 
-  const planned = runCli(config, ['mirror', id.slice(0, 8), '--target', 'codex:user', '--plan'])
-  assert.equal(planned.status, 0)
+  const planned = runCli(config, ['mirror', shortId(id), '--target', 'codex:user', '--plan'])
+  assert.equal(planned.status, 0, planned.stderr)
   const document = JSON.parse(planned.stdout)
   assert.equal(document.kind, 'mirror')
   assert.equal(document.target.tierId, 'codex:user')
   assert.equal(planIntact(document), true)
   assert.equal(fs.existsSync(codexFile(config)), false)
 
-  const noPlan = runCli(config, ['mirror', id.slice(0, 8), '--target', 'codex:user'])
+  const noPlan = runCli(config, ['mirror', shortId(id), '--target', 'codex:user'])
   assert.equal(noPlan.status, 1)
   assert.match(noPlan.stderr, /pass --plan/)
 
-  const refused = runCli(config, ['mirror', id.slice(0, 8), '--target', 'codex:profile', '--plan'])
+  const refused = runCli(config, ['mirror', shortId(id), '--target', 'codex:profile', '--plan'])
   assert.equal(refused.status, 1)
   assert.match(refused.stderr, /refused: codex:profile is notState/)
 })
