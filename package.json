@@ -12,7 +12,11 @@
     "preview": "vite preview",
     "lint": "oxlint",
     "test": "node --test",
+    "acm": "node src/cli/main.ts",
     "start": "node tools/entrypoint.mjs"
+  },
+  "bin": {
+    "acm": "./src/cli/main.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.18",
