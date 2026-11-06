@@ -1,3 +1,5 @@
+import type { McpWriteSurface } from './mcp-write.ts'
+
 export type Category = 'mcp' | 'skills' | 'instructions' | 'hooks'
 export type HarnessId = 'pi' | 'codex' | 'opencode'
 export type ScopeBucket = 'user' | 'project' | 'project-local' | 'system'
@@ -44,4 +46,7 @@ export interface Adapter {
   tiers: readonly Tier[]
   claimedCategories: readonly Category[]
   handlers: Partial<Record<Category, CategoryHandler>>
+  // What this harness can write for a category a planner covers. A category with no surface is
+  // read-only here, and a mirror into it is refused as caller input rather than planned.
+  mcpWrite?: McpWriteSurface
 }

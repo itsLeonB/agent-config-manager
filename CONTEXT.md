@@ -68,8 +68,8 @@ _Avoid_: sync, copy, port, convert
 
 **Field-equivalence**: what "equivalent" means throughout this file. A mirror is equivalent when the
 source Installation's `known fields` are fully partitioned into what the target carries
-(`carried[]`), what it carries under another name or polarity (`mapped[]`), and what it provably
-cannot (`gaps[]`), and a human approved that partition. Enumerable and assertable on disk; never a
+(`carried[]`), what it carries under another name or polarity (`mapped[]`), what it provably cannot
+(`gaps[]`), and what no adapter names (`preserved[]`), and a human approved that partition. Enumerable and assertable on disk; never a
 claim that two harnesses behave the same.
 _Avoid_: parity, identical, same config, lossless
 
