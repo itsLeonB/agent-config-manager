@@ -47,9 +47,12 @@ settled decisions.
   Every write transaction opens with `BEGIN IMMEDIATE`, because the CLI, the MCP server, and the
   scanner all open the file.
 - **The engine and the CLI are a second face over that store.** `src/engine/service.ts` exposes
-  `discover()` and `listInstallations()`; `src/engine/repo.ts` is the only module that calls
-  `store.cjs`; `src/engine/adapters/` holds one directory per harness (Pi, Codex, OpenCode), shared
-  MCP fact storage in `mcp-facts.ts`, and per-tier file reading in `tier.ts`; and
+  `discover()`, `listInstallations()`, `inspectInstallation()`, and `planMirror()`;
+  `src/engine/repo.ts` is the only module that calls `store.cjs`; `src/engine/plan.ts` builds the
+  mirror plan document from a stored row and the target file alone (it writes nothing);
+  `src/engine/adapters/` holds one directory per harness (Pi, Codex, OpenCode), shared
+  MCP fact storage in `mcp-facts.ts`, the per-harness MCP write surfaces and transforms in
+  `mcp-write.ts`, and per-tier file reading in `tier.ts`; and
   `src/engine/adapters/registry.ts` fails at load when a claimed category has no handler. Roots
   (home, project root, store path, `CODEX_HOME`) arrive as an injected `EngineConfig`, never read
   from the working directory; `ACM_HOME` / `ACM_PROJECT_ROOT` / `ACM_STORE` are the boundary

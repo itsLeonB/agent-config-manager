@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util'
 import { resolveDefaultConfig } from '../engine/config.ts'
-import { discover, inspectInstallation, listInstallations } from '../engine/service.ts'
+import { discover, inspectInstallation, listInstallations, planMirror } from '../engine/service.ts'
 import type { Inspection } from '../engine/service.ts'
 import type { InstallationRow } from '../server/store.cjs'
 
@@ -11,6 +11,8 @@ const USAGE = `usage: acm <command>
            [--category <category>] [--harness <harness>] [--scope <scope>] [--all] [--json]
   inspect  report one installation's known fields, each credential withheld with its verdict
            <id|prefix> [--json]
+  mirror   print the plan for moving one installation into a target tier, writing nothing
+           <id|prefix> --target <harness:tier> --plan
 `
 
 interface ListOptions {
@@ -26,6 +28,7 @@ function main(argv: string[]): number {
   const rest = argv.slice(1)
   if (command === 'list') return list(rest)
   if (command === 'inspect') return inspect(rest)
+  if (command === 'mirror') return mirror(rest)
   process.stderr.write(USAGE)
   return 1
 }
@@ -100,6 +103,49 @@ function inspect(argv: string[]): number {
   }
   process.stdout.write(formatInspection(result.inspection, config.home))
   return 0
+}
+
+interface MirrorOptions {
+  id?: string
+  target?: string
+  plan: boolean
+}
+
+// A plan is one document on stdout: the caller carries it back to apply, so nothing is written and
+// no id is printed for a later lookup. The scan runs first so the source row and its digest are the
+// ones the target's preconditions are checked against.
+function mirror(argv: string[]): number {
+  const options = parseMirrorOptions(argv)
+  if (options.id === undefined || options.target === undefined) {
+    process.stderr.write(USAGE)
+    return 1
+  }
+  if (!options.plan) {
+    process.stderr.write('acm mirror writes nothing yet: pass --plan (apply lands with ticket 20)\n')
+    return 1
+  }
+  const config = resolveDefaultConfig()
+  discover(config)
+  const result = planMirror(config, options.id, options.target)
+  if (result.kind === 'refused') {
+    process.stderr.write(`refused: ${result.reason}\n`)
+    return 1
+  }
+  process.stdout.write(`${JSON.stringify(result.plan, null, 2)}\n`)
+  return 0
+}
+
+function parseMirrorOptions(argv: string[]): MirrorOptions {
+  try {
+    const { values, positionals } = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { target: { type: 'string' }, plan: { type: 'boolean' } },
+    })
+    return { id: positionals[0], target: values.target, plan: values.plan === true }
+  } catch {
+    return { plan: false }
+  }
 }
 
 interface InspectOptions {

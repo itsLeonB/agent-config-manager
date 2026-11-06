@@ -1,6 +1,7 @@
 import path from 'node:path'
 import type { EngineConfig } from '../../config.ts'
 import { mcpInstallation } from '../mcp-facts.ts'
+import { MCP_WRITE_SURFACES } from '../mcp-write.ts'
 import { readTier } from '../tier.ts'
 import type { Adapter, Tier, TierRead } from '../types.ts'
 import { readCodexMcpToml } from './read.ts'
@@ -47,6 +48,7 @@ export function createCodexAdapter(config: EngineConfig): Adapter {
     tiers: codexTiers(config),
     claimedCategories: ['mcp'],
     handlers: { mcp: { read: readMcpTier } },
+    mcpWrite: MCP_WRITE_SURFACES.codex,
   }
 }
 
