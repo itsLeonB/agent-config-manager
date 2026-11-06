@@ -55,7 +55,10 @@ it consumes, the target field, and the template where one is needed.
 | `unit` | numeric rescale | `timeoutStartup` s → OpenCode ms; the reverse on read |
 | `infer` | value derived from which fields are present | `type: local/remote` from `command` vs `url`; nothing in Codex or Pi |
 | `extract` | a component of a formatted value, pulled into a dedicated field (`template` = regex, one capture) | Pi `headers.Authorization: "Bearer ${T}"` → Codex `bearer_token_env_var: "T"`; Pi `env.K: "${K}"` → Codex `env_vars: ["K"]` |
-| `wrap` | a bare identifier becomes an interpolation reference (`template` = string with `$value`) | Codex `bearer_token_env_var: "T"` → Pi `headers.Authorization: "Bearer ${T}"`; Codex `env_vars: ["K"]` → Pi `env.K: "${K}"`, OpenCode `environment.K: "{env:K}"` |
+| `wrap` | a bare identifier becomes an interpolation reference (`template` = string with `$value`) | Codex `bearer_token_env_var: "T"` → Pi `headers.Authorization: "Bearer ${T}"`; Codex `env_vars: ["K"]` → Pi `env.K: "${K}"` |
+
+OpenCode has no passthrough list, so a Codex `env_vars` heading for `oc:*` is a `fieldAbsent` gap, and
+its `env` is read as the `{env:VAR}` reference form rather than a bare name.
 
 `extract` and `wrap` exist because Codex does no interpolation at all: a copied `"Bearer ${T}"` or
 `"${T}"` arrives in the child process as those characters, so the variable *name* has to travel
@@ -92,7 +95,7 @@ as `{pointer, kind: 'leaf' | 'file'}`; a field holding one becomes a `credential
 
 | harness | category | pointers |
 |---|---|---|
-| Pi | `mcp` | `env.<K>`, `headers.<H>`, `url` (basic-auth userinfo), `auth` |
+| Pi | `mcp` | `env.<K>`, `headers.<H>`, `url` (basic-auth userinfo, credential-shaped query parameter), `auth`, `oauth.clientSecret` |
 | Pi | `hooks`, `skills`, `instructions` | whole file (`kind: 'file'`) — `hooks` is code |
 | Codex | `mcp` | `env.<K>`, `http_headers.<H>`, `oauth.client_secret`, `auth.idp.client_secret`, `url`, `http_headers_helper` (`executable`) |
 | Codex | `hooks` | `hooks[].command` (`executable`) |
@@ -101,6 +104,21 @@ as `{pointer, kind: 'leaf' | 'file'}`; a field holding one becomes a `credential
 | OpenCode | `hooks` | generated plugin file (`kind: 'file'`) |
 | OpenCode | `skills`, `instructions` | whole file |
 
-A reference is not a credential: `${VAR}`, `{env:VAR}`, `{file:path}` and Pi's `!command` are clean by
-construction, which is what lets a mirror carry `env.K: "${K}"` while withholding a literal token at
-the same address.
+Pi's `mcp.json` really does carry `oauth.clientSecret`; the current reader does not name `oauth` at
+all, so it never becomes a fact and no gap is reported for it — nothing to migrate out, nothing to
+leak. A url is the one value whose verdict can be partial: basic-auth userinfo is dropped and the
+address survives.
+
+A hook command is the table's one entry that is not a secret: `hooks[].command` is executable content,
+so it may be mirrored as a write flagged `executable` — its own approval tick, and a plan that carries
+it can never land `verified` ([capability-gap semantics](../.scratch/acm-rearchitecture/issues/11-capability-gap-semantics.md) §7).
+It becomes a `credential` gap only when the classifier finds a provider token or a private key inside
+it. Today no hook is read or written at all; the category lands with its own tickets.
+
+A reference is not a credential. Three forms are clean by construction — `${VAR}`, `{env:VAR}`,
+`{file:path}` — which is what lets a mirror carry `env.K: "${K}"` while withholding a literal token at
+the same address. Pi's `!command` is different: it is clean but `executable`, and it can hold a literal
+credential of its own. The classifier withholds one carrying a recognised provider token or a
+private-key block; any other credential in a command is not detectable that way, so it can still
+appear in stored facts and in a Pi mirror plan. Treat a `!command` as executable content to be
+reviewed, not as a secret-free value.

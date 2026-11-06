@@ -260,10 +260,18 @@ test('resolveScanInterval floors a valid sub-minute value at one minute', () => 
 test('a scan writes the snapshot to the database and creates no local JSON file', () => {
   const db = tempStoreFile();
   const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-manager-test-'));
+  const logged = [];
+  const log = console.log;
+  console.log = (...parts) => logged.push(parts.join(' '));
   try {
     scanOnce(
       { projectsRoot, scanIntervalMinutes: 15, skipPaths: [], environmentTools: [] },
       db
+    );
+    // The message has to name the store it wrote: a hard-coded path reads as the real database.
+    assert.ok(
+      logged.some((line) => line.includes(`-> ${db}`)),
+      `scan message did not name ${db}: ${logged.join(' | ')}`
     );
 
     const reader = openStore(db);
@@ -275,6 +283,7 @@ test('a scan writes the snapshot to the database and creates no local JSON file'
 
     assert.ok(!fs.existsSync(path.join(path.dirname(db), 'local.json')));
   } finally {
+    console.log = log;
     fs.rmSync(projectsRoot, { recursive: true, force: true });
     fs.rmSync(path.dirname(db), { recursive: true, force: true });
   }

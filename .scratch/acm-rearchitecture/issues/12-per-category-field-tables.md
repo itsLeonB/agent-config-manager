@@ -122,8 +122,11 @@ precedence against `~/.config/opencode` is still unverified).
 | OpenCode | `~/.config/opencode/opencode.json(c)`, `<repo>/.opencode/opencode.json(c)`, `~/.config/opencode/plugins/<name>.ts`, `<repo>/.opencode/plugins/<name>.ts`, `~/.config/opencode/skills/<name>/`, `~/.config/opencode/AGENTS.md` |
 
 **1.3 MCP field vocabulary.** Canonical name on the left, native address per harness on the right.
-`expressible` per harness is exactly the canonical names that harness can express; anything else is a
-gap. The table, the seven transforms, the per-tier allowlists, and the credential pointers now live in
+`expressible` per harness is the canonical names that harness can express. A field the target declares
+it provably lacks is a gap; a field neither written nor declared absent is `preserved` — untouched and
+unclaimed — so a fact added to the vocabulary before its rule lands stays visible instead of reading as
+lost. A stored `toolExposure` reaching a Pi plan is the second case today: Pi owns the field, no rule
+writes it, and the plan reports it preserved. The table, the seven transforms, the per-tier allowlists, and the credential pointers now live in
 one place — **[MCP field tables](../../../docs/mcp-field-tables.md)** — because the code mirrors them:
 `src/engine/adapters/mcp-write.ts` holds the rules and per-target absences over the vocabulary in
 `mcp-facts.ts`. Change one and the same change belongs in the other.

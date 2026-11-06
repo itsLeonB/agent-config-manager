@@ -109,7 +109,9 @@ export function knownFieldsForStorage(facts: McpFacts): McpFacts {
 
 function classifyScalar(pointer: string, value: string | undefined): string | undefined {
   if (value === undefined) return undefined
-  if (pointer === 'url' && value.includes('@')) return withoutUserinfo(value)
+  // Userinfo and query parameters are the two places an address can hide a credential, so an
+  // address carrying either is parsed rather than classified as one opaque string.
+  if (pointer === 'url' && (value.includes('@') || value.includes('?'))) return withoutUserinfo(value)
   const { verdict } = classify(pointer, value, MCP_CREDENTIAL_POINTERS)
   return verdict === 'clean' ? value : withheldMarker(verdict)
 }
@@ -134,22 +136,27 @@ function storedValue(pointer: string, value: string): string {
 }
 
 // A url is not a credential pointer — a plain address has to stay readable — but basic-auth userinfo
-// is one. It is the userinfo that is dropped, not the address, so inspect still names the server; a
-// token anywhere else in the address is still caught by the rules every other value goes through.
+// and a credential-shaped query parameter are. Userinfo is dropped, the address survives, so inspect
+// still names the server; a query parameter is judged by its own name and value, because a `?token=`
+// whose value is not provider-shaped would otherwise read as clean and reach the store verbatim.
 function withoutUserinfo(url: string): string {
-  let stripped: string
+  let parsed: URL
   let hadUserinfo: boolean
   try {
-    const parsed = new URL(url)
+    parsed = new URL(url)
     hadUserinfo = parsed.username !== '' || parsed.password !== ''
     parsed.username = ''
     parsed.password = ''
-    stripped = parsed.toString()
   } catch {
     // Fail closed: an address this process cannot parse is exactly the one whose userinfo it
     // cannot prove it removed.
     return withheldMarker('secret')
   }
+  for (const [name, value] of parsed.searchParams) {
+    const { verdict } = classify(`url.${name}`, value, MCP_CREDENTIAL_POINTERS)
+    if (verdict !== 'clean') return withheldMarker(verdict)
+  }
+  const stripped = parsed.toString()
   const { verdict } = classify('url', stripped, MCP_CREDENTIAL_POINTERS)
   if (verdict !== 'clean') return withheldMarker(verdict)
   return hadUserinfo ? `${withheldMarker('secret')} ${stripped}` : stripped
