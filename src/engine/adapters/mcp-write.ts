@@ -1,3 +1,7 @@
+// The rules below are the machine-readable half of docs/mcp-field-tables.md: one surface per harness,
+// listing the canonical facts it expresses and the transforms that get them there. A change to a
+// table in that doc belongs here too, and `plan.test.ts` checks that every name used here is a
+// canonical fact and that no field is both written and declared absent.
 import { z } from 'zod'
 import { withheldVerdict, type McpFacts, type McpValue } from './mcp-facts.ts'
 import type { HarnessId } from './types.ts'

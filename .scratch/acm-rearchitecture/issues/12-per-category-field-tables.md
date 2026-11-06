@@ -121,39 +121,15 @@ precedence against `~/.config/opencode` is still unverified).
 | Codex | `$CODEX_HOME/config.toml`, `<repo>/.codex/config.toml`, `$CODEX_HOME/hooks.json`, `<repo>/.codex/hooks.json`, `$HOME/.agents/skills/<name>/`, `<repo>/.agents/skills/<name>/`, `$CODEX_HOME/AGENTS.md` |
 | OpenCode | `~/.config/opencode/opencode.json(c)`, `<repo>/.opencode/opencode.json(c)`, `~/.config/opencode/plugins/<name>.ts`, `<repo>/.opencode/plugins/<name>.ts`, `~/.config/opencode/skills/<name>/`, `~/.config/opencode/AGENTS.md` |
 
-**1.3 MCP field vocabulary.** Canonical on the left; the address is native per harness. `expressible`
-per harness is exactly the canonical names that harness can express — anything else is a gap.
-
-| canonical | Codex `[mcp_servers.<id>]` | OpenCode `mcp.servers.<id>` | Pi `mcpServers.<id>` |
-|---|---|---|---|
-| `transport` | — (inferred from `command` vs `url`) | `type: local \| remote` (required) | `type?` (inferred) |
-| `command` | `command` (string) | `command` key | `command` |
-| `args` | `args` | remainder of `command[]` | `args` |
-| `cwd` | `cwd` | `cwd` | `cwd` |
-| `env` | `[mcp_servers.<id>.env]` | `environment` (`{env:VAR}` only) | `env` (`${VAR}`, `!cmd`) |
-| `envPassthrough` | `env_vars` | — | — |
-| `url` | `url` | `url` | `url` |
-| `headers` | `http_headers` | `headers` | `headers` |
-| `enabled` | `enabled` | `disabled` (**inverted**) | `enabled` |
-| `timeoutStartup` | `startup_timeout_sec` (s) | `timeout.startup` (**ms**) | — |
-| `timeoutRequest` | `tool_timeout_sec` (s) | `timeout.execution` (**ms**) | `timeout` (s) |
-| `bearerTokenEnvVar` | `bearer_token_env_var` | — | — |
-| `description` | — | — | `description` |
-| `exposure` / `toolExposure` | — | — | Pi-only |
-| `codemode` / `pool` / `protocol` | — | OpenCode-only | — |
-| `approvalMode` / `disabledTools` / `required` / `startupReadiness` / `supportsParallelToolCalls` | Codex-only | — | — |
-
-The seven transforms, each with its instance in this table:
-
-| transform | Meaning | Instance |
-|---|---|---|
-| `rename` | same value, new key | `env` → `environment`; `tool_timeout_sec` → `timeout` |
-| `invert` | boolean flip | `enabled` ⇄ `disabled` |
-| `concat` | several source fields into one target value | `command` + `args` → OpenCode `command[]` |
-| `unit` | numeric rescale | `timeoutStartup` s ⇄ ms; `timeoutRequest` s ⇄ ms |
-| `infer` | value derived from which fields are present | `type: local/remote` ⇄ `command`/`url`; Codex `transport` absent |
-| `extract` | a component of a formatted value, pulled into a dedicated field (`template` = regex, one capture) | Pi `headers.Authorization: "Bearer ${T}"` → Codex `bearer_token_env_var: "T"` |
-| `wrap` | a bare identifier becomes an interpolation reference (`template` = string with `$value`) | Codex `bearer_token_env_var: "T"` → Pi `headers.Authorization: "Bearer ${T}"`; Codex `env_vars: ["K"]` → Pi `env.K: "${K}"`, OpenCode `environment.K: "{env:K}"` |
+**1.3 MCP field vocabulary.** Canonical name on the left, native address per harness on the right.
+`expressible` per harness is the canonical names that harness can express. A field the target declares
+it provably lacks is a gap; a field neither written nor declared absent is `preserved` — untouched and
+unclaimed — so a fact added to the vocabulary before its rule lands stays visible instead of reading as
+lost. A stored `toolExposure` reaching a Pi plan is the second case today: Pi owns the field, no rule
+writes it, and the plan reports it preserved. The table, the seven transforms, the per-tier allowlists, and the credential pointers now live in
+one place — **[MCP field tables](../../../docs/mcp-field-tables.md)** — because the code mirrors them:
+`src/engine/adapters/mcp-write.ts` holds the rules and per-target absences over the vocabulary in
+`mcp-facts.ts`. Change one and the same change belongs in the other.
 
 `extract` and `wrap` are why 07's `{field, targetField, transform}` could not survive: the mapping
 is real, mechanical, and **not** a byte copy, and Codex does no interpolation at all — a copied
@@ -180,16 +156,9 @@ harnesses returns 07's `already shared` plan with `writes: []`.
 
 ### 2. Per-category tables
 
-**2.1 `mcp`** — `writeAtPointer`. Every row `method: file`.
-
-| harness | tier | expressible | notes |
-|---|---|---|---|
-| Pi | `pi:user` | `transport, command, args, cwd, env, url, headers, enabled, timeoutRequest, description, exposure, toolExposure` | `type` optional and inferred; `sse` rejected |
-| Pi | `pi:project` | same | a project entry **replaces** the user entry of the same name unless it carries no `command`/`url`/`type`, so a write must carry the full entry |
-| Codex | `codex:user` | `transport, command, args, cwd, env, envPassthrough, url, headers, enabled, timeoutStartup, timeoutRequest, bearerTokenEnvVar, approvalMode, disabledTools, required, startupReadiness, supportsParallelToolCalls` | `[features]`-free; `mcp add` unusable (§6) |
-| Codex | `codex:project` | same | inert until `[projects."<path>"].trust_level = "trusted"` in the **user** config → `manualSteps[]` |
-| OpenCode | `oc:user` | `transport, command, args, cwd, env, url, headers, enabled, timeoutStartup, timeoutRequest, codemode, pool, protocol` | `disabled`, and whole-entry replace means the write must be complete |
-| OpenCode | `oc:project` | same | a root-managed `/etc/opencode` outranks it → `manualSteps[]` naming the shadowing layer |
+**2.1 `mcp`** — `writeAtPointer`. Every row `method: file`. The per-tier allowlist and the notes each
+tier carries (Pi's project replace, Codex's trust switch, OpenCode's shadowing layer) are in
+[MCP field tables](../../../docs/mcp-field-tables.md#expressible-per-harness-tier).
 
 Retired from 07 §3: Codex `.env` is `env` (carried, not a `shapeOnly` gap), and
 `startup_timeout_sec` → OpenCode is `unit`, not a gap. Still a gap: `startup_timeout_sec` → Pi
@@ -262,18 +231,8 @@ already allows.
 
 ### 3. Credential pointers
 
-`credentialPointers` per adapter, values never entering `knownFields`:
-
-| harness | category | pointers |
-|---|---|---|
-| Pi | `mcp` | `env.<K>`, `headers.<H>`, `url` (basic-auth userinfo), `auth` |
-| Pi | `hooks`, `skills`, `instructions` | whole file (`kind: 'file'`) — `hooks` is code |
-| Codex | `mcp` | `env.<K>`, `http_headers.<H>`, `oauth.client_secret`, `auth.idp.client_secret`, `url`, `http_headers_helper` (`executable`) |
-| Codex | `hooks` | `hooks[].command` (`executable`) |
-| Codex | `skills`, `instructions` | whole file |
-| OpenCode | `mcp` | `environment.<K>`, `headers.<H>`, `oauth.client_secret`, `url` |
-| OpenCode | `hooks` | generated plugin file (`kind: 'file'`) |
-| OpenCode | `skills`, `instructions` | whole file |
+`credentialPointers` per adapter, values never entering `knownFields`. The per-harness list is in
+[MCP field tables](../../../docs/mcp-field-tables.md#credential-pointers).
 
 Pi's `mcp.json` **does** carry an OAuth client secret (`oauth.clientSecret`) — this corrects the
 map line that says credentials sit outside Pi's served tables — and OpenCode carries

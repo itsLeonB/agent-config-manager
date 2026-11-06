@@ -393,23 +393,12 @@ is.
 
 ### 7. Translation rules per category
 
-**MCP** — `writeAtPointer`, `method: file` everywhere. Canonical vocabulary with a native address per
-harness:
+**MCP** — `writeAtPointer`, `method: file` everywhere.
 
-| canonical | Codex | OpenCode | Pi |
-|---|---|---|---|
-| `transport` | inferred from `command` vs `url` | `type: local \| remote` (required) | `type?` (inferred) |
-| `command`, `args` | `command`, `args` | one `command[]` array | `command`, `args` |
-| `cwd` | `cwd` | `cwd` | `cwd` |
-| `env` | `[mcp_servers.<id>.env]` | `environment` (`{env:V}` only) | `env` (`${V}`, `!cmd`) |
-| `envPassthrough` | `env_vars` | — | — |
-| `url`, `headers` | `url`, `http_headers` | `url`, `headers` | `url`, `headers` |
-| `enabled` | `enabled` | `disabled` (**inverted**) | `enabled` |
-| `timeoutStartup` | `startup_timeout_sec` (s) | `timeout.startup` (**ms**) | — |
-| `timeoutRequest` | `tool_timeout_sec` (s) | `timeout.execution` (**ms**) | `timeout` (s) |
-| `bearerTokenEnvVar` | `bearer_token_env_var` | — | — |
-| `description` | — | — | `description` |
-| harness-only extras | `approvalMode`, `disabledTools`, `required`, `startupReadiness`, `supportsParallelToolCalls` | `codemode`, `pool`, `protocol` | `exposure`, `toolExposure` |
+The canonical vocabulary with each harness's native address, the seven transforms with their
+instances, the per-tier allowlists, and the credential pointers are tabulated once in
+[docs/mcp-field-tables.md](../../docs/mcp-field-tables.md) and mirrored by
+`src/engine/adapters/mcp-write.ts`.
 
 Seven transforms, closed set: `rename` (`env`→`environment`), `invert` (`enabled`⇄`disabled`),
 `concat` (`command`+`args`→`command[]`), `unit` (s⇄ms), `infer` (`type` from which fields exist),

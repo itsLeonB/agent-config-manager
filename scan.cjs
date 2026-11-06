@@ -424,7 +424,7 @@ function scanOnce(config, storeFile = STORE_FILE) {
       `${result.userScope.skills.length} user skills, ` +
       `${result.npxSkillsGlobal.skills.length} npx-skills, ` +
       `${result.environmentTools.filter((t) => t.installedLocally).length}/${result.environmentTools.length} env tools installed, ` +
-      `${result.projects.length} projects -> database/dashboard.db`
+      `${result.projects.length} projects -> ${storeFile}`
   );
   return result;
 }

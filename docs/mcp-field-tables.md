@@ -1,0 +1,124 @@
+# MCP field tables
+
+The canonical MCP fact vocabulary, its native address in each harness, and the transforms between
+them. One table per concern, one home: the planner data that mirrors these tables is
+[`src/engine/adapters/mcp-write.ts`](../src/engine/adapters/mcp-write.ts) (rules and per-target
+absences) over the vocabulary in
+[`src/engine/adapters/mcp-facts.ts`](../src/engine/adapters/mcp-facts.ts). Change a table here and the
+same change belongs in the code, and the reverse.
+
+Two rules decide what a plan does with a field:
+
+- **Gap**: the target provably has no home for the fact, or cannot express this value of it. Reported
+  with one of the five reasons in [capability-gap semantics](../.scratch/acm-rearchitecture/issues/11-capability-gap-semantics.md).
+- **Preserved**: no rule names the fact and no absence covers it. The plan writes nothing and claims
+  nothing, so a fact added to the vocabulary before its rule lands is visible rather than dropped.
+
+## Canonical vocabulary
+
+Canonical name on the left, native address per harness. `subject` is the entry — `[mcp_servers.<id>]`,
+`mcp.servers.<id>`, or `mcpServers.<id>`.
+
+| canonical | Codex `[mcp_servers.<id>]` | OpenCode `mcp.servers.<id>` | Pi `mcpServers.<id>` |
+|---|---|---|---|
+| `transport` | — (inferred from `command` vs `url`) | `type: local \| remote` (required) | `type?` (inferred) |
+| `command` | `command` (string) | `command[]` first element | `command` |
+| `args` | `args` | `command[]` remainder | `args` |
+| `cwd` | `cwd` | `cwd` | `cwd` |
+| `env` | `[mcp_servers.<id>.env]` | `environment` (`{env:VAR}` references) | `env` (`${VAR}` references, `!cmd`) |
+| `envPassthrough` | `env_vars` | — | `env.<K>: "${K}"` (wrapped) |
+| `url` | `url` | `url` | `url` |
+| `headers` | `http_headers` | `headers` | `headers` |
+| `enabled` | `enabled` | `disabled` (**inverted**) | `enabled` |
+| `timeoutStartup` | `startup_timeout_sec` (s) | `timeout.startup` (**ms**) | — |
+| `timeoutRequest` | `tool_timeout_sec` (s) | `timeout.execution` (**ms**) | `timeout` (s) |
+| `bearerTokenEnvVar` | `bearer_token_env_var` | — | `headers.Authorization: "Bearer ${T}"` (wrapped) |
+| `description` | — | — | `description` |
+| `exposure` / `toolExposure` | — | — | Pi-only |
+| `codemode` | — | `codemode` | — |
+| `approvalMode` / `disabledTools` / `required` / `supportsParallelToolCalls` | Codex-only | — | — |
+
+Fields a harness keeps that this slice does not read, and so cannot mirror:
+Codex `startup_readiness`, `enabled_tools`, `scopes`, `oauth`, `http_headers_helper`; OpenCode `pool`,
+`protocol`. A rule for one of these would never match, because no adapter puts it in the vocabulary.
+
+## Transforms
+
+The seven transforms are a closed set. `mapped[]` on a plan names the transform, the canonical fields
+it consumes, the target field, and the template where one is needed.
+
+| transform | Meaning | Instance |
+|---|---|---|
+| `rename` | same value, new key | `env` → `environment`; `headers` → `http_headers` |
+| `invert` | boolean flip | `enabled` ⇄ `disabled` |
+| `concat` | several source fields into one target value | `command` + `args` → OpenCode `command[]` |
+| `unit` | numeric rescale | `timeoutStartup` s → OpenCode ms; the reverse on read |
+| `infer` | value derived from which fields are present | `type: local/remote` from `command` vs `url`; nothing in Codex or Pi |
+| `extract` | a component of a formatted value, pulled into a dedicated field (`template` = regex, one capture) | Pi `headers.Authorization: "Bearer ${T}"` → Codex `bearer_token_env_var: "T"`; Pi `env.K: "${K}"` → Codex `env_vars: ["K"]` |
+| `wrap` | a bare identifier becomes an interpolation reference (`template` = string with `$value`) | Codex `bearer_token_env_var: "T"` → Pi `headers.Authorization: "Bearer ${T}"`; Codex `env_vars: ["K"]` → Pi `env.K: "${K}"` |
+
+OpenCode has no passthrough list, so a Codex `env_vars` heading for `oc:*` is a `fieldAbsent` gap, and
+its `env` is read as the `{env:VAR}` reference form rather than a bare name.
+
+`extract` and `wrap` exist because Codex does no interpolation at all: a copied `"Bearer ${T}"` or
+`"${T}"` arrives in the child process as those characters, so the variable *name* has to travel
+instead of the formatted string. A map that mixes a reference with a literal has no single target
+form on Codex or OpenCode, and is a `shapeOnly` gap.
+
+A literal `env` or `headers` value never reaches a plan in the first place: every harness keeps tokens
+there, so the classifier withholds it and the field becomes a `credential` gap with a manual step
+([secret handling](../.scratch/acm-rearchitecture/spec.md) §6).
+
+## Expressible per (harness, tier)
+
+Every row is `method: file`. The six writable tiers are the mirror targets; `codex:profile` is
+launch-time only and `oc:system` is root-managed, so a plan refuses both as caller input.
+
+| harness | tier | expresses | notes |
+|---|---|---|---|
+| Pi | `pi:user` | `transport, command, args, cwd, env, envPassthrough, url, headers, bearerTokenEnvVar, enabled, timeoutRequest, description, exposure` | `type` optional and inferred; `sse` rejected |
+| Pi | `pi:project` | same | a project entry **replaces** the user entry of the same name unless it carries no `command`/`url`/`type`, so a write must carry the full entry |
+| Codex | `codex:user` | `transport, command, args, cwd, env, envPassthrough, url, headers, enabled, timeoutStartup, timeoutRequest, bearerTokenEnvVar, approvalMode, disabledTools, required, supportsParallelToolCalls` | `[features]`-free; `codex mcp add` re-serializes the whole table, so it is unusable |
+| Codex | `codex:project` | same | inert until `[projects."<path>"].trust_level = "trusted"` exists in the **user** config → `manualSteps[]` |
+| OpenCode | `oc:user` | `transport, command, args, cwd, env, url, headers, enabled, timeoutStartup, timeoutRequest, codemode` | `disabled` is the stored form; whole-entry replace means the write must be complete |
+| OpenCode | `oc:project` | same | a root-managed `/etc/opencode` outranks it → `manualSteps[]` naming the shadowing layer |
+
+Two source fields can compete for one target key: Codex `env_vars` fills Pi's `env`, and
+`bearer_token_env_var` fills Pi's `headers.Authorization`. The source's literal field wins, and the
+loser is reported as `preserved` rather than written over.
+
+## Credential pointers
+
+Values at these addresses never enter known fields, a plan, or a log line. Each adapter declares them
+as `{pointer, kind: 'leaf' | 'file'}`; a field holding one becomes a `credential` gap whose
+`replacement` is always `dropped`, plus the manual step that names where the human gets it instead.
+
+| harness | category | pointers |
+|---|---|---|
+| Pi | `mcp` | `env.<K>`, `headers.<H>`, `url` (basic-auth userinfo, credential-shaped query parameter), `auth`, `oauth.clientSecret` |
+| Pi | `hooks`, `skills`, `instructions` | whole file (`kind: 'file'`) — `hooks` is code |
+| Codex | `mcp` | `env.<K>`, `http_headers.<H>`, `oauth.client_secret`, `auth.idp.client_secret`, `url`, `http_headers_helper` (`executable`) |
+| Codex | `hooks` | `hooks[].command` (`executable`) |
+| Codex | `skills`, `instructions` | whole file |
+| OpenCode | `mcp` | `environment.<K>`, `headers.<H>`, `oauth.client_secret`, `url` |
+| OpenCode | `hooks` | generated plugin file (`kind: 'file'`) |
+| OpenCode | `skills`, `instructions` | whole file |
+
+Pi's `mcp.json` really does carry `oauth.clientSecret`; the current reader does not name `oauth` at
+all, so it never becomes a fact and no gap is reported for it — nothing to migrate out, nothing to
+leak. A url is the one value whose verdict can be partial: basic-auth userinfo is dropped and the
+address survives.
+
+A hook command is the table's one entry that is not a secret: `hooks[].command` is executable content,
+so it may be mirrored as a write flagged `executable` — its own approval tick, and a plan that carries
+it can never land `verified` ([capability-gap semantics](../.scratch/acm-rearchitecture/issues/11-capability-gap-semantics.md) §7).
+It becomes a `credential` gap only when the classifier finds a provider token or a private key inside
+it. Today no hook is read or written at all; the category lands with its own tickets.
+
+A reference is not a credential. Three forms are clean by construction — `${VAR}`, `{env:VAR}`,
+`{file:path}` — which is what lets a mirror carry `env.K: "${K}"` while withholding a literal token at
+the same address. Pi's `!command` is different: it is clean but `executable`, and it can hold a literal
+credential of its own. The classifier withholds one carrying a recognised provider token or a
+private-key block; any other credential in a command is not detectable that way, so it can still
+appear in stored facts and in a Pi mirror plan. Treat a `!command` as executable content to be
+reviewed, not as a secret-free value.

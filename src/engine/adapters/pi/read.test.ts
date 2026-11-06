@@ -60,6 +60,20 @@ test('a token anywhere in a url is withheld, not just in its userinfo', () => {
   assert.equal(knownFieldsForStorage(facts).url, '[withheld: secret]')
 })
 
+test('a credential-shaped query parameter is withheld even when its value has no provider shape', () => {
+  // The value alone looks like any short string; the parameter's name is what makes it a credential.
+  const facts = factsOf(
+    '{"mcpServers":{"a":{"url":"https://example.test/mcp?token=abc123def456"}}}',
+    'a',
+  )
+  assert.equal(knownFieldsForStorage(facts).url, '[withheld: suspect]')
+  const plain = factsOf('{"mcpServers":{"a":{"url":"https://example.test/mcp?q=tools"}}}', 'a')
+  assert.equal(knownFieldsForStorage(plain).url, 'https://example.test/mcp?q=tools')
+  // A reference at that address is still clean: the harness, not the file, supplies the value.
+  const reference = factsOf('{"mcpServers":{"a":{"url":"https://example.test/mcp?token=${TOKEN}"}}}', 'a')
+  assert.equal(knownFieldsForStorage(reference).url, 'https://example.test/mcp?token=${TOKEN}')
+})
+
 test('a url this process cannot parse is withheld rather than kept verbatim', () => {
   const facts = factsOf('{"mcpServers":{"a":{"url":"nonsense user:pass@host/mcp"}}}', 'a')
   assert.equal(knownFieldsForStorage(facts).url, '[withheld: secret]')
