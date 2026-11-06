@@ -53,7 +53,7 @@ settled decisions.
   `discover()`, `listInstallations()`, `inspectInstallation()`, `planMirror()`, and
   `applyPlan()` / `verifyPlan()`; `src/engine/repo.ts` is the only module that calls `store.cjs`;
   `src/engine/plan.ts` builds the mirror plan document from a stored row and the target file alone
-  (it writes nothing); `src/engine/apply.ts` executes exactly that document — one lock per store,
+  — plus, for a skill, the source tree it digests and scans — and writes nothing; `src/engine/apply.ts` executes exactly that document — one lock per store,
   every precondition read before the first byte, one file at a time, `partial` with no rollback
   when a write fails — and re-reads the target to verify it; `src/engine/edit.ts` is the
   pointer-level native editor, so a write lands only on the addresses the plan named and comments
@@ -62,7 +62,9 @@ settled decisions.
   drops the comments inside it, which the plan says as a manual step; `src/engine/adapters/`
   holds one directory per harness (Pi, Codex, OpenCode), shared
   MCP fact storage in `mcp-facts.ts`, the per-harness MCP write surfaces and transforms in
-  `mcp-write.ts`, and per-tier file reading in `tier.ts`; and
+  `mcp-write.ts`, shared skill and instruction readers in `skills.ts` and `instructions.ts` (the
+  three harnesses differ only in which locations they declare), and per-tier file reading in
+  `tier.ts`; and
   `src/engine/adapters/registry.ts` fails at load when a claimed category has no handler. Roots
   (home, project root, store path, `CODEX_HOME`) arrive as an injected `EngineConfig`, never read
   from the working directory; `ACM_HOME` / `ACM_PROJECT_ROOT` / `ACM_STORE` are the boundary

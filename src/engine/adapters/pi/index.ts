@@ -2,20 +2,37 @@ import path from 'node:path'
 import type { EngineConfig } from '../../config.ts'
 import { mcpInstallation } from '../mcp-facts.ts'
 import { MCP_WRITE_SURFACES } from '../mcp-write.ts'
+import { readInstructionTier } from '../instructions.ts'
+import { readSkillTier } from '../skills.ts'
 import { readTier } from '../tier.ts'
 import type { Adapter, Tier, TierRead } from '../types.ts'
 import { readPiMcpJson } from './read.ts'
 
-// Pi has two scopes and no project-local tier. `configPaths` is the tier's MCP file; the other
-// categories live in different files under the same layer and arrive with their own tickets.
+// Pi has two scopes and no project-local tier. `configPaths` is the tier's MCP file; a skill and an
+// instruction file are separate locations under the same layer, declared in `categoryPaths`.
 export function piTiers(config: EngineConfig): Tier[] {
+  const agentDir = path.join(config.home, '.pi', 'agent')
+  const piProject = path.join(config.projectRoot, '.pi')
+  const userSkills = path.join(config.home, '.agents', 'skills')
+  const projectSkills = path.join(config.projectRoot, '.agents', 'skills')
+  const userAgentsMd = path.join(agentDir, 'AGENTS.md')
+  const projectAgentsMd = path.join(config.projectRoot, 'AGENTS.md')
   return [
     {
       id: 'pi:user',
       nativeLabel: 'user',
       rank: 1,
       scopeBucket: 'user',
-      configPaths: [path.join(config.home, '.pi', 'agent', 'mcp.json')],
+      configPaths: [path.join(agentDir, 'mcp.json')],
+      categoryPaths: {
+        // `~/.agents/skills` is the cross-harness location, so it is where a mirror lands; the
+        // harness-owned `skills/` beside it is read but never written by a mirror.
+        skills: {
+          reads: [userSkills, path.join(agentDir, 'skills')],
+          target: userSkills,
+        },
+        instructions: { reads: [userAgentsMd], target: userAgentsMd },
+      },
       writability: 'writable',
     },
     {
@@ -23,7 +40,14 @@ export function piTiers(config: EngineConfig): Tier[] {
       nativeLabel: 'project',
       rank: 2,
       scopeBucket: 'project',
-      configPaths: [path.join(config.projectRoot, '.pi', 'mcp.json')],
+      configPaths: [path.join(piProject, 'mcp.json')],
+      categoryPaths: {
+        skills: {
+          reads: [projectSkills, path.join(piProject, 'skills')],
+          target: projectSkills,
+        },
+        instructions: { reads: [projectAgentsMd], target: projectAgentsMd },
+      },
       writability: 'writable',
     },
   ]
@@ -33,8 +57,12 @@ export function createPiAdapter(config: EngineConfig): Adapter {
   return {
     harness: 'pi',
     tiers: piTiers(config),
-    claimedCategories: ['mcp'],
-    handlers: { mcp: { read: readMcpTier } },
+    claimedCategories: ['mcp', 'skills', 'instructions'],
+    handlers: {
+      mcp: { read: readMcpTier },
+      skills: { read: readSkillTier },
+      instructions: { read: readInstructionTier },
+    },
     mcpWrite: MCP_WRITE_SURFACES.pi,
   }
 }

@@ -230,10 +230,6 @@ export function planMirror(
       reason: `${tier.id} is ${tier.writability}: a mirror target must be a writable tier`,
     }
   }
-  const surface = adapter.mcpWrite
-  if (surface === undefined) {
-    return { kind: 'refused', reason: `${adapter.harness} declares no mcp write surface` }
-  }
   const lookup = findInstallation(config, idOrPrefix)
   if (lookup.kind === 'notFound') {
     return {
@@ -256,12 +252,13 @@ export function planMirror(
       reason: `${row.id} was removed from ${JSON.stringify(row.nativeFile)} by a later scan; nothing left to mirror`,
     }
   }
-  if (row.category !== 'mcp') {
-    return { kind: 'refused', reason: `${row.category} has no mirror planner yet; only mcp does` }
+  if (row.category !== 'mcp' && row.category !== 'skills' && row.category !== 'instructions') {
+    return { kind: 'refused', reason: `${row.category} has no mirror planner yet` }
   }
   const binding = row.bindings[0]
   const source: PlanSource = {
     installationId: row.id,
+    category: row.category,
     harness: binding?.harness ?? '',
     tierId: binding?.tierId ?? '',
     scope: row.scope,
@@ -274,7 +271,7 @@ export function planMirror(
   return buildPlan({
     adapters,
     source,
-    target: { harness: adapter.harness, tier, surface },
+    target: { harness: adapter.harness, tier, surface: adapter.mcpWrite },
     now: new Date().toISOString(),
   })
 }
@@ -379,13 +376,16 @@ interface NativeAddress {
   pointer: string
 }
 
-// The target entry's address, rebuilt from the first write and the tier's own pointer prefix. The
+// The target entry's address: for MCP it is rebuilt from the first write and the tier's own pointer
+// prefix; a skill directory or an instruction file is its own address, so its pointer is empty. The
 // plan's `nativeLocation` is one string written for a human, and splitting it back apart would have
 // to guess which `#` separated the two halves.
 function targetLocation(plan: MirrorPlan, adapters: readonly Adapter[]): NativeAddress | null {
   const write = plan.writes[0]
+  if (write === undefined) return null
+  if (write.op !== 'writeAtPointer') return { file: write.file, pointer: '' }
   const surface = adapters.find((adapter) => adapter.harness === plan.target.harness)?.mcpWrite
-  if (write === undefined || surface === undefined) return null
+  if (surface === undefined) return null
   const prefix = pointerSegments(surface.pointerPrefix)
   const segments = pointerSegments(write.pointer)
   if (segments.length <= prefix.length) return null

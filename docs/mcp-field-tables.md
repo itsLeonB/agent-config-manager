@@ -131,3 +131,71 @@ credential of its own. The classifier withholds one carrying a recognised provid
 private-key block; any other credential in a command is not detectable that way, so it can still
 appear in stored facts and in a Pi mirror plan. Treat a `!command` as executable content to be
 reviewed, not as a secret-free value.
+
+## Skills and instructions
+
+The two markdown categories have no typed leaves: a skill is a directory tree and an instruction file
+is its own body, so a plan carries no values for them. Their vocabulary is one field each, and the
+writer is a file op rather than a pointer write.
+
+| category | canonical field | native form | write |
+|---|---|---|---|
+| `skills` | `files` | the tree under `<root>/<name>/`, named by its `SKILL.md` | `copyFile` into the shared `.agents/skills/<name>` — the whole tree, so an unknown frontmatter key survives the copy instead of becoming a gap |
+| `instructions` | `body` | the markdown file's text | `symlink` when source and target share a scope bucket, `writeFile` across buckets |
+
+Locations per (harness, tier). `reads` is what the harness loads — and therefore what `alsoReadBy`
+answers from; `target` is where a mirror into that tier lands.
+
+| tier | `skills.reads` | `skills.target` | `instructions.reads` / `target` |
+|---|---|---|---|
+| `pi:user` | `~/.agents/skills`, `~/.pi/agent/skills` | `~/.agents/skills` | `~/.pi/agent/AGENTS.md` |
+| `pi:project` | `<repo>/.agents/skills`, `<repo>/.pi/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
+| `codex:user` | `~/.agents/skills` | `~/.agents/skills` | `$CODEX_HOME/AGENTS.md` |
+| `codex:project` | `<repo>/.agents/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
+| `oc:user` | `~/.agents/skills`, `~/.config/opencode/skills`, `~/.claude/skills` | `~/.agents/skills` | `~/.config/opencode/AGENTS.md` |
+| `oc:project` | `<repo>/.agents/skills`, `<repo>/.opencode/skills`, `<repo>/.claude/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
+
+`reads` is what `alsoReadBy` answers from and what the inventory shows; only `target` is writable.
+Containment holds a plan to the target (or a path beneath it), so a harness-owned `skills/` directory
+is a source a mirror may copy from and never a place it may write into.
+
+`.agents/skills` is read by all three harnesses and the project `AGENTS.md` is the same file for all
+three, so a write there is never a single-harness write: `target.alsoReadBy` names the other readers,
+and one installation carries one binding per harness. That is also why a second mirror writes nothing.
+
+A trust gate can make a correct write inert, so the plan carries `permissions.trust` and a manual
+step: Codex gates its whole project layer, and Pi gates a project's `.agents/skills` (and its own
+project config) behind `/trust`. Pi's instruction-file discovery ignores trust, so a project
+`AGENTS.md` needs no step there.
+
+| situation | `writes[]` | `disposition.kind` |
+|---|---|---|
+| the target is the source location | `[]` | `alreadyShared` |
+| a skill tree or an instruction body that already matches | `[]` | `alreadyPresent` |
+| the tier declares no location for the category | `[]`, one `categoryAbsent` gap | `mirror` |
+| a skill tree differs | `[]`, with both digests in `conflicts[]` | `mirror` |
+| an instruction file differs | the body write, with both digests in `conflicts[]` | `mirror` |
+
+A copy is offered only when the whole tree is clean: every text file in it — `SKILL.md`, the scripts,
+the references — goes through the classifier, and one unclean file is a `credential` gap naming that
+file, with nothing written, because a copy would put the value in every harness that reads the shared
+location. Every link inside the tree is resolved too, and one that lands outside `$HOME` or the
+project root refuses the copy.
+
+An instruction body travels inside the plan, so its source is checked against the last scan: a file
+edited since then is a refusal (`run acm list and plan again`) rather than a stale body written over
+a target whose own digest would never reveal it.
+
+A skill installed as a symlink is mirrored as a real directory: the executor resolves the source root
+before copying, because a linked skill directory is the form none of the three harnesses verifies.
+Links *inside* the tree are reproduced as links.
+
+A `symlink` is used only where the spec permits one: the source and the target sit in the same scope
+bucket, the target is a declared path, nothing exists there, and the digest the plan names is the
+source's resolved content — which is exactly what verification re-reads. A skill is never linked:
+symlinked skill *directories* are unverified for all three harnesses, so a skill is always copied.
+An instruction file mirrored across buckets is written instead, because a link would point out of the
+scope it is meant to belong to. A differing target is never overwritten without an explicit
+`onConflict: replace`: a whole instruction file carries the write that answers the conflict, while a
+differing skill directory carries only the conflict, because replacing it would need the removal op
+this slice does not have.

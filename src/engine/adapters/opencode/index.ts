@@ -2,6 +2,8 @@ import path from 'node:path'
 import type { EngineConfig } from '../../config.ts'
 import { mcpInstallation } from '../mcp-facts.ts'
 import { MCP_WRITE_SURFACES } from '../mcp-write.ts'
+import { readInstructionTier } from '../instructions.ts'
+import { readSkillTier } from '../skills.ts'
 import { readTier } from '../tier.ts'
 import type { Adapter, Tier, TierRead } from '../types.ts'
 import { readOpenCodeMcpJsonc } from './read.ts'
@@ -15,6 +17,12 @@ import { readOpenCodeMcpJsonc } from './read.ts'
 // still rejects will read as `ok`; upgrade when the probe is allowed.
 export function openCodeTiers(config: EngineConfig): Tier[] {
   const projectRoot = config.projectRoot
+  const userConfigDir = path.join(config.home, '.config', 'opencode')
+  const projectConfigDir = path.join(projectRoot, '.opencode')
+  const userSkills = path.join(config.home, '.agents', 'skills')
+  const projectSkills = path.join(projectRoot, '.agents', 'skills')
+  const userAgentsMd = path.join(userConfigDir, 'AGENTS.md')
+  const projectAgentsMd = path.join(projectRoot, 'AGENTS.md')
   return [
     {
       id: 'oc:project',
@@ -24,9 +32,18 @@ export function openCodeTiers(config: EngineConfig): Tier[] {
       configPaths: [
         path.join(projectRoot, 'opencode.json'),
         path.join(projectRoot, 'opencode.jsonc'),
-        path.join(projectRoot, '.opencode', 'opencode.json'),
-        path.join(projectRoot, '.opencode', 'opencode.jsonc'),
+        path.join(projectConfigDir, 'opencode.json'),
+        path.join(projectConfigDir, 'opencode.jsonc'),
       ],
+      categoryPaths: {
+        // OpenCode also discovers `.claude/skills`, which is another tool's location: a source it
+        // reads and never a place a mirror may write.
+        skills: {
+          reads: [projectSkills, path.join(projectConfigDir, 'skills'), path.join(projectRoot, '.claude', 'skills')],
+          target: projectSkills,
+        },
+        instructions: { reads: [projectAgentsMd], target: projectAgentsMd },
+      },
       writability: 'writable',
     },
     {
@@ -35,9 +52,16 @@ export function openCodeTiers(config: EngineConfig): Tier[] {
       rank: 2,
       scopeBucket: 'user',
       configPaths: [
-        path.join(config.home, '.config', 'opencode', 'opencode.json'),
-        path.join(config.home, '.config', 'opencode', 'opencode.jsonc'),
+        path.join(userConfigDir, 'opencode.json'),
+        path.join(userConfigDir, 'opencode.jsonc'),
       ],
+      categoryPaths: {
+        skills: {
+          reads: [userSkills, path.join(userConfigDir, 'skills'), path.join(config.home, '.claude', 'skills')],
+          target: userSkills,
+        },
+        instructions: { reads: [userAgentsMd], target: userAgentsMd },
+      },
       writability: 'writable',
     },
     {
@@ -55,8 +79,12 @@ export function createOpenCodeAdapter(config: EngineConfig): Adapter {
   return {
     harness: 'opencode',
     tiers: openCodeTiers(config),
-    claimedCategories: ['mcp'],
-    handlers: { mcp: { read: readMcpTier } },
+    claimedCategories: ['mcp', 'skills', 'instructions'],
+    handlers: {
+      mcp: { read: readMcpTier },
+      skills: { read: readSkillTier },
+      instructions: { read: readInstructionTier },
+    },
     mcpWrite: MCP_WRITE_SURFACES.opencode,
   }
 }

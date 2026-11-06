@@ -91,8 +91,20 @@ function shortId(id: string): string {
   return id.replace(/^sha256:/, '').slice(0, 8)
 }
 
-function writeValues(plan: MirrorPlan): Map<string, unknown> {
-  return new Map(plan.writes.map((write) => [write.pointer, write.value]))
+type PointerWrite = Extract<MirrorPlan['writes'][number], { op: 'writeAtPointer' }>
+
+// Every plan the MCP tests below build is pointer writes; a whole-file or copy write belongs to a
+// skill or an instruction test, so narrowing here keeps the assertions exactly as they were.
+function pointerWrites(plan: MirrorPlan): PointerWrite[] {
+  return plan.writes.filter((write): write is PointerWrite => write.op === 'writeAtPointer')
+}
+
+function assertPointers(plan: MirrorPlan): (string | null)[] {
+  return plan.verify.asserts.map((assert) => ('pointer' in assert ? assert.pointer : null))
+}
+
+function writeValues(plan: MirrorPlan): Map<string | null, unknown> {
+  return new Map(pointerWrites(plan).map((write) => [write.pointer, write.value]))
 }
 
 test('a Pi server plans into Codex: fields partitioned, writes addressed, nothing written', () => {
@@ -148,15 +160,15 @@ test('a Pi server plans into Codex: fields partitioned, writes addressed, nothin
   ])
   assert.equal(values.get('mcp_servers.serena.tool_timeout_sec'), 30)
   assert.deepEqual(values.get('mcp_servers.serena.args'), ['start-mcp-server'])
-  for (const write of planned.writes) {
+  for (const write of pointerWrites(planned)) {
     assert.deepEqual(write.precondition, { exists: false, digest: null })
     assert.equal(write.priorValue, null)
     assert.equal(write.reversible, true)
   }
   // Verification asserts the writes, never a whole-file copy.
   assert.deepEqual(
-    planned.verify.asserts.map((assertion) => assertion.pointer),
-    planned.writes.map((write) => write.pointer),
+    assertPointers(planned),
+    planned.writes.map((write) => (write.op === 'writeAtPointer' ? write.pointer : null)),
   )
   // A location that does not exist yet needs a human answer before apply.
   assert.equal(planned.security.grade, 'risky')
@@ -189,7 +201,7 @@ test('a reference-shaped env value becomes Codex passthrough, never a literal', 
   ])
   assert.deepEqual(values.get('mcp_servers.serena.env_vars'), ['GH_TOKEN'])
   assert.equal(
-    planned.writes.some((write) => JSON.stringify(write.value).includes('${')),
+    pointerWrites(planned).some((write) => JSON.stringify(write.value).includes('${')),
     false,
   )
   assert.deepEqual(planned.security.secrets, [])
@@ -479,7 +491,7 @@ test('every source field appears exactly once for all six writable targets', () 
       claimed.length,
       `${target}: duplicate field in ${claimed.join(', ')}`,
     )
-    const sourceFields = Object.entries(planned.source.knownFields)
+    const sourceFields = Object.entries(planObjectSchema.parse(planned.source.knownFields))
       .filter(([, value]) => value !== undefined)
       .map(([field]) => field)
     assert.deepEqual([...claimed].sort(), [...sourceFields].sort(), target)
@@ -556,7 +568,7 @@ test('a field no adapter names is preserved, never written and never claimed as 
   assert.deepEqual(planned.equivalence.preserved, ['futureField'])
   assert.ok(planned.equivalence.carried.includes('command'))
   assert.equal(
-    planned.writes.some((write) => write.pointer.includes('futureField')),
+    pointerWrites(planned).some((write) => write.pointer.includes('futureField')),
     false,
   )
 })
@@ -656,11 +668,11 @@ test('a Pi bearer header becomes a bare Codex token variable, never a literal re
   assert.equal(values.get('mcp_servers.serena.bearer_token_env_var'), 'GH_TOKEN')
   // Codex does no interpolation, so a copied `Bearer ${GH_TOKEN}` would be a literal token.
   assert.equal(
-    planned.writes.some((write) => String(write.value).includes('$')),
+    pointerWrites(planned).some((write) => String(write.value).includes('$')),
     false,
   )
   assert.equal(
-    planned.writes.some((write) => write.pointer.includes('http_headers')),
+    pointerWrites(planned).some((write) => write.pointer.includes('http_headers')),
     false,
   )
 })
@@ -783,7 +795,7 @@ test('a server name containing a dot keeps one address in the target', () => {
   )
 
   const planned = plan(config, 'my.server', 'codex:user')
-  const [write] = planned.writes
+  const [write] = pointerWrites(planned)
 
   assert.equal(write?.pointer, 'mcp_servers."my.server".command')
   // The prior value is read back through the quoted segment, so the diff names the same entry.
@@ -820,7 +832,7 @@ test('a target holding the legacy flat shape is normalised into one shape, sibli
   fs.writeFileSync(file, written)
 
   const planned = plan(config, 'serena', 'oc:user')
-  const [write] = planned.writes
+  const [write] = pointerWrites(planned)
 
   // One write replaces the whole block: a document left with both shapes would define every legacy
   // server twice, and this slice has no removal op to delete the flat keys with.

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { z } from 'zod'
@@ -22,9 +22,29 @@ import {
   type McpWriteSurface,
 } from './adapters/mcp-write.ts'
 import { normaliseLegacyMcp, stripJsonc } from './adapters/opencode/read.ts'
-import { HARNESSES, WRITABILITIES, type Adapter, type HarnessId, type Tier } from './adapters/types.ts'
+import { SKILL_FIELDS } from './adapters/skills.ts'
+import {
+  HARNESSES,
+  WRITABILITIES,
+  declaresReadPath,
+  mirrorTarget,
+  type Adapter,
+  type Category,
+  type HarnessId,
+  type ScopeBucket,
+  type Tier,
+} from './adapters/types.ts'
+import { digestOfBytes, digestOfPath } from './digest.ts'
 import { planObjectSchema, planValueSchema, type PlanValue } from './plan-value.ts'
-import { VERDICTS, classify, withheldMarker, type CredentialPointer, type Verdict } from './secret.ts'
+import {
+  VERDICTS,
+  classify,
+  classifyWholeFile,
+  storedVerdict,
+  withheldMarker,
+  type CredentialPointer,
+  type Verdict,
+} from './secret.ts'
 
 export { planObjectSchema, planValueSchema, type PlanValue } from './plan-value.ts'
 
@@ -90,22 +110,53 @@ const planConflictSchema = z.object({
 
 const planManualStepSchema = z.object({ step: z.string(), why: z.string() })
 
-const planAssertSchema = z.object({ file: z.string(), pointer: z.string(), equals: planValueSchema })
+const planAssertSchema = z.union([
+  z.object({ file: z.string(), pointer: z.string(), equals: planValueSchema }),
+  // A whole file or a directory tree has no pointer to assert at, so it is asserted by the digest
+  // of what the write put there — which is also how a copy is verified without copying it back.
+  z.object({ file: z.string(), digest: z.string() }),
+])
 
-export const planWriteSchema = z.object({
-  // One op only: the engine refuses a write it cannot perform, so a document carrying a future op
-  // is refused as caller input rather than half-applied.
-  op: z.literal('writeAtPointer'),
+// The fields every write carries, whatever it does: where it lands, what it is allowed to overwrite,
+// and which risk flags it raises.
+const writeCommon = {
   file: z.string(),
-  pointer: z.string(),
-  value: planValueSchema,
   precondition: z.object({ exists: z.boolean(), digest: z.string().nullable() }),
   reversible: z.boolean(),
   priorValue: planValueSchema,
   executable: z.boolean(),
   secretValues: z.boolean(),
   irreversible: z.boolean(),
-})
+}
+
+export const planWriteSchema = z.discriminatedUnion('op', [
+  // One typed leaf in a parsed config, addressed by pointer.
+  z.object({
+    op: z.literal('writeAtPointer'),
+    pointer: z.string(),
+    value: planValueSchema,
+    ...writeCommon,
+  }),
+  // A whole markdown file, its body in the document.
+  z.object({ op: z.literal('writeFile'), content: z.string(), ...writeCommon }),
+  // A copy carries no bytes in the document: the plan names the source and its digest, and apply
+  // re-reads it, so a credential in the tree never travels inside a plan. `copyFile` covers a
+  // directory, which is what a skill is.
+  z.object({
+    op: z.literal('copyFile'),
+    source: z.string(),
+    sourceDigest: z.string(),
+    ...writeCommon,
+  }),
+  // A link is used only where the spec permits one: same scope bucket, an absent target, and a
+  // source whose content the target then shows. Verification resolves the link.
+  z.object({
+    op: z.literal('symlink'),
+    source: z.string(),
+    sourceDigest: z.string(),
+    ...writeCommon,
+  }),
+])
 
 export type MappedField = z.infer<typeof mappedFieldSchema>
 export type PlanGap = z.infer<typeof planGapSchema>
@@ -113,6 +164,35 @@ export type PlanConflict = z.infer<typeof planConflictSchema>
 export type PlanManualStep = z.infer<typeof planManualStepSchema>
 export type PlanAssert = z.infer<typeof planAssertSchema>
 export type PlanWrite = z.infer<typeof planWriteSchema>
+
+// What became of the target, in the one vocabulary the spec's disposition table uses: a mirror to
+// write, a target that already matches, or a target that is the source.
+export const dispositionSchema = z.object({
+  kind: z.enum(['mirror', 'alreadyPresent', 'alreadyShared']),
+  reason: z.string().nullable(),
+})
+export type Disposition = z.infer<typeof dispositionSchema>
+
+const equivalenceSchema = z.object({
+  carried: z.array(z.string()),
+  mapped: z.array(mappedFieldSchema),
+  gaps: z.array(planGapSchema),
+  preserved: z.array(z.string()),
+})
+
+const prerequisitesSchema = z.array(z.object({ check: z.string(), detail: z.string() }))
+
+const permissionsSchema = z.object({
+  tierWritability: z.enum(WRITABILITIES),
+  elevationRequired: z.boolean(),
+  trust: z.enum(['notRequired', 'required']),
+})
+
+const securitySchema = z.object({
+  grade: z.enum(['safe', 'risky']),
+  secrets: z.array(z.object({ pointer: z.string(), verdict: z.enum(VERDICTS) })),
+  executables: z.array(z.object({ file: z.string(), why: z.string() })),
+})
 
 // The engine grades the plan, not the caller, and apply re-grades the document it is handed rather
 // than trusting the grade on it: `planIdOf` is public, so a forged document can claim `safe`.
@@ -170,6 +250,7 @@ export const mirrorPlanSchema = z.object({
   createdAt: z.string(),
   toolVersion: z.string(),
   kind: z.literal('mirror'),
+  category: z.enum(['mcp', 'skills', 'instructions', 'hooks']),
   source: z.object({
     installationId: z.string(),
     harness: z.string(),
@@ -178,7 +259,7 @@ export const mirrorPlanSchema = z.object({
     nativeLocation: z.string(),
     // The source's canonical facts, already classified. Opaque to apply, which reads none of them,
     // and not re-checked field by field here: that table is the adapter's, not the plan's.
-    knownFields: z.custom<McpFacts>(),
+    knownFields: z.custom<PlanValue>(),
     contentDigest: z.string(),
   }),
   target: z.object({
@@ -188,30 +269,14 @@ export const mirrorPlanSchema = z.object({
     nativeLocation: z.string(),
     alsoReadBy: z.array(z.enum(HARNESSES)),
   }),
-  equivalence: z.object({
-    carried: z.array(z.string()),
-    mapped: z.array(mappedFieldSchema),
-    gaps: z.array(planGapSchema),
-    preserved: z.array(z.string()),
-  }),
-  prerequisites: z.array(z.object({ check: z.string(), detail: z.string() })),
-  permissions: z.object({
-    tierWritability: z.enum(WRITABILITIES),
-    elevationRequired: z.boolean(),
-    trust: z.enum(['notRequired', 'required']),
-  }),
+  equivalence: equivalenceSchema,
+  prerequisites: prerequisitesSchema,
+  permissions: permissionsSchema,
   // What became of the target: one artefact type, never a separate error shape, so a plan that has
   // nothing to write still arrives as a plan and says why.
-  disposition: z.object({
-    kind: z.enum(['mirror', 'alreadyPresent', 'alreadyShared']),
-    reason: z.string().nullable(),
-  }),
+  disposition: dispositionSchema,
   conflicts: z.array(planConflictSchema),
-  security: z.object({
-    grade: z.enum(['safe', 'risky']),
-    secrets: z.array(z.object({ pointer: z.string(), verdict: z.enum(VERDICTS) })),
-    executables: z.array(z.object({ file: z.string(), why: z.string() })),
-  }),
+  security: securitySchema,
   writes: z.array(planWriteSchema),
   manualSteps: z.array(planManualStepSchema),
   verify: z.object({ asserts: z.array(planAssertSchema) }),
@@ -230,6 +295,7 @@ export type PlanResult = { kind: 'refused'; reason: string } | { kind: 'plan'; p
 // The source row as the store holds it, plus the adapter identity the plan names.
 export interface PlanSource {
   installationId: string
+  category: Category
   harness: string
   tierId: string
   scope: string
@@ -243,7 +309,9 @@ export interface PlanSource {
 export interface PlanTarget {
   harness: HarnessId
   tier: Tier
-  surface: McpWriteSurface
+  // The MCP write surface, for an MCP source. Skills and instructions are file work, so their
+  // planner reads the tier's own category locations instead.
+  surface?: McpWriteSurface
 }
 
 export interface PlanInput {
@@ -278,6 +346,84 @@ export function validatePlan(raw: Json): ValidatedPlan {
 }
 
 export function buildPlan(input: PlanInput): PlanResult {
+  if (input.source.category === 'mcp') {
+    const surface = input.target.surface
+    if (surface === undefined) {
+      return { kind: 'refused', reason: `${input.target.harness} declares no mcp write surface` }
+    }
+    return buildMcpPlan(input, surface)
+  }
+  if (input.source.category === 'skills') return buildSkillPlan(input)
+  if (input.source.category === 'instructions') return buildInstructionPlan(input)
+  return {
+    kind: 'refused',
+    reason: `${input.source.category} has no mirror planner yet; only mcp, skills and instructions do`,
+  }
+}
+
+// The parts a planner fills in, sealed into one document by `sealPlan`: the identity of source and
+// target comes from the input every time, so no planner can name a different one.
+interface PlanParts {
+  disposition: Disposition
+  equivalence: z.infer<typeof equivalenceSchema>
+  prerequisites: z.infer<typeof prerequisitesSchema>
+  permissions: z.infer<typeof permissionsSchema>
+  conflicts: PlanConflict[]
+  security: z.infer<typeof securitySchema>
+  writes: PlanWrite[]
+  manualSteps: PlanManualStep[]
+  verify: PlanAssert[]
+  targetNativeLocation: string
+  alsoReadBy: HarnessId[]
+}
+
+function sealPlan(input: PlanInput, parts: PlanParts): PlanResult {
+  const { source, target } = input
+  const body: PlanBody = {
+    createdAt: input.now,
+    toolVersion: TOOL_VERSION,
+    kind: 'mirror',
+    category: source.category,
+    disposition: parts.disposition,
+    source: {
+      installationId: source.installationId,
+      harness: source.harness,
+      tierId: source.tierId,
+      scope: source.scope,
+      nativeLocation: `${source.nativeFile}#${source.nativePointer}`,
+      knownFields: knownFieldsDocument(source.knownFieldsJson),
+      contentDigest: source.contentDigest,
+    },
+    target: {
+      harness: target.harness,
+      tierId: target.tier.id,
+      scope: target.tier.scopeBucket,
+      nativeLocation: parts.targetNativeLocation,
+      alsoReadBy: parts.alsoReadBy,
+    },
+    equivalence: parts.equivalence,
+    prerequisites: parts.prerequisites,
+    permissions: parts.permissions,
+    conflicts: parts.conflicts,
+    security: parts.security,
+    writes: parts.writes,
+    manualSteps: parts.manualSteps,
+    verify: { asserts: parts.verify },
+  }
+  return { kind: 'plan', plan: { planId: planIdOf(toPlanValue(body)), ...body } }
+}
+
+// A stored row holds its known fields as JSON text; a row this process cannot decode is refused
+// rather than planned from nothing.
+function knownFieldsDocument(json: string): PlanValue {
+  try {
+    return planValueSchema.parse(JSON.parse(json))
+  } catch {
+    return {}
+  }
+}
+
+function buildMcpPlan(input: PlanInput, surface: McpWriteSurface): PlanResult {
   const { source, target } = input
   const file = targetFile(target.tier)
   const existing = readTargetFile(file)
@@ -303,7 +449,7 @@ export function buildPlan(input: PlanInput): PlanResult {
       reason: `${source.nativePointer} carries neither command nor url: it is a project override of a base entry, and mirroring it alone would write a server that cannot start`,
     }
   }
-  const entryPointer = `${target.surface.pointerPrefix}.${pointerSegment(source.name)}`
+  const entryPointer = `${surface.pointerPrefix}.${pointerSegment(source.name)}`
   // A candidate file may define this server at either address, and both are definitions of it.
   const addresses =
     target.harness === 'opencode' ? [entryPointer, `mcp.${pointerSegment(source.name)}`] : [entryPointer]
@@ -319,7 +465,7 @@ export function buildPlan(input: PlanInput): PlanResult {
   const blocker = structuralBlocker(current, entryPointer, known.facts)
   if (blocker !== null) return { kind: 'refused', reason: blocker }
 
-  const partition = partitionFields(known.facts, target.surface, target.tier.id)
+  const partition = partitionFields(known.facts, surface, target.tier.id)
   const precondition = {
     exists: existing.kind === 'parsed',
     digest: existing.kind === 'parsed' ? existing.digest : null,
@@ -350,42 +496,30 @@ export function buildPlan(input: PlanInput): PlanResult {
     }
   }
   const blocked = writes
-    .map((write) => ancestorBlocker(current, write.pointer))
+    .map((write) => (write.op === 'writeAtPointer' ? ancestorBlocker(current, write.pointer) : null))
     .find((found) => found !== null)
   if (blocked !== null && blocked !== undefined) return { kind: 'refused', reason: blocked }
   // Nothing to copy onto itself, and nothing to write where the target already says it: both are
   // plans with no writes and a stated reason, never a refusal or a silent rewrite.
   const disposition = dispositionOf(file, source, writes, existing.kind === 'parsed')
   const pending = disposition.kind === 'mirror' ? writes : []
+  // Every MCP write addresses one pointer, so the pointer, its current value and its proposed one
+  // are what a conflict shows.
   const conflicts = pending.flatMap<PlanConflict>((write) => {
-    if (write.priorValue === null || JSON.stringify(write.priorValue) === JSON.stringify(write.value)) {
+    const pointer = write.op === 'writeAtPointer' ? write.pointer : ''
+    const value = write.op === 'writeAtPointer' ? write.value : null
+    if (write.priorValue === null || JSON.stringify(write.priorValue) === JSON.stringify(value)) {
       return []
     }
-    return [{ file, pointer: write.pointer, current: write.priorValue, proposed: write.value }]
+    return [{ file, pointer, current: write.priorValue, proposed: value }]
   })
   const executables = pending
     .filter((write) => write.executable)
-    .map((write) => ({ file, why: `${write.pointer} runs a command at harness runtime` }))
-  const body: PlanBody = {
-    createdAt: input.now,
-    toolVersion: TOOL_VERSION,
-    kind: 'mirror',
-    source: {
-      installationId: source.installationId,
-      harness: source.harness,
-      tierId: source.tierId,
-      scope: source.scope,
-      nativeLocation: `${source.nativeFile}#${source.nativePointer}`,
-      knownFields: known.facts,
-      contentDigest: source.contentDigest,
-    },
-    target: {
-      harness: target.harness,
-      tierId: target.tier.id,
-      scope: target.tier.scopeBucket,
-      nativeLocation: `${file}#${entryPointer}`,
-      alsoReadBy: alsoReadBy(input.adapters, target.harness, file),
-    },
+    .map((write) => ({
+      file,
+      why: `${write.op === 'writeAtPointer' ? write.pointer : file} runs a command at harness runtime`,
+    }))
+  return sealPlan(input, {
     equivalence: {
       carried: partition.carried,
       mapped: partition.mapped,
@@ -419,28 +553,478 @@ export function buildPlan(input: PlanInput): PlanResult {
     },
     writes: pending,
     manualSteps: [...partition.manualSteps, ...legacySteps(legacy), ...tierManualSteps(target.tier.id)],
-    verify: {
-      asserts: pending.map((write) => ({
-        file: write.file,
-        pointer: write.pointer,
-        equals: write.value,
-      })),
-    },
+    verify: pending.flatMap<PlanAssert>((write) =>
+      write.op === 'writeAtPointer'
+        ? [{ file: write.file, pointer: write.pointer, equals: write.value }]
+        : [],
+    ),
+    targetNativeLocation: `${file}#${entryPointer}`,
+    alsoReadBy: alsoReadBy(input.adapters, target.harness, file),
+  })
+}
+
+// Skills ---------------------------------------------------------------------------------------
+
+const storedSkillFacts = z.object({ files: z.array(z.string()) })
+const storedInstructionFacts = z.object({ body: z.string() })
+
+// A skill is a directory tree, and all three harnesses read it from the same `.agents/skills`
+// location, so the plan is one copy there. That is also why mirroring the same skill into a second
+// harness has nothing to write: the target is the source, and the installation now carries one
+// binding per harness that reads it.
+function buildSkillPlan(input: PlanInput): PlanResult {
+  const { source, target } = input
+  const root = mirrorTarget(target.tier, 'skills')
+  if (root === undefined) return categoryAbsentPlan(input, 'skills')
+  const facts = decode(source.knownFieldsJson, storedSkillFacts)
+  if (facts === null) {
+    return {
+      kind: 'refused',
+      reason: `${source.nativeFile} known fields are not a skill listing, so the directory cannot be described`,
+    }
   }
-  return { kind: 'plan', plan: { planId: planIdOf(toPlanValue(body)), ...body } }
+  const targetDir = path.join(root, source.name)
+  const sourceDigest = digestOfPath(source.nativeFile)
+  if (sourceDigest === null) {
+    return { kind: 'refused', reason: `${source.nativeFile} cannot be read, so there is nothing to copy` }
+  }
+  // The listing this plan classifies came from the last scan. A tree that changed since is one the
+  // classifier never saw, so the copy is refused rather than offered half-inspected.
+  if (source.contentDigest !== '' && sourceDigest !== source.contentDigest) {
+    return {
+      kind: 'refused',
+      reason: `${source.nativeFile} changed since the last scan, so the files a copy would carry are not the ones that were inspected; run \`acm list\` and plan again`,
+    }
+  }
+  // The skill is described by a directory the engine cannot read? Then there is nothing to plan from:
+  // a copy of an unknown tree would claim a content it never saw.
+  if (readTextOrNull(path.join(source.nativeFile, 'SKILL.md')) === null) {
+    return {
+      kind: 'refused',
+      reason: `${path.join(source.nativeFile, 'SKILL.md')} cannot be read, so the skill cannot be described`,
+    }
+  }
+  // Every text file in the tree is credential-bearing content, not just the entry point: a copy
+  // would carry a value in `references/` into every harness that reads the shared location.
+  const unclean = uncleanTree(source.nativeFile, facts.files)
+  const conflicts: PlanConflict[] = []
+  const gaps: PlanGap[] = []
+  const manualSteps: PlanManualStep[] = []
+  const writes: PlanWrite[] = []
+  const existing = digestOfPath(targetDir)
+  let disposition: Disposition = { kind: 'mirror', reason: null }
+  if (unclean !== null) {
+    const gap: PlanGap = { field: unclean.file, reason: 'credential', replacement: 'dropped' }
+    gaps.push(gap)
+    // The policy table decides whether a gap owes the human a step, not this branch.
+    if (gapDisposition(gap.reason) === 'manualStep') {
+      manualSteps.push({
+        step: `remove the credential from ${path.join(source.nativeFile, unclean.file)} and read it through the source harness's own indirection`,
+        why: 'the skill directory holds a credential-shaped value, and copying it would put that value in every harness that reads the shared location',
+      })
+    }
+  } else if (path.resolve(targetDir) === path.resolve(source.nativeFile)) {
+    disposition = {
+      kind: 'alreadyShared',
+      reason: `${targetDir} is where ${source.nativeFile} already lives, and every harness that reads it reads this directory, so there is nothing to copy`,
+    }
+  } else if (existing === sourceDigest) {
+    disposition = { kind: 'alreadyPresent', reason: `${targetDir} already holds this skill` }
+  } else if (existing !== null) {
+    // Nothing is removed by a mirror, so two different skills under one name stay two: the plan
+    // reports the conflict and says how a human clears it.
+    conflicts.push({ file: targetDir, pointer: '', current: existing, proposed: sourceDigest })
+    manualSteps.push({
+      step: `remove ${targetDir} by hand, then plan this mirror again`,
+      why: 'the shared location already holds a different skill under this name, and this slice has no op that removes a directory',
+    })
+  } else {
+    writes.push({
+      op: 'copyFile',
+      file: targetDir,
+      source: source.nativeFile,
+      sourceDigest,
+      precondition: { exists: false, digest: null },
+      // The bytes are re-read at apply; nothing to put back, and no removal op to put it back with.
+      reversible: false,
+      priorValue: null,
+      executable: false,
+      secretValues: false,
+      irreversible: false,
+    })
+  }
+  return sealPlan(input, {
+    disposition,
+    equivalence: {
+      // A withheld file is a gap, never something carried: nothing in this plan holds its value.
+      carried: unclean === null ? [...SKILL_FIELDS] : [],
+      mapped: [],
+      gaps,
+      preserved: [],
+    },
+    prerequisites: [
+      { check: 'source-known-fields', detail: `${source.nativeFile} listed at the last scan` },
+      { check: 'target-tier-writable', detail: `${target.tier.id} is a declared writable tier` },
+      {
+        check: 'target-directory',
+        detail: existing === null ? `${targetDir} does not exist yet` : `${targetDir} exists`,
+      },
+    ],
+    permissions: {
+      tierWritability: target.tier.writability,
+      // Derived, not asserted: a plan for a managed or elevated tier never reaches here.
+      elevationRequired: target.tier.writability !== 'writable',
+      trust: trustRequired(target.tier.id, 'skills') ? 'required' : 'notRequired',
+    },
+    conflicts,
+    security: {
+      grade: planGrade({ writes, conflicts, permissions: { elevationRequired: false } }),
+      secrets: unclean === null ? [] : [{ pointer: unclean.file, verdict: unclean.verdict }],
+      executables: [],
+    },
+    writes,
+    manualSteps: [...manualSteps, ...trustSteps(target.tier.id, 'skills')],
+    verify: writes.map<PlanAssert>(() => ({ file: targetDir, digest: sourceDigest })),
+    targetNativeLocation: targetDir,
+    alsoReadBy: alsoReadBy(input.adapters, target.harness, targetDir),
+  })
+}
+
+// A whole instruction file: the body is the plan's own value, and the digest it lands as is what
+// verification re-reads. A file whose address is already taken is written over only when the caller
+// answers the conflict.
+function writeBody(
+  file: string,
+  body: string,
+  precondition: { exists: boolean; digest: string | null } = { exists: false, digest: null },
+): PlanWrite {
+  return {
+    op: 'writeFile',
+    file,
+    content: body,
+    precondition,
+    reversible: false,
+    priorValue: precondition.digest,
+    executable: false,
+    secretValues: false,
+    irreversible: false,
+  }
+}
+
+// Whether a file carries text the classifier can read, decided from the bytes rather than the name:
+// a dotfile and an extensionless script are text, and an image or a font is not. Valid UTF-8 with no
+// NUL is the whole test, so nothing is skipped for having an unexpected extension.
+type TreeFile = { kind: 'text'; text: string } | { kind: 'binary' } | { kind: 'unreadable' }
+
+function readTreeFile(file: string): TreeFile {
+  let bytes: Buffer
+  try {
+    bytes = readFileSync(file)
+  } catch {
+    return { kind: 'unreadable' }
+  }
+  if (bytes.includes(0)) return { kind: 'binary' }
+  const text = bytes.toString('utf8')
+  return Buffer.from(text, 'utf8').equals(bytes) ? { kind: 'text', text } : { kind: 'binary' }
+}
+
+// The first file of a tree the classifier will not call clean. A file this process cannot read is
+// the same answer as an unclean one: a copy it cannot describe is not one it may offer.
+function uncleanTree(
+  dir: string,
+  files: readonly string[],
+): { file: string; verdict: Verdict } | null {
+  for (const relative of files) {
+    const read = readTreeFile(path.join(dir, relative))
+    if (read.kind === 'binary') continue
+    if (read.kind === 'unreadable') return { file: relative, verdict: 'suspect' }
+    const verdict = classifyWholeFile(relative, read.text)
+    if (verdict !== 'clean') return { file: relative, verdict }
+  }
+  return null
+}
+
+// An instruction file is one markdown file, so the plan writes or links it. A link is the spec's
+// one permitted use: the source and the target sit in the same scope bucket, the target path is
+// declared, and nothing exists there. Across buckets a link would point out of the bucket it is
+// meant to belong to, so the body is written instead.
+function buildInstructionPlan(input: PlanInput): PlanResult {
+  const { source, target } = input
+  const targetFile = mirrorTarget(target.tier, 'instructions')
+  if (targetFile === undefined) return categoryAbsentPlan(input, 'instructions')
+  const facts = decode(source.knownFieldsJson, storedInstructionFacts)
+  if (facts === null) {
+    return {
+      kind: 'refused',
+      reason: `${source.nativeFile} known fields are not an instruction body, so the file cannot be described`,
+    }
+  }
+  const verdict = storedVerdict(facts.body)
+  // The body travels inside the plan, so the row it came from has to still be what is on disk: a
+  // source edited since the scan would otherwise be written as the old text, into a target whose own
+  // digest would never reveal it.
+  const sourceDigest = digestOfPath(source.nativeFile)
+  if (sourceDigest === null) {
+    return { kind: 'refused', reason: `${source.nativeFile} cannot be read, so there is nothing to mirror` }
+  }
+  if (sourceDigest !== source.contentDigest) {
+    return {
+      kind: 'refused',
+      reason: `${source.nativeFile} changed since the last scan, so the stored body is stale; run \`acm list\` and plan again`,
+    }
+  }
+  const existing = digestOfPath(targetFile)
+  const samePath = path.resolve(targetFile) === path.resolve(source.nativeFile)
+  const conflicts: PlanConflict[] = []
+  const gaps: PlanGap[] = []
+  const manualSteps: PlanManualStep[] = []
+  const writes: PlanWrite[] = []
+  const written = digestOfBytes(Buffer.from(facts.body, 'utf8'))
+  const alsoRead = alsoReadBy(input.adapters, target.harness, targetFile)
+  // Every harness that loads this file, the target first: a shadow only matters to one of them.
+  const readers: HarnessId[] = [target.harness, ...alsoRead]
+  let disposition: Disposition = { kind: 'mirror', reason: null }
+  if (verdict !== 'clean') {
+    const gap: PlanGap = { field: 'body', reason: 'credential', replacement: 'dropped' }
+    gaps.push(gap)
+    if (gapDisposition(gap.reason) === 'manualStep') {
+      manualSteps.push({
+        step: `read the value ${source.nativeFile} needs through the target harness's own indirection, and keep it out of the shared instruction file`,
+        why: 'the instruction file holds a credential-shaped value, and the plan never carries one',
+      })
+    }
+  } else if (samePath) {
+    // The project instruction file is the same file for all three harnesses, so a mirror between
+    // them finds it already in place instead of writing a second copy.
+    disposition = {
+      kind: 'alreadyPresent',
+      reason: `${targetFile} is where ${source.nativeFile} already lives, and all three harnesses read this one file`,
+    }
+  } else if (existing === sourceDigest) {
+    disposition = { kind: 'alreadyPresent', reason: `${targetFile} already holds this body` }
+  } else if (existing !== null) {
+    // A differing file is a conflict, and the write rides along so an explicit `replace` can answer
+    // it; a link is never placed over something, so this case always writes the body.
+    conflicts.push({ file: targetFile, pointer: '', current: existing, proposed: sourceDigest })
+    writes.push(writeBody(targetFile, facts.body, { exists: true, digest: existing }))
+  } else if (source.scope === target.tier.scopeBucket) {
+    writes.push({
+      op: 'symlink',
+      file: targetFile,
+      source: source.nativeFile,
+      sourceDigest,
+      precondition: { exists: false, digest: null },
+      reversible: false,
+      priorValue: null,
+      executable: false,
+      secretValues: false,
+      irreversible: false,
+    })
+  } else {
+    writes.push(writeBody(targetFile, facts.body))
+  }
+  return sealPlan(input, {
+    disposition,
+    // A withheld body is a gap, never something carried: the plan never holds the value.
+    equivalence: { carried: verdict === 'clean' ? ['body'] : [], mapped: [], gaps, preserved: [] },
+    prerequisites: [
+      { check: 'source-known-fields', detail: `${source.nativeFile} decoded from the last scan` },
+      { check: 'target-tier-writable', detail: `${target.tier.id} is a declared writable tier` },
+      {
+        check: 'target-file',
+        detail: existing === null ? `${targetFile} does not exist yet` : `${targetFile} exists`,
+      },
+    ],
+    permissions: {
+      tierWritability: target.tier.writability,
+      elevationRequired: false,
+      trust: trustRequired(target.tier.id, 'instructions') ? 'required' : 'notRequired',
+    },
+    conflicts,
+    security: {
+      grade: planGrade({ writes, conflicts, permissions: { elevationRequired: false } }),
+      secrets: verdict === 'clean' ? [] : [{ pointer: 'body', verdict }],
+      executables: [],
+    },
+    writes,
+    // The shadows and the size cap are facts about the target whatever this plan writes, so an
+    // already-present plan names them too — an oversized shared `AGENTS.md` is truncated whichever
+    // harness asked for the mirror, and nothing about that plan may read as verified.
+    manualSteps: [
+      ...manualSteps,
+      ...instructionManualSteps(
+        targetFile,
+        facts.body,
+        target.tier.scopeBucket,
+        readers,
+        writes.length > 0,
+      ),
+      ...trustSteps(target.tier.id, 'instructions'),
+    ],
+    verify: writes.map<PlanAssert>((write) =>
+      write.op === 'symlink'
+        ? { file: targetFile, digest: sourceDigest }
+        : { file: targetFile, digest: written },
+    ),
+    targetNativeLocation: targetFile,
+    alsoReadBy: alsoRead,
+  })
+}
+
+// The files a harness reads ahead of the one this plan writes, in the same directory, each with the
+// harnesses it outranks. Same directory only: these replace the file, whereas an ancestor's is
+// combined with it.
+const SHADOWING_INSTRUCTIONS: readonly { name: string; readers: readonly HarnessId[] }[] = [
+  { name: 'AGENTS.override.md', readers: ['pi', 'codex'] },
+  { name: 'AGENTS.MD', readers: ['pi'] },
+  { name: 'CLAUDE.md', readers: ['pi'] },
+  { name: 'CLAUDE.MD', readers: ['pi'] },
+]
+
+// A name that resolves to the target itself is not a shadow of it: on a case-insensitive filesystem
+// `AGENTS.MD` and `AGENTS.md` are one file, and a link with a shadow's name is the same entry again.
+// Where they really are decides it, so a distinct same-named file on a case-sensitive filesystem is
+// still reported.
+function isSameEntry(candidate: string, target: string): boolean {
+  const resolved = realpathOf(candidate)
+  return resolved !== null && resolved === realpathOf(target)
+}
+
+function realpathOf(file: string): string | null {
+  try {
+    return existsSync(file) ? realpathSync(file) : null
+  } catch {
+    return null
+  }
+}
+
+// What a human still has to know after the bytes land: a same-directory file that outranks this one
+// for a harness that reads it, Codex's project budget, and — only when something is written — the
+// ancestor instruction files every harness also loads.
+function instructionManualSteps(
+  targetFile: string,
+  body: string,
+  scopeBucket: ScopeBucket,
+  readers: readonly HarnessId[],
+  writing: boolean,
+): PlanManualStep[] {
+  const steps: PlanManualStep[] = []
+  const directory = path.dirname(targetFile)
+  const shadows = SHADOWING_INSTRUCTIONS.filter(
+    (shadow) =>
+      shadow.readers.some((harness) => readers.includes(harness)) &&
+      existsSync(path.join(directory, shadow.name)) &&
+      !isSameEntry(path.join(directory, shadow.name), targetFile),
+  ).map((shadow) => ({ rank: shadow, file: path.join(directory, shadow.name) }))
+  for (const { rank, file } of shadows) {
+    steps.push({
+      step: `review ${file}`,
+      why: `${rank.readers.join(' and ')} read${rank.readers.length === 1 ? 's' : ''} ${rank.name} ahead of AGENTS.md in that directory, so the file this plan writes is not the one that wins there while that file exists`,
+    })
+  }
+  if (readers.includes('codex') && scopeBucket === 'project' && Buffer.byteLength(body, 'utf8') > 32768) {
+    steps.push({
+      step: "raise project_doc_max_bytes in Codex's user config, or shorten the project instruction file",
+      why: 'Codex caps the project instructions it loads at 32 KiB by default, so the tail of this file is not read',
+    })
+  }
+  if (writing && scopeBucket === 'project') {
+    steps.push({
+      step: 'review the AGENTS.md files in the directories above this project',
+      why: 'Pi, Codex and OpenCode each load every ancestor AGENTS.md too, so this file is one of several a session reads; a file closer to the working directory comes later and wins',
+    })
+  }
+  return steps
+}
+
+// The layers that outrank a written file, named rather than assumed away.
+// A trust gate makes a correct write inert, and only a human can lift it. Codex gates its whole
+// project layer; Pi gates a project's `.agents/skills` and its own project config, but not its
+// instruction-file discovery, so a project `AGENTS.md` needs no step there.
+function trustRequired(tierId: string, category: 'skills' | 'instructions'): boolean {
+  if (tierId === 'codex:project') return true
+  return tierId === 'pi:project' && category === 'skills'
+}
+
+function trustSteps(tierId: string, category: 'skills' | 'instructions'): PlanManualStep[] {
+  const what = category === 'skills' ? 'the copied skill directory' : 'this instruction file'
+  if (tierId === 'codex:project') return [codexTrustStep(what)]
+  if (tierId === 'pi:project' && category === 'skills') {
+    return [
+      {
+        step: 'trust this project in Pi (`/trust`), or set defaultProjectTrust',
+        why: `Pi loads no project or ancestor .agents/skills until a trust decision is saved in ~/.pi/agent/trust.json, so ${what} is inert`,
+      },
+    ]
+  }
+  return []
+}
+
+// One switch, whatever the plan writes: an untrusted project layer is inert for every category, so
+// the step differs only in what a human is being told is not loaded.
+function codexTrustStep(what: string): PlanManualStep {
+  return {
+    step: 'add this project to [projects."<path>"] with trust_level = "trusted" in $CODEX_HOME/config.toml',
+    why: `Codex treats an untrusted project config as inert, so ${what} is not loaded until the user config trusts the path`,
+  }
+}
+
+// A category no target can express is still one artefact type: a plan with no writes and one gap.
+function categoryAbsentPlan(input: PlanInput, category: Category): PlanResult {
+  const { target } = input
+  return sealPlan(input, {
+    disposition: { kind: 'mirror', reason: null },
+    equivalence: {
+      carried: [],
+      mapped: [],
+      gaps: [{ field: category, reason: 'categoryAbsent', replacement: 'dropped' }],
+      preserved: [],
+    },
+    prerequisites: [
+      { check: 'target-tier-writable', detail: `${target.tier.id} is a declared writable tier` },
+    ],
+    permissions: {
+      tierWritability: target.tier.writability,
+      // Derived, not asserted: a plan for a managed or elevated tier never reaches here.
+      elevationRequired: target.tier.writability !== 'writable',
+      trust: trustRequired(target.tier.id, 'skills') ? 'required' : 'notRequired',
+    },
+    conflicts: [],
+    security: { grade: 'safe', secrets: [], executables: [] },
+    writes: [],
+    manualSteps: [
+      {
+        step: `${target.harness} cannot express ${category}; configure it there by hand`,
+        why: 'the target declares no location for this category, so there is nowhere a mirror could write',
+      },
+    ],
+    verify: [],
+    targetNativeLocation: '',
+    alsoReadBy: [],
+  })
+}
+
+function decode<Value>(json: string, schema: z.ZodType<Value>): Value | null {
+  try {
+    const parsed = schema.safeParse(JSON.parse(json))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
+function readTextOrNull(file: string): string | null {
+  try {
+    return existsSync(file) ? readFileSync(file, 'utf8') : null
+  } catch {
+    return null
+  }
 }
 
 // A write into a project-scope file is correct on disk and still inert until the harness's own
 // user-scope switch allows it, so the plan says so instead of claiming the mirror took effect.
 function tierManualSteps(tierId: string): PlanManualStep[] {
-  if (tierId === 'codex:project') {
-    return [
-      {
-        step: 'add this project to [projects."<path>"] with trust_level = "trusted" in $CODEX_HOME/config.toml',
-        why: 'Codex treats an untrusted project config as inert, so the MCP entry is not loaded until the user config trusts the path',
-      },
-    ]
-  }
+  if (tierId === 'codex:project') return [codexTrustStep('the MCP entry')]
   if (tierId === 'oc:project' || tierId === 'oc:user') {
     return [
       {
@@ -861,7 +1445,8 @@ function ambiguousTarget(tier: Tier, chosen: string, addresses: string[]): strin
 }
 
 // A location more than one harness reads has to be reported, because a write there lands for every
-// one of them. Computed from the declared tier paths, not from a list of known shared places.
+// one of them. Computed from the declared tier paths, not from a list of known shared places — which
+// is how a mirror into `.agents/skills` names the two harnesses that load it beside the target.
 export function alsoReadBy(
   adapters: readonly Adapter[],
   targetHarness: HarnessId,
@@ -869,9 +1454,7 @@ export function alsoReadBy(
 ): HarnessId[] {
   const others = adapters
     .filter((adapter) => adapter.harness !== targetHarness)
-    .filter((adapter) =>
-      adapter.tiers.some((tier) => tier.configPaths.some((candidate) => candidate === file)),
-    )
+    .filter((adapter) => adapter.tiers.some((tier) => declaresReadPath(tier, file)))
     .map((adapter) => adapter.harness)
   return [...new Set(others)]
 }
@@ -919,7 +1502,11 @@ function dispositionOf(
   const matches =
     targetExists &&
     writes.length > 0 &&
-    writes.every((write) => JSON.stringify(write.priorValue) === JSON.stringify(write.value))
+    writes.every(
+      (write) =>
+        write.op === 'writeAtPointer' &&
+        JSON.stringify(write.priorValue) === JSON.stringify(write.value),
+    )
   if (matches) {
     return { kind: 'alreadyPresent', reason: `${file} already holds every value this plan would write` }
   }
