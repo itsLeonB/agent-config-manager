@@ -1,4 +1,5 @@
 import { createAdapters } from './adapters/registry.ts'
+import type { Category, ScopeBucket, Writability } from './adapters/types.ts'
 import type { EngineConfig } from './config.ts'
 import { readInventory, recordDiscovery } from './repo.ts'
 import type { TierReport } from './repo.ts'
@@ -20,6 +21,10 @@ export function discover(config: EngineConfig): DiscoverResult {
       const handler = adapter.handlers[category]
       if (handler === undefined) continue
       for (const tier of adapter.tiers) {
+        // Only a writable tier is inventoried and measured. `codex:profile` and `oc:system` are
+        // declared so a listing can name them and mark them unwritable, but a launch-time or
+        // root-managed layer is not something ACM reads.
+        if (tier.writability !== 'writable') continue
         const read = handler.read(tier)
         const merged = reports.get(`${adapter.harness}/${tier.id}`)
         // Tombstoning is per (harness, tier), so every category's installations for one tier reach
@@ -66,6 +71,22 @@ export interface Inventory {
   scannedAt: string | null
   installations: InstallationRow[]
   tierHealth: TierHealthRow[]
+  harnesses: HarnessSummary[]
+}
+
+// The harness row a listing carries: which categories that harness is read for, and which tiers
+// exist, so an agent can tell a target tier from one it must not touch. Tiers are adapter-declared
+// facts, not inventory, so they are read from the adapters rather than stored.
+export interface HarnessSummary {
+  harness: string
+  readCategories: Category[]
+  tiers: {
+    id: string
+    nativeLabel: string
+    rank: number
+    scopeBucket: ScopeBucket
+    writability: Writability
+  }[]
 }
 
 export function listInstallations(config: EngineConfig, filter: ListFilter): Inventory {
@@ -76,6 +97,19 @@ export function listInstallations(config: EngineConfig, filter: ListFilter): Inv
     scannedAt: newestScan(inventory.tierHealth),
     installations: inventory.installations,
     tierHealth: inventory.tierHealth,
+    harnesses: createAdapters(config)
+      .filter((adapter) => filter.harness === undefined || adapter.harness === filter.harness)
+      .map((adapter) => ({
+        harness: adapter.harness,
+        readCategories: [...adapter.claimedCategories],
+        tiers: adapter.tiers.map((tier) => ({
+          id: tier.id,
+          nativeLabel: tier.nativeLabel,
+          rank: tier.rank,
+          scopeBucket: tier.scopeBucket,
+          writability: tier.writability,
+        })),
+      })),
   }
 }
 

@@ -1,9 +1,11 @@
 import type { EngineConfig } from '../config.ts'
+import { createCodexAdapter } from './codex/index.ts'
+import { createOpenCodeAdapter } from './opencode/index.ts'
 import { createPiAdapter } from './pi/index.ts'
 import type { Adapter } from './types.ts'
 
 export function createAdapters(config: EngineConfig): Adapter[] {
-  const adapters = [createPiAdapter(config)]
+  const adapters = [createPiAdapter(config), createCodexAdapter(config), createOpenCodeAdapter(config)]
   for (const adapter of adapters) assertAgreement(adapter)
   return adapters
 }

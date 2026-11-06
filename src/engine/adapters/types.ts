@@ -5,13 +5,14 @@ export type Writability = 'writable' | 'elevationRequired' | 'notState' | 'manag
 export type TierHealthStatus = 'ok' | 'unreadable'
 
 // A tier is the harness's own configuration layer. `id` is prefixed with the harness so a row in
-// the store names its tier unambiguously across harnesses.
+// the store names its tier unambiguously across harnesses. `configPaths` lists the candidate files
+// the tier's config can live in (OpenCode accepts `.json` or `.jsonc`), in read order.
 export interface Tier {
   id: string
   nativeLabel: string
   rank: number
   scopeBucket: ScopeBucket
-  configPath: string
+  configPaths: readonly string[]
   writability: Writability
 }
 

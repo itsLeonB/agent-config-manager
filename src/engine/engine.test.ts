@@ -27,13 +27,33 @@ function fixture(): EngineConfig {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-engine-test-'))
   const home = path.join(root, 'home')
   const projectRoot = path.join(root, 'project')
-  fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true })
-  fs.mkdirSync(path.join(projectRoot, '.pi'), { recursive: true })
+  for (const dir of [
+    [home, '.pi', 'agent'],
+    [projectRoot, '.pi'],
+    [home, '.codex'],
+    [projectRoot, '.codex'],
+    [home, '.config', 'opencode'],
+    [projectRoot, '.opencode'],
+  ]) {
+    fs.mkdirSync(path.join(...dir), { recursive: true })
+  }
   return { home, projectRoot, storePath: path.join(root, 'dashboard.db') }
 }
 
 function userMcpFile(config: EngineConfig): string {
   return path.join(config.home, '.pi', 'agent', 'mcp.json')
+}
+
+function codexConfigFile(config: EngineConfig, scope: 'user' | 'project'): string {
+  return scope === 'user'
+    ? path.join(config.home, '.codex', 'config.toml')
+    : path.join(config.projectRoot, '.codex', 'config.toml')
+}
+
+function opencodeConfigFile(config: EngineConfig, scope: 'user' | 'project'): string {
+  return scope === 'user'
+    ? path.join(config.home, '.config', 'opencode', 'opencode.jsonc')
+    : path.join(config.projectRoot, 'opencode.json')
 }
 
 function writeMcp(file: string, servers: Record<string, PiServerFixture>): void {
@@ -57,7 +77,7 @@ test('discovery records Pi MCP servers and the listing reads them back from the 
   const scan = discover(config)
   assert.equal(scan.installations, 2)
   assert.deepEqual(
-    scan.tierHealth.map((health) => [health.tierId, health.status]),
+    scan.tierHealth.filter((health) => health.harness === 'pi').map((health) => [health.tierId, health.status]),
     [
       ['pi:user', 'ok'],
       ['pi:project', 'ok'],
@@ -169,6 +189,111 @@ test('an unreadable tier tombstones nothing and reports itself unreadable', () =
 
   assert.equal(scan.tierHealth.find((health) => health.tierId === 'pi:user')?.status, 'unreadable')
   assert.equal(rowsByName(config).get('serena')?.removedAt, null)
+})
+
+test('one listing call returns installations from all three harnesses, filterable by harness and scope', () => {
+  const config = fixture()
+  writeMcp(userMcpFile(config), { piserver: { command: 'pi' } })
+  fs.writeFileSync(
+    codexConfigFile(config, 'user'),
+    '[mcp_servers.serena]\ncommand = "serena"\nargs = ["start-mcp-server"]\n',
+  )
+  fs.writeFileSync(
+    codexConfigFile(config, 'project'),
+    '[mcp_servers.projectserver]\ncommand = "codex"\n',
+  )
+  fs.writeFileSync(
+    opencodeConfigFile(config, 'project'),
+    '{ // project scope\n  "mcp": { "servers": { "ocserver": { "type": "local", "command": ["oc"], "disabled": true } } },\n}',
+  )
+
+  const scan = discover(config)
+  assert.equal(scan.installations, 4)
+  // Every writable tier is measured, so a tier whose config is missing still reports `ok` instead
+  // of disappearing from the health list.
+  assert.deepEqual(
+    scan.tierHealth.map((health) => [health.harness, health.tierId, health.status]),
+    [
+      ['pi', 'pi:user', 'ok'],
+      ['pi', 'pi:project', 'ok'],
+      ['codex', 'codex:user', 'ok'],
+      ['codex', 'codex:project', 'ok'],
+      ['opencode', 'oc:project', 'ok'],
+      ['opencode', 'oc:user', 'ok'],
+    ],
+  )
+
+  assert.deepEqual(
+    listInstallations(config, { harness: 'codex' }).installations.map((row) => row.name),
+    ['projectserver', 'serena'],
+  )
+  assert.deepEqual(
+    listInstallations(config, { scope: 'project' }).installations.map((row) => row.name),
+    ['ocserver', 'projectserver'],
+  )
+  const byName = rowsByName(config)
+  assert.equal(byName.get('serena')?.nativeFile, codexConfigFile(config, 'user'))
+  assert.equal(byName.get('serena')?.nativePointer, 'mcp_servers.serena')
+  assert.deepEqual(byName.get('serena')?.bindings.map((binding) => binding.tierId), ['codex:user'])
+  assert.equal(byName.get('ocserver')?.nativePointer, 'mcp.servers.ocserver')
+  assert.deepEqual(byName.get('ocserver')?.bindings.map((binding) => binding.tierId), ['oc:project'])
+  assert.equal(JSON.parse(byName.get('ocserver')?.knownFieldsJson ?? '{}').enabled, false)
+})
+
+test('every harness row names its tiers, their scope buckets, and which of them are writable', () => {
+  const config = fixture()
+  const { harnesses } = listInstallations(config, {})
+
+  assert.deepEqual(harnesses.map((harness) => harness.harness), ['pi', 'codex', 'opencode'])
+  assert.deepEqual(
+    harnesses.flatMap((harness) =>
+      harness.tiers.map((tier) => [tier.id, tier.scopeBucket, tier.writability]),
+    ),
+    [
+      ['pi:user', 'user', 'writable'],
+      ['pi:project', 'project', 'writable'],
+      ['codex:user', 'user', 'writable'],
+      ['codex:profile', 'user', 'notState'],
+      ['codex:project', 'project', 'writable'],
+      ['oc:project', 'project', 'writable'],
+      ['oc:user', 'user', 'writable'],
+      ['oc:system', 'system', 'elevationRequired'],
+    ],
+  )
+  assert.deepEqual(
+    harnesses.flatMap((harness) =>
+      harness.tiers.filter((tier) => tier.writability === 'writable').map((tier) => tier.id),
+    ),
+    ['pi:user', 'pi:project', 'codex:user', 'codex:project', 'oc:project', 'oc:user'],
+  )
+  assert.deepEqual(
+    listInstallations(config, { harness: 'codex' }).harnesses.map((harness) => harness.harness),
+    ['codex'],
+  )
+})
+
+test('a malformed OpenCode config is an unreadable tier that tombstones nothing, a clean one tombstones', () => {
+  const config = fixture()
+  const file = opencodeConfigFile(config, 'user')
+  fs.writeFileSync(file, '{"mcp":{"servers":{"a":{"command":["x"]}}}}')
+  discover(config)
+  assert.ok(rowsByName(config).get('a'))
+
+  fs.writeFileSync(file, '{ "mcp": { "servers": ')
+  const broken = discover(config)
+  assert.equal(broken.tierHealth.find((health) => health.tierId === 'oc:user')?.status, 'unreadable')
+  assert.equal(rowsByName(config).get('a')?.removedAt, null)
+  const stored = listInstallations(config, {}).tierHealth.find((health) => health.tierId === 'oc:user')
+  assert.equal(stored?.status, 'unreadable')
+  assert.ok(stored?.at)
+
+  fs.writeFileSync(file, '{"mcp":{"servers":{"b":{"command":["y"]}}}}')
+  discover(config)
+  assert.deepEqual([...rowsByName(config).keys()], ['b'])
+  const tombstoned = listInstallations(config, { includeRemoved: true }).installations.find(
+    (row) => row.name === 'a',
+  )
+  assert.ok(tombstoned?.removedAt)
 })
 
 test('an existing dashboard database gains the canonical tables without losing its rows', () => {
