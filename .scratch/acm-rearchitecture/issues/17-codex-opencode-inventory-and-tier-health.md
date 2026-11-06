@@ -36,13 +36,17 @@ Choices worth knowing beyond the ticket:
 
 - A `Tier` now declares `configPaths[]` instead of one `configPath`, because OpenCode accepts
   `opencode.json` or `.jsonc` at the repo root and under `.opencode/`; every file that exists is
-  read, and a missing file is a healthy empty tier.
+  read, and a missing file is a healthy empty tier. Spec §2's Tier line is amended to match.
+- The native pointer travels with the entry it came from: an OpenCode legacy V1 server is at
+  `mcp.<name>`, not `mcp.servers.<name>`, so a row's address is one that exists in the file.
+  `codex:profile` declares no `configPaths` at all (its files are launch-time and unread), and
+  `listInstallations` filters tier health by `--harness` like it filters rows.
 - OpenCode health is the file parse plus a zod shape check, not spec §9's
   `opencode debug config` probe: this slice runs no commands (user story 26), so a config that
   parses but that OpenCode still rejects reads as `ok`. `shortcut:` in `opencode/index.ts`.
 - `mcp.timeout` (OpenCode's global phase defaults) is skipped rather than read as a legacy server,
   and a legacy flat entry without `type`/`command`/`url` is not a server — same rule Pi applies to a
-  user-tier entry.
+  user-tier entry. A real server of the wrong shape still makes the tier unreadable.
 - Codex `oauth` and `http_headers_helper` are deliberately unnamed in the reader, so a secret or an
   executable in `config.toml` never becomes a fact. Codex `startup_readiness`, `enabled_tools`, and
   `scopes` stay in the native file until a ticket needs them (typed only when the shape was known).

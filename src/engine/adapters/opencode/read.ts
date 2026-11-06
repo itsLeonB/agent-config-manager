@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { McpFacts } from '../mcp-facts.ts'
+import type { McpEntry, McpFacts } from '../mcp-facts.ts'
 import type { ParsedEntries } from '../tier.ts'
 
 // OpenCode's config is JSONC, and V2 names servers under `mcp.servers.<name>` while the legacy V1
@@ -33,9 +33,14 @@ const fileSchema = z.object({
   mcp: z.record(z.string(), z.unknown()).optional(),
 })
 
-export type OpenCodeMcpEntry = { name: string; facts: McpFacts }
+// Only a value naming a transport is a server: `mcp` also holds keys such as the global `timeout`.
+const candidateSchema = z.object({
+  type: z.unknown().optional(),
+  command: z.unknown().optional(),
+  url: z.unknown().optional(),
+})
 
-export function readOpenCodeMcpJsonc(text: string): ParsedEntries<OpenCodeMcpEntry> {
+export function readOpenCodeMcpJsonc(text: string): ParsedEntries<McpEntry> {
   let raw: unknown
   try {
     raw = JSON.parse(stripJsonc(text))
@@ -47,7 +52,7 @@ export function readOpenCodeMcpJsonc(text: string): ParsedEntries<OpenCodeMcpEnt
     return { kind: 'invalid', detail: parsed.error.issues[0]?.message ?? 'invalid opencode config' }
   }
 
-  const entries: OpenCodeMcpEntry[] = []
+  const entries: McpEntry[] = []
   const servers = parsed.data.mcp?.servers
   if (servers !== undefined) {
     const group = z.record(z.string(), entrySchema).safeParse(servers)
@@ -55,26 +60,29 @@ export function readOpenCodeMcpJsonc(text: string): ParsedEntries<OpenCodeMcpEnt
       return { kind: 'invalid', detail: group.error.issues[0]?.message ?? 'invalid mcp.servers' }
     }
     for (const [name, entry] of Object.entries(group.data)) {
-      entries.push({ name, facts: toFacts(entry) })
+      entries.push({ name, facts: toFacts(entry), pointerPrefix: 'mcp.servers' })
     }
   }
   // Everything else under `mcp` is the legacy flat V1 shape, which V2 still accepts next to
-  // `servers` in the same document. A key that names no transport is not a server — `mcp.timeout`
-  // holds global phase defaults — so reading it as one would invent an installation.
+  // `servers` in the same document. A key naming no transport is not a server — `mcp.timeout` holds
+  // global phase defaults — so reading it as one would invent a row; a shape error inside a real
+  // server still makes the tier unreadable.
   for (const [name, value] of Object.entries(parsed.data.mcp ?? {})) {
     if (name === 'servers') continue
+    const candidate = candidateSchema.safeParse(value)
+    if (!candidate.success) continue
+    if (
+      candidate.data.type === undefined &&
+      candidate.data.command === undefined &&
+      candidate.data.url === undefined
+    ) {
+      continue
+    }
     const legacy = entrySchema.safeParse(value)
     if (!legacy.success) {
       return { kind: 'invalid', detail: legacy.error.issues[0]?.message ?? `invalid server ${name}` }
     }
-    if (
-      legacy.data.type === undefined &&
-      legacy.data.command === undefined &&
-      legacy.data.url === undefined
-    ) {
-      continue
-    }
-    entries.push({ name, facts: toFacts(legacy.data) })
+    entries.push({ name, facts: toFacts(legacy.data), pointerPrefix: 'mcp' })
   }
   return { kind: 'ok', entries }
 }

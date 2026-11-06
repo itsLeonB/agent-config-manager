@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { McpFacts } from '../mcp-facts.ts'
+import type { McpEntry, McpFacts } from '../mcp-facts.ts'
 import type { ParsedEntries } from '../tier.ts'
 
 // Pi's `mcp.json` is Claude/Cursor shaped: one `mcpServers` map, entries as objects. `type` is
@@ -23,10 +23,7 @@ const fileSchema = z.object({
   mcpServers: z.record(z.string(), entrySchema).optional(),
 })
 
-export type PiMcpEntry = { name: string; facts: McpFacts }
-
-// Pure over bytes so the parse can be tested without a filesystem.
-export function readPiMcpJson(text: string): ParsedEntries<PiMcpEntry> {
+export function readPiMcpJson(text: string): ParsedEntries<McpEntry> {
   try {
     const parsed = fileSchema.safeParse(JSON.parse(text))
     if (!parsed.success) {
@@ -37,6 +34,7 @@ export function readPiMcpJson(text: string): ParsedEntries<PiMcpEntry> {
       entries: Object.entries(parsed.data.mcpServers ?? {}).map(([name, entry]) => ({
         name,
         facts: toFacts(entry),
+        pointerPrefix: 'mcpServers',
       })),
     }
   } catch {

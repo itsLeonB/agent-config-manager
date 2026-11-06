@@ -205,7 +205,9 @@ Vocabulary lives in `CONTEXT.md` and must be used in code, tests, and tool outpu
   tuple so re-discovery upserts and a plan can name a source across processes.
 - **Binding**: one harness's claim, carrying `harness`, `tierId`, `method`, `verificationStatus`
   (`unverified | verified | failed | notApplicable`). No version field.
-- **Tier**: adapter-declared `{id, nativeLabel, rank, scopeBucket, configPath, writability}`, with
+- **Tier**: adapter-declared `{id, nativeLabel, rank, scopeBucket, configPaths, writability}`, with
+  `configPaths` the candidate files the tier's config can live in (OpenCode accepts `.json` or
+  `.jsonc`);
   writability `writable | elevationRequired | notState | managed`. **Scope bucket** is the derived
   four-value enum (`user | project | project-local | system`); nothing derives a tier from a bucket
   (ADR 0001).

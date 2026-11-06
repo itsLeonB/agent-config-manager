@@ -96,7 +96,10 @@ export function listInstallations(config: EngineConfig, filter: ListFilter): Inv
     // nothing still has to report when the last pass ran.
     scannedAt: newestScan(inventory.tierHealth),
     installations: inventory.installations,
-    tierHealth: inventory.tierHealth,
+    // Filtered like the rows, so `--harness codex` does not print another harness's unreadable tier.
+    tierHealth: inventory.tierHealth.filter(
+      (row) => filter.harness === undefined || row.harness === filter.harness,
+    ),
     harnesses: createAdapters(config)
       .filter((adapter) => filter.harness === undefined || adapter.harness === filter.harness)
       .map((adapter) => ({

@@ -61,6 +61,6 @@ export function createOpenCodeAdapter(config: EngineConfig): Adapter {
 
 function readMcpTier(tier: Tier): TierRead {
   return readTier(tier, readOpenCodeMcpJsonc, (server, file) =>
-    mcpInstallation(tier, file, server, 'mcp.servers'),
+    mcpInstallation(tier, file, server),
   )
 }

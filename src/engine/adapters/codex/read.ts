@@ -1,6 +1,6 @@
 import { parse as parseToml } from 'smol-toml'
 import { z } from 'zod'
-import type { McpFacts } from '../mcp-facts.ts'
+import type { McpEntry, McpFacts } from '../mcp-facts.ts'
 import type { ParsedEntries } from '../tier.ts'
 
 // Codex keeps MCP servers in `[mcp_servers.<id>]` tables. `oauth` (whose `client_secret` lives in
@@ -30,10 +30,7 @@ const fileSchema = z.object({
   mcp_servers: z.record(z.string(), entrySchema).optional(),
 })
 
-export type CodexMcpEntry = { name: string; facts: McpFacts }
-
-// Pure over bytes, like Pi's reader, so the parse is tested without a filesystem.
-export function readCodexMcpToml(text: string): ParsedEntries<CodexMcpEntry> {
+export function readCodexMcpToml(text: string): ParsedEntries<McpEntry> {
   let raw: unknown
   try {
     raw = parseToml(text)
@@ -49,6 +46,7 @@ export function readCodexMcpToml(text: string): ParsedEntries<CodexMcpEntry> {
     entries: Object.entries(parsed.data.mcp_servers ?? {}).map(([name, entry]) => ({
       name,
       facts: toFacts(entry),
+      pointerPrefix: 'mcp_servers',
     })),
   }
 }

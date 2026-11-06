@@ -90,6 +90,19 @@ test('the legacy flat V1 shape is read next to V2 servers, and a global timeout 
   ])
 })
 
+test('a non-server key under mcp neither invents a server nor makes the tier unreadable', () => {
+  const read = readOpenCodeMcpJsonc(
+    '{"mcp":{"timeout":30000,"servers":{"a":{"type":"local","command":["x"]}}}}',
+  )
+  assert.equal(read.kind, 'ok')
+  assert.deepEqual(read.kind === 'ok' ? read.entries.map((entry) => entry.name) : [], ['a'])
+  // A real server of the wrong shape still fails the whole tier.
+  assert.equal(
+    readOpenCodeMcpJsonc('{"mcp":{"a":{"type":"local","command":"not-an-array"}}}').kind,
+    'invalid',
+  )
+})
+
 test('JSONC that does not parse, or an entry of the wrong shape, is invalid rather than empty', () => {
   assert.equal(readOpenCodeMcpJsonc('{ "mcp": { ').kind, 'invalid')
   assert.equal(readOpenCodeMcpJsonc('{"mcp":{"servers":{"a":{"command":"not-an-array"}}}}').kind, 'invalid')

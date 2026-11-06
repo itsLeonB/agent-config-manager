@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto'
 import type { DiscoveredInstallation, Tier } from './types.ts'
 
+// One server as an adapter read it: its name, its canonical facts, and the native address prefix it
+// was found under. The prefix belongs to the entry because OpenCode reads the same server from
+// `mcp.servers.<name>` (V2) or `mcp.<name>` (legacy V1), and a row's address must be one that
+// actually exists in the file.
+export interface McpEntry {
+  name: string
+  facts: McpFacts
+  pointerPrefix: string
+}
+
 // The canonical MCP vocabulary every adapter reads into, so one server is comparable across
 // harnesses. A field no adapter names here never becomes a fact, and a harness-only field stays in
 // the row for the harness that owns it.
@@ -89,8 +99,7 @@ export function pointerSegment(name: string): string {
 export function mcpInstallation(
   tier: Tier,
   file: string,
-  server: { name: string; facts: McpFacts },
-  pointerPrefix: string,
+  server: McpEntry,
 ): DiscoveredInstallation {
   return {
     category: 'mcp',
@@ -98,7 +107,7 @@ export function mcpInstallation(
     scope: tier.scopeBucket,
     tierId: tier.id,
     nativeFile: file,
-    nativePointer: `${pointerPrefix}.${pointerSegment(server.name)}`,
+    nativePointer: `${server.pointerPrefix}.${pointerSegment(server.name)}`,
     knownFieldsJson: JSON.stringify(knownFieldsForStorage(server.facts)),
     contentDigest: factsDigest(server.facts),
   }

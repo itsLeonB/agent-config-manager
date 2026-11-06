@@ -24,7 +24,9 @@ export function codexTiers(config: EngineConfig): Tier[] {
       nativeLabel: 'profile',
       rank: 2,
       scopeBucket: 'user',
-      configPaths: [path.join(config.home, '.codex')],
+      // A profile is a launch-time `$CODEX_HOME/<name>.config.toml` (or a `[profiles.<name>]`
+      // table); it declares no readable location until a ticket reads it.
+      configPaths: [],
       writability: 'notState',
     },
     {
@@ -48,7 +50,5 @@ export function createCodexAdapter(config: EngineConfig): Adapter {
 }
 
 function readMcpTier(tier: Tier): TierRead {
-  return readTier(tier, readCodexMcpToml, (server, file) =>
-    mcpInstallation(tier, file, server, 'mcp_servers'),
-  )
+  return readTier(tier, readCodexMcpToml, (server, file) => mcpInstallation(tier, file, server))
 }

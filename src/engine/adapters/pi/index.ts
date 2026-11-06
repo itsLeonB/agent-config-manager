@@ -45,6 +45,6 @@ function readMcpTier(tier: Tier): TierRead {
     server.facts.command === undefined &&
     server.facts.url === undefined
       ? null
-      : mcpInstallation(tier, file, server, 'mcpServers'),
+      : mcpInstallation(tier, file, server),
   )
 }

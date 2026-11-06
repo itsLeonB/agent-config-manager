@@ -204,11 +204,11 @@ test('one listing call returns installations from all three harnesses, filterabl
   )
   fs.writeFileSync(
     opencodeConfigFile(config, 'project'),
-    '{ // project scope\n  "mcp": { "servers": { "ocserver": { "type": "local", "command": ["oc"], "disabled": true } } },\n}',
+    '{ // project scope\n  "mcp": {\n    "legacyoc": { "type": "local", "command": ["z"] },\n    "servers": { "ocserver": { "type": "local", "command": ["oc"], "disabled": true } },\n  },\n}',
   )
 
   const scan = discover(config)
-  assert.equal(scan.installations, 4)
+  assert.equal(scan.installations, 5)
   // Every writable tier is measured, so a tier whose config is missing still reports `ok` instead
   // of disappearing from the health list.
   assert.deepEqual(
@@ -229,13 +229,15 @@ test('one listing call returns installations from all three harnesses, filterabl
   )
   assert.deepEqual(
     listInstallations(config, { scope: 'project' }).installations.map((row) => row.name),
-    ['ocserver', 'projectserver'],
+    ['legacyoc', 'ocserver', 'projectserver'],
   )
   const byName = rowsByName(config)
   assert.equal(byName.get('serena')?.nativeFile, codexConfigFile(config, 'user'))
   assert.equal(byName.get('serena')?.nativePointer, 'mcp_servers.serena')
   assert.deepEqual(byName.get('serena')?.bindings.map((binding) => binding.tierId), ['codex:user'])
+  // A legacy V1 server really lives at `mcp.<name>`, so its address says so.
   assert.equal(byName.get('ocserver')?.nativePointer, 'mcp.servers.ocserver')
+  assert.equal(byName.get('legacyoc')?.nativePointer, 'mcp.legacyoc')
   assert.deepEqual(byName.get('ocserver')?.bindings.map((binding) => binding.tierId), ['oc:project'])
   assert.equal(JSON.parse(byName.get('ocserver')?.knownFieldsJson ?? '{}').enabled, false)
 })
