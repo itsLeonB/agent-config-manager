@@ -40,9 +40,22 @@ _Avoid_: error state, scan status
 the adapter, declared for `(harness, category, tier)`, never stored on an Installation.
 
 **Known fields**: the subset of an Installation's native configuration the adapter understands and
-persists in normalised form. Unknown fields stay in the native file and are preserved by the
-writer; they are never copied into ACM's store.
-_Avoid_: config state, parsed config, payload
+persists in normalised form. A value that classifies `suspect` or `secret` is persisted as a marker
+carrying its verdict (`[withheld: secret]`), never as the value. Unknown fields stay in the native
+file and are preserved by the writer; they are never copied into ACM's store.
+_Avoid_: config state, parsed config, payload, redacted config
+
+**Verdict**: the classifier's answer for one pointer — `clean`, `suspect`, or `secret`. Produced by one
+ordered rule table over the source bytes before a value can reach known fields, a plan, a tool
+result, or a log line, so a reader can trust that no credential arrived with what they are reading.
+Three properties are deliberately clean: an interpolation reference (`${VAR}`, `{env:VAR}`), a
+digest under a digest-shaped name, and a value drawn from an alphabet that cannot hold a key.
+_Avoid_: risk level, severity, confidence, redaction
+
+**Credential pointer**: a pointer the adapter declares credential-bearing, carrying a `kind` —
+`leaf` for a value that must never be stored, `file` for a whole file whose text has to be scanned.
+The three markdown categories point at whole files, which is why the kind is not a flat list.
+_Avoid_: secret field, sensitive key
 
 **Native location**: `{file, pointer}` — the config file plus the address inside it
 (`~/.pi/agent/mcp.json#mcpServers.serena`, `<repo>/.codex/config.toml#mcp_servers.serena`). Part of

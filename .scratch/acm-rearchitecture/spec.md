@@ -362,6 +362,12 @@ plan, a tool result, an elicitation form, or a log line. Ordered, first match wi
 | 7 | pure hex ≥32, entropy ≥ 3.0, pointer name from rule 5 | `suspect` |
 | 8 | otherwise | `clean` |
 
+Amended while building ticket 18: rule 1 is evaluated **before** rule 0, because a reference is
+secret-free by construction and withholding `${VAR}` at `env.*` would erase the one form a human is
+meant to read; and rule 5 leaves long hex to rule 7, so a digest under a credential name is judged on
+entropy rather than its name. A name-valued fact (`bearerTokenEnvVar`, `envPassthrough` entries) is a
+secret-free form, not a secret.
+
 Entropy is split by alphabet because hex caps at 4.0 and base64 keys sit at 4.33–4.75; one threshold
 either flags every hash or misses every hex key. Rule 4 is mandatory: 14 of 49 entropy hits on the
 real corpus were Codex `hooks.state.*.trusted_hash` digests.

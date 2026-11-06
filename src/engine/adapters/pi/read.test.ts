@@ -47,15 +47,45 @@ test('credential-pointer values are withheld from what reaches the store', () =>
   assert.equal(stored.includes('realtokenvalue'), false)
   assert.equal(stored.includes('user:pass'), false)
   assert.equal(stored.includes('example.test'), true)
-  assert.equal(knownFieldsForStorage(facts).env?.GITHUB_TOKEN, '[withheld]')
-  assert.equal(knownFieldsForStorage(facts).headers?.Authorization, '[withheld]')
+  assert.equal(knownFieldsForStorage(facts).env?.GITHUB_TOKEN, '[withheld: secret]')
+  assert.equal(knownFieldsForStorage(facts).headers?.Authorization, '[withheld: secret]')
+  assert.equal(knownFieldsForStorage(facts).url, '[withheld: secret] https://example.test/mcp')
+})
+
+test('a token anywhere in a url is withheld, not just in its userinfo', () => {
+  const facts = factsOf(
+    '{"mcpServers":{"a":{"url":"https://example.test/mcp?api_key=ghp_AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRr"}}}',
+    'a',
+  )
+  assert.equal(knownFieldsForStorage(facts).url, '[withheld: secret]')
 })
 
 test('a url this process cannot parse is withheld rather than kept verbatim', () => {
   const facts = factsOf('{"mcpServers":{"a":{"url":"nonsense user:pass@host/mcp"}}}', 'a')
-  assert.equal(knownFieldsForStorage(facts).url, '[withheld]')
+  assert.equal(knownFieldsForStorage(facts).url, '[withheld: secret]')
   const plain = factsOf('{"mcpServers":{"a":{"url":"nonsense-host/mcp"}}}', 'a')
   assert.equal(knownFieldsForStorage(plain).url, 'nonsense-host/mcp')
+})
+
+test('a reference survives as itself, and a token in an argument is withheld by its shape', () => {
+  const facts = factsOf(
+    JSON.stringify({
+      mcpServers: {
+        a: {
+          command: 'x',
+          args: ['--api-key', 'sk-proj-AbCdEfGhIjKlMnOpQrStUvWx'],
+          env: { GITHUB_TOKEN: '${GITHUB_TOKEN}', OTHER: '!op read op://vault/x' },
+          description: 'symbol tools',
+        },
+      },
+    }),
+    'a',
+  )
+  const stored = knownFieldsForStorage(facts)
+  assert.equal(stored.env?.GITHUB_TOKEN, '${GITHUB_TOKEN}')
+  assert.equal(stored.env?.OTHER, '!op read op://vault/x')
+  assert.equal(stored.args?.[1], '[withheld: secret]')
+  assert.equal(stored.description, 'symbol tools')
 })
 
 test('the digest tracks known fields and is stable across key order', () => {

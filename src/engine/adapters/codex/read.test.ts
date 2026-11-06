@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert'
 import { readCodexMcpToml } from './read.ts'
+import { knownFieldsForStorage } from '../mcp-facts.ts'
 import type { McpFacts } from '../mcp-facts.ts'
 
 function factsOf(text: string, name: string): McpFacts {
@@ -45,6 +46,12 @@ Authorization = "Bearer sk-fixturetoken"
   assert.equal(facts.url, 'https://example.test/mcp')
   assert.equal(facts.bearerTokenEnvVar, 'EXAMPLE_TOKEN')
   assert.deepEqual(facts.headers, { Authorization: 'Bearer sk-fixturetoken' })
+
+  // The bearer variable is a name, not a secret: a mirror has to carry it, so it stays readable
+  // while the header beside it is withheld.
+  const stored = knownFieldsForStorage(facts)
+  assert.equal(stored.bearerTokenEnvVar, 'EXAMPLE_TOKEN')
+  assert.equal(stored.headers?.Authorization, '[withheld: secret]')
 })
 
 test('Codex-native fields are read under their canonical names, seconds kept as seconds', () => {
