@@ -110,8 +110,8 @@ export function verifyPlan(plan: MirrorPlan): VerifyResult {
   }
 }
 
-// Executes exactly the given writes: the plan is never re-derived, so what lands is what was
-// approved. Every refusal happens before the first byte.
+// Executes exactly the given writes: they are never re-derived, so what lands is what was approved.
+// The grade is re-computed rather than trusted. Every refusal happens before the first byte.
 export function executePlan(
   config: EngineConfig,
   adapters: readonly Adapter[],
@@ -140,17 +140,6 @@ export function executePlan(
   }
   if (owned.tier.writability !== 'writable') {
     return refusal('refused', `${owned.tier.id} is ${owned.tier.writability}: a mirror target must be writable`)
-  }
-  // A differing target is a conflict until the caller names replacement: both values are shown, so
-  // nothing on disk is overwritten silently.
-  if (plan.conflicts.length > 0 && options.onConflict !== 'replace') {
-    const shown = plan.conflicts
-      .map((conflict) => `${conflict.pointer}: ${JSON.stringify(conflict.current)} holds now, this plan would write ${JSON.stringify(conflict.proposed)}`)
-      .join('; ')
-    return refusal(
-      'refused',
-      `${plan.conflicts.length} value(s) in ${plan.target.nativeLocation} disagree with this plan (${shown}); nothing was written, pass onConflict: replace to overwrite them`,
-    )
   }
   // Preflight every address before the first byte: containment, then whether the file can be
   // written at all. An unwritable target is refused here rather than discovered half way through.
@@ -192,6 +181,21 @@ export function executePlan(
   try {
     const stale = staleCondition(effective)
     if (stale !== null) return refusal('stale', stale)
+    // A differing target is a conflict until the caller names replacement: both values are shown, so
+    // nothing on disk is overwritten silently. It runs after the digests, because what a human reads
+    // here is the current value, not the planning-time one.
+    if (effective.conflicts.length > 0 && options.onConflict !== 'replace') {
+      const shown = effective.conflicts
+        .map(
+          (conflict) =>
+            `${conflict.pointer}: ${JSON.stringify(conflict.current)} holds now, this plan would write ${JSON.stringify(conflict.proposed)}`,
+        )
+        .join('; ')
+      return refusal(
+        'refused',
+        `${effective.conflicts.length} value(s) in ${plan.target.nativeLocation} disagree with this plan (${shown}); nothing was written, pass onConflict: replace to overwrite them`,
+      )
+    }
     const { landed, failed } = landWrites(effective)
     const verification = verifyPlan(effective)
     return {

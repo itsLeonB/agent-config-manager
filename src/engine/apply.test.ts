@@ -307,6 +307,30 @@ test('a differing target refuses by default, shows both values, and replaces onl
   assert.equal(document.mcp_servers.serena?.command, 'serena')
 })
 
+test('asking for replacement does not answer for an executable write', () => {
+  const config = fixture()
+  const target = codexFile(config)
+  codexFile_(config, ['[mcp_servers.serena]', "command = 'serena-old'", ''].join('\n'))
+  piServers(config, { serena: { command: 'serena' } })
+  discover(config)
+
+  const planned = planFrom(config, piId(config, 'serena'), 'codex:user')
+  const [first] = planned.writes
+  assert.ok(first)
+  // The conflict gate and the risk-flag gate are separate answers: one `onConflict` replaces a value,
+  // it does not stand in for the tick a running command needs.
+  const replaced = applyPlan(
+    config,
+    resign(planned, { writes: [{ ...first, executable: true }] }),
+    { onConflict: 'replace' },
+  )
+
+  assert.equal(replaced.outcome, 'refused')
+  assert.match(replaced.reason ?? '', /needs a human's own answer/)
+  assert.deepEqual(replaced.landed, [])
+  assert.equal(fs.readFileSync(target, 'utf8'), ['[mcp_servers.serena]', "command = 'serena-old'", ''].join('\n'))
+})
+
 test('a plan with nothing to write applies without touching the target', () => {
   const config = fixture()
   const before = ['[mcp_servers.serena]', "command = 'serena'", ''].join('\n')

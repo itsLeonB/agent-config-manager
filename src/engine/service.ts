@@ -309,8 +309,9 @@ export function applyPlan(
   const adapters = createAdapters(config)
   const plan = validated.plan
   const result = executePlan(config, adapters, plan, options)
-  if (result.outcome === 'applied' || result.outcome === 'partial') {
-    recordMirror(config, adapters, plan, result)
+  const grade = result.grade
+  if (grade !== null && (result.outcome === 'applied' || result.outcome === 'partial')) {
+    recordMirror(config, adapters, plan, result, grade)
   }
   return result
 }
@@ -340,6 +341,7 @@ function recordMirror(
   adapters: readonly Adapter[],
   plan: MirrorPlan,
   result: ApplyResult,
+  grade: 'safe' | 'risky',
 ): void {
   discover(config)
   const location = targetLocation(plan, adapters)
@@ -353,7 +355,7 @@ function recordMirror(
     at: new Date().toISOString(),
     planId: plan.planId,
     // The grade apply computed, not the claim the document carried.
-    grade: result.grade ?? plan.security.grade,
+    grade,
     outcome: result.outcome,
     toolVersion: plan.toolVersion,
     sourceInstallationId: plan.source.installationId,

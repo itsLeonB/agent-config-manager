@@ -165,13 +165,7 @@ function parseMirrorOptions(argv: string[]): MirrorOptions {
 
 // A plan is carried by the caller, so both faces take the document itself — from a file or from
 // stdin — and neither takes a plan id.
-function readPlan(argv: string[]): Json | null {
-  let source: string | undefined
-  try {
-    source = parseArgs({ args: argv, allowPositionals: true, options: {} }).positionals[0]
-  } catch {
-    return null
-  }
+function readDocument(source: string | undefined): Json | null {
   try {
     const text = source === undefined || source === '-' ? readFileSync(0, 'utf8') : readFileSync(source, 'utf8')
     return JSON.parse(text)
@@ -180,34 +174,45 @@ function readPlan(argv: string[]): Json | null {
   }
 }
 
+function readPlan(argv: string[]): Json | null {
+  let source: string | undefined
+  try {
+    source = parseArgs({ args: argv, allowPositionals: true, options: {} }).positionals[0]
+  } catch {
+    return null
+  }
+  return readDocument(source)
+}
+
 // Overwriting a value a human already wrote at that address is a named act: the flag is the ask, and
-// its absence is the default refusal.
-function readApply(argv: string[]): { raw: Json; onConflict: 'abort' | 'replace' } | null {
-  let values: { 'on-conflict'?: string }
+// its absence is the default refusal. A misspelt value is refused rather than read as the default.
+function apply(argv: string[]): number {
   let positionals: string[]
+  let onConflict: string | undefined
   try {
     const parsed = parseArgs({
       args: argv,
       allowPositionals: true,
       options: { 'on-conflict': { type: 'string' } },
     })
-    values = parsed.values
     positionals = parsed.positionals
+    onConflict = parsed.values['on-conflict']
   } catch {
-    return null
+    process.stderr.write(USAGE)
+    return 1
   }
-  const raw = readPlan(positionals)
-  if (raw === null) return null
-  return { raw, onConflict: values['on-conflict'] === 'replace' ? 'replace' : 'abort' }
-}
-
-function apply(argv: string[]): number {
-  const input = readApply(argv)
-  if (input === null) {
+  if (onConflict !== undefined && onConflict !== 'abort' && onConflict !== 'replace') {
+    process.stderr.write(`--on-conflict takes abort or replace, not ${printable(onConflict)}\n`)
+    return 1
+  }
+  const raw = readDocument(positionals[0])
+  if (raw === null) {
     process.stderr.write('acm apply reads one plan document from a file or from stdin\n')
     return 1
   }
-  const result = applyPlan(resolveDefaultConfig(), input.raw, { onConflict: input.onConflict })
+  const result = applyPlan(resolveDefaultConfig(), raw, {
+    onConflict: onConflict === 'replace' ? 'replace' : 'abort',
+  })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
   return result.outcome === 'applied' ? 0 : 1
 }

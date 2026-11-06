@@ -57,18 +57,25 @@ Choices worth knowing beyond the ticket:
   20 deliberately seeds a missing target so the first mirror creates the file. Gating it would make
   `acm mirror` into a fresh config impossible without an MCP elicitation, which the CLI never has.
   The grade still reaches the client's own permission layer, which is what gates on it.
-- **Conflicts are their own gate, ahead of containment.** A non-empty `conflicts[]` refuses with
-  `onConflict: abort` (the default) and the refusal shows every pointer with both values, withheld
-  ones included, so a human reads the diff without reading the file. `onConflict: replace` is the
-  named ask; nothing about a refusal is remembered, so a second call refuses on the same grounds.
-  Because the conflict itself is that gate, a conflicting write is not also moved into `manualSteps`
-  when replacement was asked for — otherwise `replace` could never do anything on a client without
-  elicitation.
+- **Conflicts are their own gate, and it runs after the digests.** A non-empty `conflicts[]` refuses
+  with `onConflict: abort` (the default) and the refusal shows every pointer with both values,
+  withheld ones included, so a human reads the diff without reading the file. It sits after the
+  precondition check, so a plan that is both stale and conflicting says `stale` rather than inviting
+  a replacement of values it has not re-read. `onConflict: replace` is the named ask; nothing about a
+  refusal is remembered, so a second call refuses on the same grounds, and `acm apply` refuses a
+  misspelt `--on-conflict` instead of reading it as the default. Because the conflict itself is that
+  gate, a conflicting write is not also moved into `manualSteps` when replacement was asked for —
+  otherwise `replace` could never do anything on a client without elicitation — but `replace` answers
+  only the conflict: a conflicting write that also runs a command still comes back as a manual step.
 - **`disposition` is new on the plan** (`mirror | alreadyPresent | alreadyShared`, plus the reason),
   because 07 §9 says the reason rides in `gaps[]` or `conflicts[]` and neither has a slot: the gap
   vocabulary is closed at five field-level reasons. A target that already holds every value the plan
   would write, and a target whose file *is* the source file, both return `writes: []`, no asserts,
-  and the reason; `apply` then lands nothing and leaves the bytes alone.
+  and the reason; `apply` then lands nothing and leaves the bytes alone. Spec §4's shape block and
+  §5's validation order were amended with it, and the words this ticket added to the code —
+  **grade**, **risk condition**, **consent basis**, **disposition**, **gap disposition** — are in
+  `CONTEXT.md`. The graded-consent decision record the spec had owed since ticket 08 is
+  [ADR 0005](../../../docs/adr/0005-graded-consent-in-the-engine.md).
 - **The gap-disposition table is now the one rule.** `GAP_DISPOSITIONS` maps each of the five reasons
   to `planApplies | manualStep | notTranslatable`, `gapDisposition()` throws for a reason it has no
   rule for, and the two planner branches that owe a manual step consult it instead of encoding the
