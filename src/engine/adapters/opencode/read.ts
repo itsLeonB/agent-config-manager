@@ -67,7 +67,9 @@ export function normaliseLegacyMcp(document: PlanValue): LegacyMcpNormalisation 
     if (!entry.success) return { kind: 'invalid', detail: `mcp.${name} is not a server entry` }
     // Which of the two definitions the harness honours is not verified, so a name in both is
     // reported rather than resolved by picking one.
-    if (converted[name] !== undefined) {
+    // `Object.hasOwn`, not a value test: a server can legitimately be named `toString`, and the
+    // inherited member is not a definition the file holds.
+    if (Object.hasOwn(converted, name)) {
       return { kind: 'invalid', detail: `mcp.${name} is defined both flat and under mcp.servers` }
     }
     const lifted = fromLegacyEntry(entry.data)

@@ -9,6 +9,7 @@ import {
   factsFromKnownFields,
   pointerSegment,
   pointerSegments,
+  urlVerdict,
   withheldVerdict,
   type McpFacts,
   type McpValue,
@@ -22,7 +23,7 @@ import {
 import { normaliseLegacyMcp, stripJsonc } from './adapters/opencode/read.ts'
 import { HARNESSES, WRITABILITIES, type Adapter, type HarnessId, type Tier } from './adapters/types.ts'
 import { planObjectSchema, planValueSchema, type PlanValue } from './plan-value.ts'
-import { VERDICTS, classify, withheldMarker, type Verdict } from './secret.ts'
+import { VERDICTS, classify, withheldMarker, type CredentialPointer, type Verdict } from './secret.ts'
 
 export { planObjectSchema, planValueSchema, type PlanValue } from './plan-value.ts'
 
@@ -213,7 +214,10 @@ export function buildPlan(input: PlanInput): PlanResult {
     }
   }
   const entryPointer = `${target.surface.pointerPrefix}.${pointerSegment(source.name)}`
-  const ambiguous = ambiguousTarget(target.tier, file, entryPointer)
+  // A candidate file may define this server at either address, and both are definitions of it.
+  const addresses =
+    target.harness === 'opencode' ? [entryPointer, `mcp.${pointerSegment(source.name)}`] : [entryPointer]
+  const ambiguous = ambiguousTarget(target.tier, file, addresses)
   if (ambiguous !== null) return { kind: 'refused', reason: ambiguous }
   const document = existing.kind === 'parsed' ? existing.document : null
   // OpenCode reads a legacy flat `mcp.<name>` shape beside `mcp.servers`, and one file may hold
@@ -548,9 +552,14 @@ function normalisedWrite(
 ): { kind: 'ok'; write: PlanWrite } | { kind: 'refused'; reason: string } {
   const container = planObjectSchema.parse(legacy.value)
   const servers = planObjectSchema.parse(container.servers ?? {})
-  const previous = planObjectSchema.safeParse(servers[name] ?? {})
-  const carried = previous.success ? previous.data : {}
-  const entry = { ...carried, ...planObjectSchema.parse(entryValue(partition.writes)) }
+  const previous = planObjectSchema.safeParse(servers[name])
+  if (servers[name] !== undefined && !previous.success) {
+    return {
+      kind: 'refused',
+      reason: `mcp.servers.${name} is not a server entry, so the normalised block cannot be written over it`,
+    }
+  }
+  const entry = mergeEntry(previous.success ? previous.data : {}, planObjectSchema.parse(entryValue(partition.writes)))
   const value: PlanValue = { ...container, servers: { ...servers, [name]: entry } }
   // Both the value and the block it replaces are classified, because `priorValue` is shown verbatim:
   // an unclean leaf in either one refuses the plan instead of travelling with it.
@@ -586,13 +595,7 @@ function normalisedWrite(
 function uncleanPointer(value: PlanValue | null, pointer: string): string | null {
   if (value === null) return null
   const scalar = z.string().safeParse(value)
-  if (scalar.success) {
-    const canonical = pointerSegments(pointer)
-      .slice(-2)
-      .map((segment) => (segment === 'environment' ? 'env' : segment))
-      .join('.')
-    return classify(canonical, scalar.data, MCP_CREDENTIAL_POINTERS).verdict === 'clean' ? null : pointer
-  }
+  if (scalar.success) return cleanAt(pointer, scalar.data) ? null : pointer
   const list = z.array(planValueSchema).safeParse(value)
   if (list.success) {
     for (const [index, item] of list.data.entries()) {
@@ -608,6 +611,41 @@ function uncleanPointer(value: PlanValue | null, pointer: string): string | null
     if (found !== null) return found
   }
   return null
+}
+
+// The pointers a carried block can hold that the vocabulary never names: an OpenCode `oauth` table is
+// deliberately left out of the facts, so its client secret has no classifier rule of its own.
+const CARRIED_POINTERS: readonly CredentialPointer[] = [
+  ...MCP_CREDENTIAL_POINTERS,
+  { pointer: 'oauth.client_secret', kind: 'leaf' },
+]
+
+// One carried value, judged at its own address. `environment`/`headers` are the credential pointers
+// (`env.<K>`, `headers.<H>`); a url is judged as an address, because what is wrong with a
+// credential-bearing one is inside the value; anything else falls to the classifier's own rules.
+function cleanAt(pointer: string, value: string): boolean {
+  const canonical = pointerSegments(pointer)
+    .slice(-2)
+    .map((segment) => (segment === 'environment' ? 'env' : segment))
+    .join('.')
+  if (canonical === 'oauth.client_secret') {
+    return classify(canonical, value, CARRIED_POINTERS).verdict === 'clean'
+  }
+  if (canonical === 'url' || canonical.endsWith('.url')) return urlVerdict(value) === 'clean'
+  return classify(canonical, value, CARRIED_POINTERS).verdict === 'clean'
+}
+
+// The mirrored entry as the write leaves it: the source's fields, and for a table the target already
+// holds — `timeout`, `environment`, `headers` — its own keys kept. Pi has no startup timeout, so a
+// carried `timeout.startup` or `catalog` survives a write that only supplies `execution`.
+function mergeEntry(carried: Record<string, PlanValue>, proposed: Record<string, PlanValue>) {
+  const merged = { ...carried }
+  for (const [key, value] of Object.entries(proposed)) {
+    const table = planObjectSchema.safeParse(value)
+    const existing = planObjectSchema.safeParse(merged[key])
+    merged[key] = table.success && existing.success ? { ...existing.data, ...table.data } : value
+  }
+  return merged
 }
 
 // The block rewrite is the one write this slice makes over bytes it did not address itself, so the
@@ -708,13 +746,14 @@ function targetFile(tier: Tier): string {
 // A tier can hold the same server in more than one candidate file (OpenCode reads `opencode.json`
 // and `.opencode/opencode.json`), and which one wins is not verified. Writing the first while the
 // other defines the same entry would leave two definitions, so that is refused rather than guessed.
-function ambiguousTarget(tier: Tier, chosen: string, entryPointer: string): string | null {
+function ambiguousTarget(tier: Tier, chosen: string, addresses: string[]): string | null {
   for (const candidate of tier.configPaths) {
     if (candidate === chosen || !existsSync(candidate)) continue
     const other = readTargetFile(candidate)
     if (other.kind !== 'parsed') continue
-    if (resolvePointer(other.document, entryPointer) === undefined) continue
-    return `${entryPointer} is defined in both ${chosen} and ${candidate}; which one ${tier.id} honours is not verified, so remove one by hand`
+    const defined = addresses.find((address) => resolvePointer(other.document, address) !== undefined)
+    if (defined === undefined) continue
+    return `${defined} is defined in both ${chosen} and ${candidate}; which one ${tier.id} honours is not verified, so remove one by hand`
   }
   return null
 }

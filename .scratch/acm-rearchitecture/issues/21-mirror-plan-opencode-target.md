@@ -39,7 +39,9 @@ Choices worth knowing beyond the ticket:
   `servers.<name>`, every sibling carried across, `enabled` inverted to `disabled`, one numeric
   `timeout` split across `startup`/`execution`, and the reserved `mcp.timeout` left where it is. The
   entry's leaf writes are folded into that one value, and its own fields the source does not set are
-  kept, which is how a target-only field survives instead of being reported absent.
+  kept — a table the target already holds (`timeout`, `environment`, `headers`) keeps its own keys, so
+  a `timeout.startup`/`catalog` Pi cannot express survives a write that only supplies `execution`.
+  An entry that is present but is not a table is a refusal, not a value to write over.
 - **The file is normalised in memory before anything is read from it.** Prior values, conflicts, and
   the two structural refusals all run against the normalised view, so a value only the target holds
   is reported rather than guessed missing, and a legacy `url`/`command` that would leave the other
@@ -50,7 +52,9 @@ Choices worth knowing beyond the ticket:
   refuses the plan and names the pointer. The classifier reads the canonical last two segments, as
   `priorValueAt` does, with `environment` under the name `env`: `env.<K>` is therefore
   credential-bearing by declaration, so a sibling value there refuses without having to look like a
-  token. The refusal is caller input, not a gap — the same class as an unwritable tier — because the
+  token. Two shapes the vocabulary has no pointer for are judged where they live: a `url` as an
+  address (userinfo, credential-shaped query parameter), and `oauth.client_secret`, which the reader
+  deliberately drops, so the carried block names it itself. The refusal is caller input, not a gap — the same class as an unwritable tier — because the
   alternative would write a marker into somebody's config.
 - **A sibling whose spelling had to change is named.** `normaliseLegacyMcp` returns the entries it
   rewrote (`enabled` inverted, a numeric `timeout` split) and the plan carries one manual step per
@@ -58,7 +62,10 @@ Choices worth knowing beyond the ticket:
   `timeout` — `catalog` included — is carried as it stands, because the vocabulary does not name
   `catalog` but the file still holds it.
 - **A name defined in both shapes, or a legacy value that is not a table, is a refusal** — which of
-  the two definitions the harness honours is unverified, so the plan does not pick one.
+  the two definitions the harness honours is unverified, so the plan does not pick one. The
+  competing-definition check looks in the other candidate files for both addresses as well, because a
+  server defined flat in `opencode.json` and under `servers` in `.opencode/opencode.json` is the same
+  ambiguity as two new-shape definitions.
 - **The editor replaces a node of the same kind, and no other.** `writeJson` used to accept only a
   leaf; a plan that names `mcp` now replaces that table, and an existing `command[]` is replaceable
   too, which it was not before. A write that would turn a table into a scalar is still refused —

@@ -820,6 +820,95 @@ test('a sibling whose spelling changed is named in a manual step, not rewritten 
   })
 })
 
+test('a timeout the source cannot express keeps the phases the target already sets', () => {
+  const config = fixture()
+  // Pi stores one request timeout, so `startup` and `catalog` are the target's own values.
+  piFixture(config, { serena: { command: 'serena', timeout: 30 } })
+  fs.writeFileSync(
+    path.join(config.home, '.config', 'opencode', 'opencode.json'),
+    JSON.stringify({
+      mcp: {
+        other: { type: 'local', command: ['other'] },
+        servers: { serena: { type: 'local', command: ['serena-old'], timeout: { startup: 5, catalog: 7 } } },
+      },
+    }),
+  )
+
+  const planned = plan(config, 'serena', 'oc:user')
+  const block = planObjectSchema.parse(writeValues(planned).get('mcp'))
+  const servers = planObjectSchema.parse(block.servers ?? {})
+
+  assert.deepEqual(planObjectSchema.parse(servers.serena ?? {}).timeout, {
+    startup: 5,
+    catalog: 7,
+    execution: 30_000,
+  })
+})
+
+test('a selected entry that is not a server is refused, never overwritten', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  fs.writeFileSync(
+    path.join(config.home, '.config', 'opencode', 'opencode.json'),
+    JSON.stringify({
+      mcp: { other: { type: 'local', command: ['other'] }, servers: { serena: 'broken' } },
+    }),
+  )
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'oc:user')
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /mcp\.servers\.serena is not a server entry/)
+})
+
+test('a competing definition at the legacy address in another candidate file is refused too', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  // The root file is the one the tier honours (it exists first), and the nested candidate defines
+  // the same server at the legacy flat address.
+  fs.writeFileSync(path.join(config.projectRoot, 'opencode.json'), JSON.stringify({ theme: 'dark' }))
+  fs.writeFileSync(
+    path.join(config.projectRoot, '.opencode', 'opencode.json'),
+    JSON.stringify({ mcp: { serena: { type: 'local', command: ['flat'] } } }),
+  )
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'oc:project')
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /mcp\.serena is defined in both/)
+})
+
+test('a carried url with a credential query parameter, or an oauth secret, refuses the block', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  const file = path.join(config.home, '.config', 'opencode', 'opencode.json')
+
+  for (const [sibling, pointer] of [
+    [{ type: 'local', url: 'https://example.test/mcp?token=abcdefghij' }, 'mcp.servers.other.url'],
+    [{ type: 'local', command: ['other'], oauth: { client_secret: 'abc' } }, 'mcp.servers.other.oauth.client_secret'],
+  ] as const) {
+    fs.writeFileSync(file, JSON.stringify({ mcp: { other: sibling } }))
+    const result = planMirror(config, onlyId(config, 'serena'), 'oc:user')
+    assert.equal(result.kind, 'refused', pointer)
+    assert.match(result.kind === 'refused' ? result.reason : '', new RegExp(pointer.replace(/\./g, '\\.')))
+  }
+})
+
+test('a sibling named after an inherited member is not mistaken for a duplicate', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  fs.writeFileSync(
+    path.join(config.home, '.config', 'opencode', 'opencode.json'),
+    JSON.stringify({ mcp: { toString: { type: 'local', command: ['other'] } } }),
+  )
+
+  const planned = plan(config, 'serena', 'oc:user')
+  const block = planObjectSchema.parse(writeValues(planned).get('mcp'))
+  const servers = planObjectSchema.parse(block.servers ?? {})
+
+  assert.deepEqual(servers.toString, { type: 'local', command: ['other'] })
+})
+
 test('a server defined in both OpenCode shapes is refused rather than resolved by picking one', () => {
   const config = fixture()
   piFixture(config, { serena: { command: 'serena' } })
