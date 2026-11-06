@@ -1,0 +1,314 @@
+import test from 'node:test'
+import assert from 'node:assert'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import type { EngineConfig } from './config.ts'
+import { digestOfPath } from './digest.ts'
+import { planIdOf, type MirrorPlan, type PlanValue, type PlanWrite } from './plan.ts'
+import { applyPlan, discover, listInstallations, planMirror, verifyPlanDocument } from './service.ts'
+
+// A fixture home, a fixture project, and a temporary database: the whole environment these tests
+// need. The skill and instruction locations are the real ones, under the fixture home.
+function fixture(): EngineConfig {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-shared-test-'))
+  const home = path.join(root, 'home')
+  const projectRoot = path.join(root, 'project')
+  for (const dir of [
+    [home, '.pi', 'agent'],
+    [projectRoot, '.pi'],
+    [home, '.codex'],
+    [projectRoot, '.codex'],
+    [home, '.config', 'opencode'],
+    [projectRoot, '.opencode'],
+  ]) {
+    fs.mkdirSync(path.join(...dir), { recursive: true })
+  }
+  return { home, projectRoot, storePath: path.join(root, 'dashboard.db') }
+}
+
+function sharedSkills(config: EngineConfig): string {
+  return path.join(config.home, '.agents', 'skills')
+}
+
+function userAgentMd(config: EngineConfig): string {
+  return path.join(config.home, '.pi', 'agent', 'AGENTS.md')
+}
+
+function codexAgentMd(config: EngineConfig): string {
+  return path.join(config.home, '.codex', 'AGENTS.md')
+}
+
+function projectAgentMd(config: EngineConfig): string {
+  return path.join(config.projectRoot, 'AGENTS.md')
+}
+
+interface SkillFixture {
+  description?: string
+  extra?: string
+  script?: string
+}
+
+// A skill is a directory with a `SKILL.md`; `extra` is a frontmatter key no harness names, which a
+// copy has to keep.
+function writeSkill(dir: string, fixture: SkillFixture = {}): void {
+  fs.mkdirSync(dir, { recursive: true })
+  const frontmatter = [
+    '---',
+    'name: review',
+    `description: ${fixture.description ?? 'Review a diff'}`,
+    ...(fixture.extra === undefined ? [] : [fixture.extra]),
+    '---',
+    '',
+    '# Review',
+    '',
+    'Read the diff, then the code it touches.',
+    '',
+  ].join('\n')
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), frontmatter)
+  if (fixture.script !== undefined) {
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'scripts', 'run.sh'), fixture.script)
+  }
+}
+
+function applyAndVerify(config: EngineConfig, planned: MirrorPlan) {
+  const applied = applyPlan(config, planned)
+  assert.equal(applied.outcome, 'applied', applied.reason ?? '')
+  const verified = verifyPlanDocument(config, planned)
+  assert.equal(verified.kind, 'ok', verified.kind === 'refused' ? verified.reason : '')
+  return { applied, verification: verified.kind === 'ok' ? verified.verification : null }
+}
+
+function plan(config: EngineConfig, nativeFile: string, target: string): MirrorPlan {
+  const row = listInstallations(config, {}).installations.find(
+    (candidate) => candidate.nativeFile === nativeFile,
+  )
+  assert.ok(row, `nothing discovered at ${nativeFile}`)
+  const result = planMirror(config, row.id, target)
+  assert.equal(result.kind, 'plan', result.kind === 'refused' ? result.reason : '')
+  return result.kind === 'plan' ? result.plan : assert.fail('unreachable')
+}
+
+test('a mirrored skill lands in the shared location, and is one installation with three bindings', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill, { extra: 'custom_key: keep-me', script: '#!/bin/sh\necho hi\n' })
+  discover(config)
+
+  const planned = plan(config, piSkill, 'codex:user')
+
+  // One copy, into the location all three harnesses read, carrying no bytes in the document.
+  assert.equal(planned.category, 'skills')
+  assert.equal(planned.writes.length, 1)
+  const [write] = planned.writes
+  assert.ok(write !== undefined && write.op === 'copyFile')
+  assert.equal(write.file, path.join(sharedSkills(config), 'review'))
+  assert.equal(write.source, piSkill)
+  assert.equal(write.sourceDigest, digestOfPath(piSkill))
+  // A copy and a new directory are both risk conditions, so no client applies this unanswered.
+  assert.equal(planned.security.grade, 'risky')
+
+  const { verification } = applyAndVerify(config, planned)
+  assert.equal(verification?.outcome, 'verified')
+
+  // The bytes are the source's, unknown frontmatter key and script included.
+  const copied = fs.readFileSync(path.join(sharedSkills(config), 'review', 'SKILL.md'), 'utf8')
+  assert.match(copied, /custom_key: keep-me/)
+  assert.equal(fs.readFileSync(path.join(sharedSkills(config), 'review', 'scripts', 'run.sh'), 'utf8'), '#!/bin/sh\necho hi\n')
+  // And the assertion is the copied content, by digest.
+  assert.deepEqual(planned.verify.asserts, [
+    { file: path.join(sharedSkills(config), 'review'), digest: digestOfPath(piSkill) },
+  ])
+
+  // The row the apply left behind is the one the shared directory now holds, and its verification
+  // rides on the binding the plan wrote for.
+  const applied = listInstallations(config, { category: 'skills', scope: 'user' }).installations.find(
+    (row) => row.nativeFile === path.join(sharedSkills(config), 'review'),
+  )
+  assert.ok(applied)
+  assert.equal(
+    applied.bindings.find((binding) => binding.tierId === 'codex:user')?.verificationStatus,
+    'verified',
+  )
+
+  // One row for the shared directory, one binding per harness that loads it.
+  discover(config)
+  const shared = listInstallations(config, { category: 'skills', scope: 'user' }).installations.find(
+    (row) => row.nativeFile === path.join(sharedSkills(config), 'review'),
+  )
+  assert.ok(shared)
+  assert.deepEqual(
+    shared.bindings.map((binding) => binding.tierId).sort(),
+    ['codex:user', 'oc:user', 'pi:user'],
+  )
+})
+
+test('mirroring the same skill into another harness returns already shared and writes nothing', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  discover(config)
+  applyAndVerify(config, plan(config, piSkill, 'codex:user'))
+  discover(config)
+
+  const shared = path.join(sharedSkills(config), 'review')
+  const before = digestOfPath(shared)
+  const planned = plan(config, shared, 'oc:user')
+
+  assert.equal(planned.disposition.kind, 'alreadyShared')
+  assert.deepEqual(planned.writes, [])
+  assert.deepEqual(planned.conflicts, [])
+  assert.deepEqual(planned.verify.asserts, [])
+  // Nothing was written: the directory is the same one.
+  assert.equal(digestOfPath(shared), before)
+  assert.equal(fs.readdirSync(path.join(sharedSkills(config))).length, 1)
+  // And a harness that reads the shared location says so, even with nothing to write.
+  assert.deepEqual([...planned.target.alsoReadBy].sort(), ['codex', 'pi'])
+})
+
+test('a copy names the other harnesses that read the location it lands in', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  discover(config)
+
+  const planned = plan(config, piSkill, 'codex:user')
+
+  // `.agents/skills` is shared, so the write is not a Codex-only write.
+  assert.deepEqual([...planned.target.alsoReadBy].sort(), ['opencode', 'pi'])
+})
+
+test('a skill carrying a credential is a gap with a manual step, never a copy', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  fs.appendFileSync(path.join(piSkill, 'SKILL.md'), '\ntoken = sk-proj-AbCdEfGhIjKlMnOpQrStUvWx\n')
+  discover(config)
+
+  const planned = plan(config, piSkill, 'codex:user')
+
+  assert.deepEqual(planned.writes, [])
+  assert.deepEqual(planned.equivalence.gaps, [
+    { field: 'SKILL.md', reason: 'credential', replacement: 'dropped' },
+  ])
+  assert.deepEqual(planned.security.secrets, [{ pointer: 'SKILL.md', verdict: 'secret' }])
+  assert.equal(planned.manualSteps.length, 1)
+  // The value never reaches the plan document, which is what makes it safe to hand around.
+  assert.equal(JSON.stringify(planned).includes('sk-proj'), false)
+})
+
+test('a differing skill at the target is a conflict, and a copy of a moved source is stale', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  writeSkill(path.join(sharedSkills(config), 'review'), { description: 'somebody else wrote this one' })
+  discover(config)
+
+  const conflicting = plan(config, piSkill, 'oc:user')
+  assert.deepEqual(conflicting.writes, [])
+  assert.equal(conflicting.conflicts.length, 1)
+  assert.equal(conflicting.conflicts[0]?.file, path.join(sharedSkills(config), 'review'))
+
+  // The shared location is free again once the conflicting directory is out of the way.
+  fs.rmSync(path.join(sharedSkills(config), 'review'), { recursive: true, force: true })
+  const planned = plan(config, piSkill, 'codex:user')
+  fs.appendFileSync(path.join(piSkill, 'SKILL.md'), '\nchanged after planning\n')
+
+  const applied = applyPlan(config, planned)
+  assert.equal(applied.outcome, 'stale')
+  assert.match(applied.reason ?? '', /changed since the plan was built/)
+  assert.equal(fs.existsSync(path.join(sharedSkills(config), 'review')), false)
+})
+
+test('a user-scope instruction file is linked into each harness; a project one is already present', () => {
+  const config = fixture()
+  const body = '# House rules\n\nRun `bun run check` before you commit.\n'
+  fs.writeFileSync(codexAgentMd(config), body)
+  discover(config)
+
+  // Same scope bucket, so the spec's one permitted link: the target shows the source's content.
+  const linked = plan(config, codexAgentMd(config), 'pi:user')
+  assert.equal(linked.category, 'instructions')
+  const [linkWrite] = linked.writes
+  assert.ok(linkWrite !== undefined && linkWrite.op === 'symlink')
+  assert.equal(linkWrite.file, userAgentMd(config))
+  assert.equal(linkWrite.source, codexAgentMd(config))
+  assert.deepEqual(linked.verify.asserts, [{ file: userAgentMd(config), digest: digestOfPath(codexAgentMd(config)) }])
+
+  const { verification } = applyAndVerify(config, linked)
+  assert.equal(verification?.outcome, 'verified')
+  assert.equal(fs.lstatSync(userAgentMd(config)).isSymbolicLink(), true)
+  assert.equal(fs.readFileSync(userAgentMd(config), 'utf8'), body)
+
+  // A second harness gets its own file at its own user scope, not a second copy of the shared one.
+  discover(config)
+  const openCode = plan(config, userAgentMd(config), 'oc:user')
+  assert.equal(openCode.writes.length, 1)
+  assert.equal(openCode.writes[0]?.op, 'symlink')
+  assert.equal(openCode.writes[0]?.file, path.join(config.home, '.config', 'opencode', 'AGENTS.md'))
+
+  // The project instruction file is the same file for all three, so it is written once…
+  const project = plan(config, codexAgentMd(config), 'oc:project')
+  const [projectWrite] = project.writes
+  assert.ok(projectWrite !== undefined && projectWrite.op === 'writeFile')
+  assert.equal(projectWrite.file, projectAgentMd(config))
+  assert.equal(projectWrite.content, body)
+  // …and a write there lands somewhere every harness reads.
+  assert.deepEqual([...project.target.alsoReadBy].sort(), ['codex', 'pi'])
+  applyAndVerify(config, project)
+  assert.equal(fs.readFileSync(projectAgentMd(config), 'utf8'), body)
+
+  // …and mirroring it into a second harness writes nothing at all.
+  discover(config)
+  const projectRow = listInstallations(config, { category: 'instructions', scope: 'project' }).installations
+  assert.equal(projectRow.length, 1)
+  assert.deepEqual(
+    projectRow[0]?.bindings.map((binding) => binding.tierId).sort(),
+    ['codex:project', 'oc:project', 'pi:project'],
+  )
+  const again = plan(config, projectAgentMd(config), 'pi:project')
+  assert.equal(again.disposition.kind, 'alreadyPresent')
+  assert.deepEqual(again.writes, [])
+  assert.deepEqual(again.conflicts, [])
+})
+
+test('an instruction file holding a credential is a gap, and its body never enters the plan', () => {
+  const config = fixture()
+  fs.writeFileSync(codexAgentMd(config), '# Rules\n\napi_token = hunter2hunter2\n')
+  discover(config)
+
+  const planned = plan(config, codexAgentMd(config), 'pi:user')
+
+  assert.deepEqual(planned.writes, [])
+  assert.deepEqual(planned.equivalence.gaps, [{ field: 'body', reason: 'credential', replacement: 'dropped' }])
+  assert.deepEqual(planned.equivalence.carried, [])
+  assert.equal(planned.manualSteps.length, 1)
+  assert.equal(JSON.stringify(planned).includes('hunter2'), false)
+  // The stored row withholds it too, so an inspection cannot print it either.
+  const row = listInstallations(config, { category: 'instructions' }).installations[0]
+  assert.equal(row?.knownFieldsJson.includes('hunter2'), false)
+})
+
+// A plan is content-addressed, so a hand-made one is stamped the way the planner stamps it: the same
+// integrity check apply runs, never a bypass of it.
+function resign(planned: MirrorPlan, writes: PlanWrite[]): MirrorPlan {
+  const body: Record<string, PlanValue> = JSON.parse(JSON.stringify({ ...planned, writes }))
+  delete body.planId
+  return { ...planned, writes, planId: planIdOf(body) }
+}
+
+test('a link to somewhere outside the engine roots is refused, even inside a valid document', () => {
+  const config = fixture()
+  fs.writeFileSync(codexAgentMd(config), '# Rules\n')
+  discover(config)
+  const planned = plan(config, codexAgentMd(config), 'pi:user')
+  const [link] = planned.writes
+  assert.ok(link !== undefined && link.op === 'symlink')
+
+  const outside = applyPlan(config, resign(planned, [{ ...link, source: '/etc/passwd' }]))
+
+  assert.equal(outside.outcome, 'refused')
+  assert.match(outside.reason ?? '', /outside the home directory and the project root/)
+  assert.equal(fs.existsSync(userAgentMd(config)), false)
+})

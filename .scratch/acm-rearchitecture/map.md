@@ -115,6 +115,13 @@ that slice.
   a hit stops the plan and offers migrate-out → blind copy → risk-read. OAuth: mirror the entry,
   never the grant.
 
+- [Skills and instructions](issues/23-skills-and-instructions.md): one skill reader over the three
+  harnesses' declared locations, so a skill is one installation whose shared row carries a binding per
+  harness and a second mirror is `alreadyShared`. The planner's write set widens to the spec's file
+  ops — `copyFile` for a skill tree (never a link), `symlink` for a user-scope instruction file whose
+  source shares its scope bucket, `writeFile` across buckets — with a tier declaring what it reads per
+  category and where its mirror lands, and `verify.asserts[]` gaining a digest form for what has no
+  address inside it. Ticket 22's unperformable-op gate now names `runCommand` alone.
 - [Minimal MCP tool surface and a worked mirror example](issues/09-mcp-tool-surface.md): **five tools** —
   `list_installations(category?, harness?, scope?, fresh?)` (folds BRIEF's discovery + inventory
   groups; harness rows ride along because a target must be a writable existing tier),

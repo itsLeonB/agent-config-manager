@@ -131,3 +131,45 @@ credential of its own. The classifier withholds one carrying a recognised provid
 private-key block; any other credential in a command is not detectable that way, so it can still
 appear in stored facts and in a Pi mirror plan. Treat a `!command` as executable content to be
 reviewed, not as a secret-free value.
+
+## Skills and instructions
+
+The two markdown categories have no typed leaves: a skill is a directory tree and an instruction file
+is its own body, so a plan carries no values for them. Their vocabulary is one field each, and the
+writer is a file op rather than a pointer write.
+
+| category | canonical field | native form | write |
+|---|---|---|---|
+| `skills` | `files` | the tree under `<root>/<name>/`, named by its `SKILL.md` | `copyFile` into the shared `.agents/skills/<name>` — the whole tree, so an unknown frontmatter key survives the copy instead of becoming a gap |
+| `instructions` | `body` | the markdown file's text | `symlink` when source and target share a scope bucket, `writeFile` across buckets |
+
+Locations per (harness, tier). `reads` is what the harness loads — and therefore what `alsoReadBy`
+answers from; `target` is where a mirror into that tier lands.
+
+| tier | `skills.reads` | `skills.target` | `instructions.reads` / `target` |
+|---|---|---|---|
+| `pi:user` | `~/.agents/skills`, `~/.pi/agent/skills` | `~/.agents/skills` | `~/.pi/agent/AGENTS.md` |
+| `pi:project` | `<repo>/.agents/skills`, `<repo>/.pi/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
+| `codex:user` | `~/.agents/skills` | `~/.agents/skills` | `$CODEX_HOME/AGENTS.md` |
+| `codex:project` | `<repo>/.agents/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
+| `oc:user` | `~/.agents/skills`, `~/.config/opencode/skills` | `~/.agents/skills` | `~/.config/opencode/AGENTS.md` |
+| `oc:project` | `<repo>/.agents/skills`, `<repo>/.opencode/skills` | `<repo>/.agents/skills` | `<repo>/AGENTS.md` |
+
+`.agents/skills` is read by all three harnesses and the project `AGENTS.md` is the same file for all
+three, so a write there is never a single-harness write: `target.alsoReadBy` names the other readers,
+and one installation carries one binding per harness. That is also why a second mirror writes nothing.
+
+| situation | `writes[]` | `disposition` |
+|---|---|---|
+| the target is the source location | `[]` | `alreadyShared` |
+| a skill tree or an instruction body that already matches | `[]` | `alreadyPresent` |
+| the target exists and differs | `[]`, with both digests in `conflicts[]` | `translated` |
+| the tier declares no location for the category | `[]`, one `categoryAbsent` gap | `translated` |
+
+A `symlink` is used only where the spec permits one: the source and the target sit in the same scope
+bucket, the target is a declared path, nothing exists there, and the digest the plan names is the
+source's resolved content — which is exactly what verification re-reads. A skill is never linked:
+symlinked skill *directories* are unverified for all three harnesses, so a skill is always copied.
+An instruction file mirrored across buckets is written instead, because a link would point out of the
+scope it is meant to belong to. A differing target is never overwritten: this slice has no removal op
+to undo one, so the plan reports the conflict and leaves the replacement to an explicit request.

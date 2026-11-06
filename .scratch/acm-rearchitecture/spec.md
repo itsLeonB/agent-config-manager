@@ -281,6 +281,9 @@ One JSON document, stateless, content-addressed. Nothing is stored; the agent ca
 ```jsonc
 { "planId": "sha256:…",            // hash of the canonical JSON of the body
   "createdAt": "…", "toolVersion": "…", "kind": "mirror",
+  // Amended by ticket 23: a skill and an instruction file are planned by the same document, and the
+  // category is what tells a reader which declarations its paths are held to.
+  "category": "mcp" | "skills" | "instructions" | "hooks",
   "source": { installationId, harness, tierId, scope, nativeLocation, knownFields, contentDigest },
   "target": { harness, tierId, scope, nativeLocation, alsoReadBy: Harness[] },
   "equivalence": { carried[], mapped[{ transform, fields[], targetField, template? }],
@@ -294,12 +297,14 @@ One JSON document, stateless, content-addressed. Nothing is stored; the agent ca
   "security": { grade: "safe" | "risky",
                 secrets: [{ pointer, verdict }],
                 executables: [{ file, why }] },
-  "writes": [ { op, file, pointer, value | content | source,
+  "writes": [ { op, file, pointer, value | content | source, sourceDigest,
                 precondition: { exists, digest },
                 reversible, priorValue,
                 executable, secretValues, irreversible } ],
   "manualSteps": [ { step, why } ],
-  "verify": { asserts: [ { file, pointer, equals } ] } }
+  // Amended by ticket 23: a copied tree or a whole written file has no address inside it, so it is
+  // asserted by the digest of what the write put there.
+  "verify": { asserts: [ { file, pointer, equals } | { file, digest } ] } }
 ```
 
 - Ops: `writeAtPointer`, `writeFile`, `copyFile`, `symlink`, plus `runCommand` in the vocabulary with
@@ -336,7 +341,10 @@ elicitation escapes that, and Pi 1.5.0 has no elicitation.
 - `risky`: any executable / secret-values / irreversible write, any `copyFile` or `symlink`, any new
   directory, any conflict, any elevation. Needs one elicitation per apply, plus one tick per risk
   flag. On a client without elicitation the risky writes alone return as `manualSteps` and the safe
-  remainder still applies.
+  remainder still applies — for the writes this face cannot perform, which is the risk flags and the
+  empty-allowlist `runCommand`, not the file ops ticket 23 makes executable: a copy or a link is
+  graded risky so a client that can ask does, and is otherwise performed and recorded
+  `client-policy`.
 
 Four gates, in order: plan is read-only → graded consent → preflight + containment → risk-flag ticks.
 Preflight covers every write before the first byte; a mid-plan failure stops the run and returns

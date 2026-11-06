@@ -141,7 +141,8 @@ function setPointer(document: PlanValue, segments: string[], value: PlanValue): 
 function expectedDocument(before: string, planned: MirrorPlan): PlanValue {
   const document = planValueSchema.parse(parseToml(before))
   return planned.writes.reduce(
-    (edited, write) => setPointer(edited, write.pointer.split('.'), write.value),
+    (edited, write) =>
+      write.op === 'writeAtPointer' ? setPointer(edited, write.pointer.split('.'), write.value) : edited,
     document,
   )
 }
@@ -227,7 +228,7 @@ test('a write that needs a human answer is a manual step, even when the document
 
   const planned = plan(config, 'serena', 'codex:user')
   const [first] = planned.writes
-  assert.ok(first)
+  assert.ok(first !== undefined && first.op === 'writeAtPointer')
   // The flag is what the planner sets for a value that runs at harness runtime; the grade it carries
   // here is a claim a forged document can make, so apply must not trust it.
   const gated: PlanWrite = { ...first, executable: true }
@@ -316,7 +317,7 @@ test('asking for replacement does not answer for an executable write', () => {
 
   const planned = planFrom(config, piId(config, 'serena'), 'codex:user')
   const [first] = planned.writes
-  assert.ok(first)
+  assert.ok(first !== undefined && first.op === 'writeAtPointer')
   // The conflict gate and the risk-flag gate are separate answers: one `onConflict` replaces a value,
   // it does not stand in for the tick a running command needs.
   const replaced = applyPlan(
@@ -401,7 +402,7 @@ test('verification re-reads the target and reports every assertion', () => {
   assert.equal(verification.outcome, 'verified')
   assert.equal(verification.asserts.length, planned.verify.asserts.length)
   for (const assertion of verification.asserts) {
-    assert.equal(assertion.holds, true, assertion.pointer)
+    assert.equal(assertion.holds, true, assertion.pointer ?? assertion.file)
     assert.equal(assertion.file, codexFile(config))
     assert.deepEqual(assertion.actual, assertion.expected)
   }
@@ -521,7 +522,9 @@ test('a tampered plan and a write outside the declared tier are both refused', (
 
   const planned = plan(config, 'serena', 'codex:user')
   const edited = structuredClone(planned)
-  edited.writes[0] = { ...edited.writes[0], value: 'something-else' }
+  const [first] = edited.writes
+  assert.ok(first !== undefined && first.op === 'writeAtPointer')
+  edited.writes[0] = { ...first, value: 'something-else' }
   const refused = applyPlan(config, edited)
   assert.equal(refused.outcome, 'refused')
   assert.match(refused.reason ?? '', /does not hash to its planId/)
