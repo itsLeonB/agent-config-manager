@@ -33,8 +33,9 @@ settled decisions.
 - A resolved ticket's `## Answer` is settled — build on it instead of re-deriving it.
 - `docs/research/{pi,codex,opencode}-config-surface.md` are the verified native surfaces for each
   harness — config paths and precedence, formats, merge semantics, which gates are human-only. Read
-  the harness's file before changing its adapter or writing a mirror step for it. Canonical field
-  tables and the transforms are in ticket 12 §1.3 and §2.
+  the harness's file before changing its adapter or writing a mirror step for it. The canonical
+  field tables, the seven transforms, and the per-tier allowlists are in
+  [docs/mcp-field-tables.md](docs/mcp-field-tables.md), beside the planner data that mirrors them.
 
 ## Architecture
 

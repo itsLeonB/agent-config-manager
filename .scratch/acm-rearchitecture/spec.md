@@ -411,6 +411,11 @@ harness:
 | `description` | — | — | `description` |
 | harness-only extras | `approvalMode`, `disabledTools`, `required`, `startupReadiness`, `supportsParallelToolCalls` | `codemode`, `pool`, `protocol` | `exposure`, `toolExposure` |
 
+The canonical vocabulary with each harness's native address, the seven transforms with their
+instances, the per-tier allowlists, and the credential pointers are tabulated once in
+[docs/mcp-field-tables.md](../../docs/mcp-field-tables.md) and mirrored by
+`src/engine/adapters/mcp-write.ts`.
+
 Seven transforms, closed set: `rename` (`env`→`environment`), `invert` (`enabled`⇄`disabled`),
 `concat` (`command`+`args`→`command[]`), `unit` (s⇄ms), `infer` (`type` from which fields exist),
 `extract` (regex with one capture: Pi `headers.Authorization: "Bearer ${T}"` → Codex

@@ -9,6 +9,8 @@ import type { EngineConfig } from './config.ts'
 import { recordDiscovery } from './repo.ts'
 import { alsoReadBy, planIntact, type MirrorPlan } from './plan.ts'
 import type { Adapter } from './adapters/types.ts'
+import { MCP_FIELDS } from './adapters/mcp-facts.ts'
+import { MCP_WRITE_SURFACES } from './adapters/mcp-write.ts'
 import { discover, listInstallations, planMirror } from './service.ts'
 
 function fixture(): EngineConfig {
@@ -357,7 +359,7 @@ test('a plan id is the hash of its own body, so a hand edit fails the check', ()
   assert.equal(planIntact(edited), false)
 })
 
-test('every source field appears exactly once across the partition', () => {
+test('every source field appears exactly once for all six writable targets', () => {
   const config = fixture()
   piFixture(config, {
     serena: {
@@ -371,29 +373,60 @@ test('every source field appears exactly once across the partition', () => {
       exposure: 'onDemand',
     },
   })
-  const planned = plan(config, 'serena', 'codex:user')
 
-  const claimed = [
-    ...planned.equivalence.carried,
-    ...planned.equivalence.mapped.flatMap((mapped) => mapped.fields),
-    ...planned.equivalence.gaps.map((gap) => gap.field),
-    ...planned.equivalence.preserved,
-  ]
-  assert.equal(new Set(claimed).size, claimed.length, `duplicate field in ${claimed.join(', ')}`)
+  for (const target of ['pi:user', 'pi:project', 'codex:user', 'codex:project', 'oc:user', 'oc:project']) {
+    const planned = plan(config, 'serena', target)
+    const claimed = [
+      ...planned.equivalence.carried,
+      ...planned.equivalence.mapped.flatMap((mapped) => mapped.fields),
+      ...planned.equivalence.gaps.map((gap) => gap.field),
+      ...planned.equivalence.preserved,
+    ]
+    assert.equal(
+      new Set(claimed).size,
+      claimed.length,
+      `${target}: duplicate field in ${claimed.join(', ')}`,
+    )
+    const sourceFields = Object.entries(planned.source.knownFields)
+      .filter(([, value]) => value !== undefined)
+      .map(([field]) => field)
+    assert.deepEqual([...claimed].sort(), [...sourceFields].sort(), target)
+    // `exposure` is Pi-only; every other harness reports it as a dropped field rather than writing it.
+    if (target !== 'pi:user' && target !== 'pi:project') {
+      assert.ok(planned.equivalence.gaps.some((gap) => gap.field === 'exposure'), target)
+    }
+  }
 
-  const sourceFields = Object.entries(planned.source.knownFields)
-    .filter(([, value]) => value !== undefined)
-    .map(([field]) => field)
-  assert.deepEqual([...claimed].sort(), [...sourceFields].sort())
-  // `exposure` is Pi-only, so Codex reports it as a dropped field rather than writing it.
-  assert.ok(planned.equivalence.gaps.some((gap) => gap.field === 'exposure'))
-  // A rename is named as one: `headers` is not carried, it is written to `http_headers`.
+  // A rename is named as one: `headers` is not carried into Codex, it is written to `http_headers`.
+  const codex = plan(config, 'serena', 'codex:user')
   assert.ok(
-    planned.equivalence.mapped.some(
+    codex.equivalence.mapped.some(
       (mapped) => mapped.transform === 'rename' && mapped.targetField === 'http_headers',
     ),
   )
-  assert.equal(planned.equivalence.carried.includes('headers'), false)
+  assert.equal(codex.equivalence.carried.includes('headers'), false)
+})
+
+// The write tables are data, so their invariants are checked rather than trusted: a misspelled
+// field name would never match and the fact would vanish from every plan without a trace.
+test('each write surface only names canonical fields, with no field both written and absent', () => {
+  const canonical: ReadonlySet<string> = new Set(MCP_FIELDS)
+  for (const [harness, surface] of Object.entries(MCP_WRITE_SURFACES)) {
+    const written = surface.rules.flatMap((rule) => rule.fields)
+    for (const field of [...written, ...surface.absent]) {
+      assert.ok(canonical.has(field), `${harness} names ${field}, which is not a canonical fact`)
+    }
+    for (const field of surface.absent) {
+      assert.equal(written.includes(field), false, `${harness} both writes and drops ${field}`)
+    }
+    for (const rule of surface.rules) {
+      // A rule with no target and no gap claims a mapping it never makes.
+      assert.ok(
+        rule.target !== '' || rule.transform === 'infer' || rule.gap !== undefined,
+        `${harness} has a rule for ${rule.fields.join('+')} that writes nothing and reports nothing`,
+      )
+    }
+  }
 })
 
 test('a field no adapter names is preserved, never written and never claimed as a gap', () => {

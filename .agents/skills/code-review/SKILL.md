@@ -57,7 +57,14 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Spawn both sub-agents in parallel
 
-Issue both sub-agent calls together, in the foreground, and aggregate the reports they return.
+Two `delegate_task` calls in one turn, each `mode: "async"`, `role: "review"`, `isolation: "shared"`.
+Call `orchestrator_capabilities` once before the first one. Both children inherit your provider, model
+and modes, so no `target` is needed. Keep both `taskId`s and read each with `task_status` when its run
+completes; a running task is never polled. Done when you hold two reports.
+
+Delegation is not optional. Both axes in one context defeat the split: the agent that wrote the diff
+is judging it, with its own rationales already in play. If the harness offers no sub-agent mechanism,
+say so in the report instead of reviewing inline.
 
 **Standards sub-agent prompt** should include:
 
