@@ -200,8 +200,10 @@ function writeJson(text: string, segments: string[], value: PlanValue): EditResu
           : `,\n${indent}${inserted}`
     return { kind: 'ok', text: text.slice(0, node.insertAt) + insert + text.slice(node.insertAt) }
   }
-  if (node.kind !== 'scalar') throw new Error(`${segments.join('.')} holds a ${node.kind}, not a value this engine writes`)
-  return { kind: 'ok', text: text.slice(0, node.start) + JSON.stringify(value) + text.slice(node.end) }
+  // A container the plan names is replaced whole rather than refused: that is how OpenCode's legacy
+  // `mcp` block becomes one shape. A leaf is replaced by its rendered value the same way.
+  const rendered = pretty(value, indentAt(text, node.start), !text.slice(node.start, node.end).includes('\n'))
+  return { kind: 'ok', text: text.slice(0, node.start) + rendered + text.slice(node.end) }
 }
 
 function nest(segments: string[], value: PlanValue): PlanValue {

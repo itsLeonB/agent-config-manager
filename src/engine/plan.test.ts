@@ -52,6 +52,7 @@ interface PiServer {
   description?: string
   timeout?: number
   exposure?: string
+  enabled?: boolean
 }
 
 function codexFile(config: EngineConfig): string {
@@ -651,6 +652,20 @@ test('a command and its args concatenate into the OpenCode command array', () =>
   ])
 })
 
+test('a remote source is inferred as the remote type OpenCode requires', () => {
+  const config = fixture()
+  piFixture(config, { serena: { url: 'https://example.test/mcp' } })
+
+  const planned = plan(config, 'serena', 'oc:user')
+  const values = writeValues(planned)
+
+  assert.deepEqual(planned.equivalence.mapped, [
+    { transform: 'infer', fields: ['transport'], targetField: 'type' },
+  ])
+  assert.equal(values.get('mcp.servers.serena.type'), 'remote')
+  assert.equal(values.get('mcp.servers.serena.url'), 'https://example.test/mcp')
+})
+
 test('a target tier that cannot be written is refused before any plan exists', () => {
   const config = fixture()
   piFixture(config, { serena: { command: 'serena' } })
@@ -702,6 +717,122 @@ test('a project target names the switch that makes its write take effect', () =>
   const opencode = plan(config, 'serena', 'oc:project')
   assert.equal(opencode.permissions.trust, 'notRequired')
   assert.match(opencode.manualSteps[0]?.why ?? '', /root-managed layer outranks the project config/)
+})
+
+test('a target holding the legacy flat shape is normalised into one shape, siblings preserved', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena', args: ['start'], enabled: false, timeout: 30 } })
+  const file = path.join(config.home, '.config', 'opencode', 'opencode.json')
+  const onDisk = {
+    theme: 'dark',
+    mcp: {
+      timeout: 5000,
+      other: { type: 'local', command: ['other'], enabled: true, timeout: 30_000 },
+      serena: { type: 'local', command: ['serena-old'], enabled: true },
+    },
+  }
+  const written = JSON.stringify(onDisk, null, 2)
+  fs.writeFileSync(file, written)
+
+  const planned = plan(config, 'serena', 'oc:user')
+  const [write] = planned.writes
+
+  // One write replaces the whole block: a document left with both shapes would define every legacy
+  // server twice, and this slice has no removal op to delete the flat keys with.
+  assert.equal(planned.writes.length, 1)
+  assert.equal(write?.pointer, 'mcp')
+  assert.deepEqual(write?.value, {
+    servers: {
+      // The legacy spellings are converted: `enabled` becomes its inverted `disabled`, and the one
+      // numeric timeout covers both phases.
+      other: { type: 'local', command: ['other'], disabled: false, timeout: { startup: 30_000, execution: 30_000 } },
+      serena: {
+        type: 'local',
+        command: ['serena', 'start'],
+        disabled: true,
+        timeout: { execution: 30_000 },
+      },
+    },
+    timeout: 5000,
+  })
+  // The value the legacy address already held is reported, not guessed absent from `mcp.servers`.
+  assert.deepEqual(planned.conflicts, [
+    { file, pointer: 'mcp', current: onDisk.mcp, proposed: write?.value },
+  ])
+  assert.deepEqual(planned.verify.asserts, [{ file, pointer: 'mcp', equals: write?.value }])
+  assert.deepEqual(
+    planned.equivalence.mapped.map((mapped) => [mapped.transform, mapped.targetField]),
+    [
+      ['infer', 'type'],
+      ['concat', 'command'],
+      ['invert', 'disabled'],
+      ['unit', 'timeout.execution'],
+    ],
+  )
+  assert.equal(fs.readFileSync(file, 'utf8'), written)
+})
+
+test('a server defined in both OpenCode shapes is refused rather than resolved by picking one', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  fs.writeFileSync(
+    path.join(config.home, '.config', 'opencode', 'opencode.json'),
+    JSON.stringify({
+      mcp: { serena: { type: 'local', command: ['flat'] }, servers: { serena: { type: 'local', command: ['v2'] } } },
+    }),
+  )
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'oc:user')
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /defined both flat and under mcp\.servers/)
+})
+
+test('a legacy sibling holding a credential is refused, never copied into the plan', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  fs.writeFileSync(
+    path.join(config.home, '.config', 'opencode', 'opencode.json'),
+    JSON.stringify({
+      mcp: {
+        other: { type: 'local', command: ['other'], environment: { GH_TOKEN: 'ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } },
+      },
+    }),
+  )
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'oc:user')
+
+  // Carrying the sibling into one block write would put its token into the plan document.
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /mcp\.servers\.other\.environment\.GH_TOKEN/)
+  assert.equal(JSON.stringify(result).includes('ghp_'), false)
+})
+
+test('a field OpenCode cannot hold becomes a gap, and a timeout it can is mapped', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena', timeout: 30, description: 'symbol tools' } })
+
+  const planned = plan(config, 'serena', 'oc:user')
+
+  assert.deepEqual(planned.equivalence.gaps, [
+    { field: 'description', reason: 'fieldAbsent', replacement: 'dropped' },
+  ])
+  assert.ok(
+    planned.equivalence.mapped.some(
+      (mapped) => mapped.transform === 'unit' && mapped.targetField === 'timeout.execution',
+    ),
+  )
+  assert.equal(writeValues(planned).get('mcp.servers.serena.timeout.execution'), 30_000)
+})
+
+test('an OpenCode user target names the root-managed layer that could shadow it', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+
+  const planned = plan(config, 'serena', 'oc:user')
+
+  assert.match(planned.manualSteps[0]?.step ?? '', /\/etc\/opencode/)
+  assert.match(planned.manualSteps[0]?.why ?? '', /outranks the user config/)
 })
 
 test('a target file that does not parse is refused rather than planned over', () => {

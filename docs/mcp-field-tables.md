@@ -80,8 +80,16 @@ launch-time only and `oc:system` is root-managed, so a plan refuses both as call
 | Pi | `pi:project` | same | a project entry **replaces** the user entry of the same name unless it carries no `command`/`url`/`type`, so a write must carry the full entry |
 | Codex | `codex:user` | `transport, command, args, cwd, env, envPassthrough, url, headers, enabled, timeoutStartup, timeoutRequest, bearerTokenEnvVar, approvalMode, disabledTools, required, supportsParallelToolCalls` | `[features]`-free; `codex mcp add` re-serializes the whole table, so it is unusable |
 | Codex | `codex:project` | same | inert until `[projects."<path>"].trust_level = "trusted"` exists in the **user** config → `manualSteps[]` |
-| OpenCode | `oc:user` | `transport, command, args, cwd, env, url, headers, enabled, timeoutStartup, timeoutRequest, codemode` | `disabled` is the stored form; whole-entry replace means the write must be complete |
+| OpenCode | `oc:user` | `transport, command, args, cwd, env, url, headers, enabled, timeoutStartup, timeoutRequest, codemode` | `disabled` is the stored form; whole-entry replace means the write must be complete; a root-managed `/etc/opencode` outranks it → `manualSteps[]` naming the shadowing layer |
 | OpenCode | `oc:project` | same | a root-managed `/etc/opencode` outranks it → `manualSteps[]` naming the shadowing layer |
+
+OpenCode still accepts its legacy flat `mcp.<name>` shape beside `mcp.servers`, so a file may
+hold both, and OpenCode reads both. A mirror writes one shape: such a file is normalised in a single
+write of the `mcp` block — every legacy entry moves under `servers` (`enabled` inverted to `disabled`,
+one numeric `timeout` split across the phases), siblings are carried across whole, and the plan
+refuses rather than carrying a sibling whose value classifies as a credential. A name defined in
+both shapes, or a legacy value that is not a table, is a refusal too, because which definition the
+harness honours is unverified.
 
 Two source fields can compete for one target key: Codex `env_vars` fills Pi's `env`, and
 `bearer_token_env_var` fills Pi's `headers.Authorization`. The source's literal field wins, and the

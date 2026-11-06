@@ -19,29 +19,16 @@ import {
   ruleValue,
   type McpWriteSurface,
 } from './adapters/mcp-write.ts'
-import { stripJsonc } from './adapters/opencode/read.ts'
+import { normaliseLegacyMcp, stripJsonc } from './adapters/opencode/read.ts'
 import { HARNESSES, WRITABILITIES, type Adapter, type HarnessId, type Tier } from './adapters/types.ts'
+import { planObjectSchema, planValueSchema, type PlanValue } from './plan-value.ts'
 import { VERDICTS, classify, withheldMarker, type Verdict } from './secret.ts'
+
+export { planObjectSchema, planValueSchema, type PlanValue } from './plan-value.ts'
 
 // shortcut: a plan records the tool version that built it so an old blob can be told from a new one.
 // A constant until a build stamps the real one.
 export const TOOL_VERSION = '0.1.0'
-
-// Any value a plan carries: a native config value, a prior value, an assertion's expectation.
-export type PlanValue = string | number | boolean | null | PlanValue[] | { [key: string]: PlanValue }
-
-export const planValueSchema: z.ZodType<PlanValue> = z.lazy(() =>
-  z.union([
-    z.string(),
-    z.number(),
-    z.boolean(),
-    z.null(),
-    z.array(planValueSchema),
-    z.record(z.string(), planValueSchema),
-  ]),
-)
-
-export const planObjectSchema = z.record(z.string(), planValueSchema)
 
 // The document, and the only place its shape is written down: the types below are inferred from the
 // schemas, so a field added to the plan cannot be missing from what apply validates.
@@ -229,7 +216,13 @@ export function buildPlan(input: PlanInput): PlanResult {
   const ambiguous = ambiguousTarget(target.tier, file, entryPointer)
   if (ambiguous !== null) return { kind: 'refused', reason: ambiguous }
   const document = existing.kind === 'parsed' ? existing.document : null
-  const blocker = structuralBlocker(document, entryPointer, known.facts)
+  // OpenCode reads a legacy flat `mcp.<name>` shape beside `mcp.servers`, and one file may hold
+  // both. A plan writes one shape, so such a file is normalised first; every read below then sees
+  // the values the write really lands on top of, instead of guessing them absent.
+  const legacy = legacyBlock(document, target)
+  if (legacy.kind === 'invalid') return { kind: 'refused', reason: legacy.detail }
+  const current = legacy.kind === 'normalised' ? legacy.document : document
+  const blocker = structuralBlocker(current, entryPointer, known.facts)
   if (blocker !== null) return { kind: 'refused', reason: blocker }
 
   const partition = partitionFields(known.facts, target.surface, target.tier.id)
@@ -237,7 +230,7 @@ export function buildPlan(input: PlanInput): PlanResult {
     exists: existing.kind === 'parsed',
     digest: existing.kind === 'parsed' ? existing.digest : null,
   }
-  const writes: PlanWrite[] = partition.writes.map((write) => {
+  const writes: PlanWrite[] = legacy.kind === 'normalised' ? [] : partition.writes.map((write) => {
     const pointer = `${entryPointer}.${write.target}`
     const runs = z.string().safeParse(write.value)
     return {
@@ -247,14 +240,19 @@ export function buildPlan(input: PlanInput): PlanResult {
       value: write.value,
       precondition,
       reversible: true,
-      priorValue: priorValueAt(document, pointer),
+      priorValue: priorValueAt(current, pointer),
       executable: runs.success && runs.data.startsWith('!'),
       secretValues: false,
       irreversible: false,
     }
   })
+  if (legacy.kind === 'normalised') {
+    const container = normalisedWrite(file, precondition, legacy, document, source.name, partition)
+    if (container.kind === 'refused') return container
+    writes.push(container.write)
+  }
   const blocked = writes
-    .map((write) => ancestorBlocker(document, write.pointer))
+    .map((write) => ancestorBlocker(current, write.pointer))
     .find((found) => found !== null)
   if (blocked !== null && blocked !== undefined) return { kind: 'refused', reason: blocked }
   const conflicts = writes.flatMap<PlanConflict>((write) => {
@@ -317,7 +315,7 @@ export function buildPlan(input: PlanInput): PlanResult {
       executables,
     },
     writes,
-    manualSteps: [...partition.manualSteps, ...tierManualSteps(target.tier.id)],
+    manualSteps: [...partition.manualSteps, ...legacySteps(legacy), ...tierManualSteps(target.tier.id)],
     verify: {
       asserts: writes.map((write) => ({
         file: write.file,
@@ -340,11 +338,14 @@ function tierManualSteps(tierId: string): PlanManualStep[] {
       },
     ]
   }
-  if (tierId === 'oc:project') {
+  if (tierId === 'oc:project' || tierId === 'oc:user') {
     return [
       {
         step: 'confirm /etc/opencode does not define this server',
-        why: 'a root-managed layer outranks the project config, so it would shadow the entry this plan writes',
+        why:
+          tierId === 'oc:project'
+            ? 'a root-managed layer outranks the project config, so it would shadow the entry this plan writes'
+            : 'a root-managed layer outranks the user config, so it would shadow the entry this plan writes; `~/.opencode/opencode.json` may outrank `~/.config/opencode` too, and that order is unverified',
       },
     ]
   }
@@ -474,6 +475,130 @@ function targetWrites(target: string, value: McpValue): TargetWrite[] {
     target: `${target}.${pointerSegment(key)}`,
     value: entry,
   }))
+}
+
+// The entry a target will hold, built out of the partition's leaf writes, for the write that
+// replaces a whole block instead of addressing one field.
+function entryValue(writes: TargetWrite[]): PlanValue {
+  const entry: { [key: string]: PlanValue } = {}
+  for (const write of writes) {
+    const segments = pointerSegments(write.target)
+    let node = entry
+    for (const segment of segments.slice(0, -1)) {
+      const child = planObjectSchema.safeParse(node[segment] ?? {})
+      const next = child.success ? child.data : {}
+      node[segment] = next
+      node = next
+    }
+    node[segments.at(-1) ?? ''] = write.value
+  }
+  return entry
+}
+
+type LegacyBlock =
+  | { kind: 'absent' }
+  | { kind: 'invalid'; detail: string }
+  | { kind: 'normalised'; document: PlanValue; value: PlanValue; pointer: string }
+
+// The document the plan reads, with OpenCode's legacy flat entries already moved under
+// `mcp.servers`: only OpenCode keeps an old shape beside its new one, so no other target normalises.
+function legacyBlock(document: PlanValue | null, target: PlanTarget): LegacyBlock {
+  if (document === null || target.harness !== 'opencode') return { kind: 'absent' }
+  const normalised = normaliseLegacyMcp(document)
+  if (normalised.kind === 'invalid') {
+    return {
+      kind: 'invalid',
+      detail: `${normalised.detail}, so the legacy shape in this file cannot be normalised into one shape`,
+    }
+  }
+  if (normalised.kind === 'absent') return { kind: 'absent' }
+  const root = planObjectSchema.safeParse(document)
+  if (!root.success) return { kind: 'absent' }
+  const value = planObjectSchema.parse(normalised.value)
+  return { kind: 'normalised', document: { ...root.data, mcp: value }, value, pointer: 'mcp' }
+}
+
+// One write replaces the whole block: the mirrored entry at its V2 address, every sibling carried
+// across in the shape V2 reads. Siblings come from a file this engine did not write, so the value
+// is classified before it can reach the plan — a literal token in one refuses the plan rather than
+// travelling with it, because a withheld marker cannot be written back into a config.
+function normalisedWrite(
+  file: string,
+  precondition: PlanWrite['precondition'],
+  legacy: { value: PlanValue; pointer: string },
+  document: PlanValue | null,
+  name: string,
+  partition: Partition,
+): { kind: 'ok'; write: PlanWrite } | { kind: 'refused'; reason: string } {
+  const container = planObjectSchema.parse(legacy.value)
+  const servers = planObjectSchema.parse(container.servers ?? {})
+  const previous = planObjectSchema.safeParse(servers[name] ?? {})
+  const carried = previous.success ? previous.data : {}
+  const entry = { ...carried, ...planObjectSchema.parse(entryValue(partition.writes)) }
+  const value: PlanValue = { ...container, servers: { ...servers, [name]: entry } }
+  const prior = resolvePointer(document, legacy.pointer)
+  const unclean = uncleanPointer(value, legacy.pointer) ?? uncleanPointer(prior ?? null, legacy.pointer)
+  if (unclean !== null) {
+    return {
+      kind: 'refused',
+      reason: `${unclean} holds a credential-shaped value, and the legacy entries have to be carried across to leave one shape; move that value to the harness's own indirection by hand first`,
+    }
+  }
+  return {
+    kind: 'ok',
+    write: {
+      op: 'writeAtPointer',
+      file,
+      pointer: legacy.pointer,
+      value,
+      precondition,
+      reversible: true,
+      priorValue: prior ?? null,
+      executable: false,
+      secretValues: false,
+      irreversible: false,
+    },
+  }
+}
+
+// The first leaf of this value the classifier will not call clean, by its own address. `environment`
+// is read as the canonical `env`, so a literal token there is judged where the vocabulary puts it.
+function uncleanPointer(value: PlanValue | null, pointer: string): string | null {
+  if (value === null) return null
+  const scalar = z.string().safeParse(value)
+  if (scalar.success) {
+    const canonical = pointerSegments(pointer)
+      .map((segment) => (segment === 'environment' ? 'env' : segment))
+      .join('.')
+    return classify(canonical, scalar.data, MCP_CREDENTIAL_POINTERS).verdict === 'clean' ? null : pointer
+  }
+  const list = z.array(planValueSchema).safeParse(value)
+  if (list.success) {
+    for (const [index, item] of list.data.entries()) {
+      const found = uncleanPointer(item, `${pointer}.${index}`)
+      if (found !== null) return found
+    }
+    return null
+  }
+  const object = planObjectSchema.safeParse(value)
+  if (!object.success) return null
+  for (const [key, entry] of Object.entries(object.data)) {
+    const found = uncleanPointer(entry, `${pointer}.${pointerSegment(key)}`)
+    if (found !== null) return found
+  }
+  return null
+}
+
+// The block rewrite is the one write this slice makes over bytes it did not address itself, so the
+// human is told what it costs instead of discovering it after the fact.
+function legacySteps(legacy: LegacyBlock): PlanManualStep[] {
+  if (legacy.kind !== 'normalised') return []
+  return [
+    {
+      step: 'review the normalised mcp block once it has been written',
+      why: 'the legacy flat entries move under mcp.servers in one write, so comments inside the old mcp block do not survive it',
+    },
+  ]
 }
 
 function carriesCommandRetrieval(value: McpValue): boolean {

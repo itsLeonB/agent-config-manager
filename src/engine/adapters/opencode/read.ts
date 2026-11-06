@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { planObjectSchema, type PlanValue } from '../../plan-value.ts'
 import type { McpEntry, McpFacts } from '../mcp-facts.ts'
 import type { ParsedEntries } from '../tier.ts'
 
@@ -37,6 +38,54 @@ const fileSchema = z.object({
 // reserved keys hold global defaults, so they are exempt from server validation; every other key
 // must be a server, and a malformed one makes the tier unreadable instead of vanishing.
 const RESERVED_MCP_KEYS = new Set(['servers', 'timeout'])
+
+// The legacy flat shape a plan cannot leave in place: OpenCode reads `mcp.<name>` beside
+// `mcp.servers`, so a document holding both defines every legacy server twice. The plan therefore
+// normalises the block before it writes into it, and `absent` means there is nothing to convert.
+export type LegacyMcpNormalisation =
+  | { kind: 'absent' }
+  | { kind: 'invalid'; detail: string }
+  | { kind: 'normalised'; value: Record<string, PlanValue> }
+
+// Every legacy entry moves under `servers`, with its two legacy spellings converted: `enabled` is
+// `disabled` inverted, and one numeric `timeout` covers both phases. The reserved keys stay put, and
+// a value that is not a table is reported rather than guessed at.
+export function normaliseLegacyMcp(document: PlanValue): LegacyMcpNormalisation {
+  const root = planObjectSchema.safeParse(document)
+  const mcp = planObjectSchema.safeParse(root.success ? root.data.mcp : null)
+  if (!mcp.success) return { kind: 'absent' }
+  const legacy = Object.keys(mcp.data).filter((key) => !RESERVED_MCP_KEYS.has(key))
+  if (legacy.length === 0) return { kind: 'absent' }
+  const servers = planObjectSchema.safeParse(mcp.data.servers ?? {})
+  if (!servers.success) return { kind: 'invalid', detail: 'mcp.servers is not a table' }
+  const converted = { ...servers.data }
+  for (const name of legacy) {
+    const entry = planObjectSchema.safeParse(mcp.data[name])
+    if (!entry.success) return { kind: 'invalid', detail: `mcp.${name} is not a server entry` }
+    // Which of the two definitions the harness honours is not verified, so a name in both is
+    // reported rather than resolved by picking one.
+    if (converted[name] !== undefined) {
+      return { kind: 'invalid', detail: `mcp.${name} is defined both flat and under mcp.servers` }
+    }
+    converted[name] = fromLegacyEntry(entry.data)
+  }
+  const reserved = Object.fromEntries(
+    Object.entries(mcp.data).filter(([key]) => RESERVED_MCP_KEYS.has(key) && key !== 'servers'),
+  )
+  return { kind: 'normalised', value: { servers: converted, ...reserved } }
+}
+
+function fromLegacyEntry(entry: Record<string, PlanValue>) {
+  const { enabled, timeout, ...rest } = entry
+  const converted = { ...rest }
+  const flag = z.boolean().safeParse(enabled)
+  if (flag.success && converted.disabled === undefined) converted.disabled = !flag.data
+  const milliseconds = z.number().safeParse(timeout)
+  if (milliseconds.success) {
+    converted.timeout = { startup: milliseconds.data, execution: milliseconds.data }
+  }
+  return converted
+}
 
 export function readOpenCodeMcpJsonc(text: string): ParsedEntries<McpEntry> {
   let raw: unknown
