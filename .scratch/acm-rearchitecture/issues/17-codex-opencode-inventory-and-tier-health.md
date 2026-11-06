@@ -47,6 +47,8 @@ Choices worth knowing beyond the ticket:
 - `mcp.timeout` (OpenCode's global phase defaults) is skipped rather than read as a legacy server,
   and a legacy flat entry without `type`/`command`/`url` is not a server — same rule Pi applies to a
   user-tier entry. A real server of the wrong shape still makes the tier unreadable.
+- `CODEX_HOME` is honoured: `EngineConfig.codexHome` is resolved once at the boundary
+  (`config.ts`), so the user tier reads the selected home and no adapter touches the environment.
 - Codex `oauth` and `http_headers_helper` are deliberately unnamed in the reader, so a secret or an
   executable in `config.toml` never becomes a fact. Codex `startup_readiness`, `enabled_tools`, and
   `scopes` stay in the native file until a ticket needs them (typed only when the shape was known).

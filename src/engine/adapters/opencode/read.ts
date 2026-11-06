@@ -33,12 +33,10 @@ const fileSchema = z.object({
   mcp: z.record(z.string(), z.unknown()).optional(),
 })
 
-// Only a value naming a transport is a server: `mcp` also holds keys such as the global `timeout`.
-const candidateSchema = z.object({
-  type: z.unknown().optional(),
-  command: z.unknown().optional(),
-  url: z.unknown().optional(),
-})
+// `mcp` holds two kinds of key: the `servers` map and legacy flat server names beside it. The
+// reserved keys hold global defaults, so they are exempt from server validation; every other key
+// must be a server, and a malformed one makes the tier unreadable instead of vanishing.
+const RESERVED_MCP_KEYS = new Set(['servers', 'timeout'])
 
 export function readOpenCodeMcpJsonc(text: string): ParsedEntries<McpEntry> {
   let raw: unknown
@@ -60,27 +58,29 @@ export function readOpenCodeMcpJsonc(text: string): ParsedEntries<McpEntry> {
       return { kind: 'invalid', detail: group.error.issues[0]?.message ?? 'invalid mcp.servers' }
     }
     for (const [name, entry] of Object.entries(group.data)) {
+      // A remote server with no address connects to nothing, so it is a broken entry rather than a
+      // healthy HTTP installation.
+      if (entry.type === 'remote' && entry.url === undefined) {
+        return { kind: 'invalid', detail: `${name} is remote with no url` }
+      }
       entries.push({ name, facts: toFacts(entry), pointerPrefix: 'mcp.servers' })
     }
   }
   // Everything else under `mcp` is the legacy flat V1 shape, which V2 still accepts next to
-  // `servers` in the same document. A key naming no transport is not a server — `mcp.timeout` holds
-  // global phase defaults — so reading it as one would invent a row; a shape error inside a real
-  // server still makes the tier unreadable.
+  // `servers` in the same document.
   for (const [name, value] of Object.entries(parsed.data.mcp ?? {})) {
-    if (name === 'servers') continue
-    const candidate = candidateSchema.safeParse(value)
-    if (!candidate.success) continue
-    if (
-      candidate.data.type === undefined &&
-      candidate.data.command === undefined &&
-      candidate.data.url === undefined
-    ) {
-      continue
-    }
+    if (RESERVED_MCP_KEYS.has(name)) continue
     const legacy = entrySchema.safeParse(value)
     if (!legacy.success) {
       return { kind: 'invalid', detail: legacy.error.issues[0]?.message ?? `invalid server ${name}` }
+    }
+    // A legacy entry naming no transport connects to nothing, so it is not an installation.
+    if (
+      legacy.data.type === undefined &&
+      legacy.data.command === undefined &&
+      legacy.data.url === undefined
+    ) {
+      continue
     }
     entries.push({ name, facts: toFacts(legacy.data), pointerPrefix: 'mcp' })
   }
@@ -147,12 +147,14 @@ export function stripJsonc(text: string): string {
     }
     if (char === '/' && text[index + 1] === '*') {
       const end = text.indexOf('*/', index + 2)
-      index = end === -1 ? text.length : end + 2
+      // An unterminated comment would silently swallow the rest of the document, and what is left
+      // can still parse as valid JSON.
+      if (end === -1) throw new Error('unterminated block comment')
+      index = end + 2
       continue
     }
     if (char === ',') {
-      let next = index + 1
-      while (next < text.length && /\s/.test(text[next] ?? '')) next++
+      const next = skipTrivia(text, index + 1)
       if (text[next] === '}' || text[next] === ']') {
         index++
         continue
@@ -162,4 +164,24 @@ export function stripJsonc(text: string): string {
     index++
   }
   return out
+}
+
+// The next character that is neither whitespace nor a comment: a trailing comma is still trailing
+// when a comment sits between it and the closing bracket.
+function skipTrivia(text: string, from: number): number {
+  let index = from
+  for (;;) {
+    while (index < text.length && /\s/.test(text[index] ?? '')) index++
+    if (text[index] === '/' && text[index + 1] === '/') {
+      while (index < text.length && text[index] !== '\n') index++
+      continue
+    }
+    if (text[index] === '/' && text[index + 1] === '*') {
+      const end = text.indexOf('*/', index + 2)
+      if (end === -1) throw new Error('unterminated block comment')
+      index = end + 2
+      continue
+    }
+    return index
+  }
 }

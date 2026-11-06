@@ -10,13 +10,14 @@ import { readCodexMcpToml } from './read.ts'
 // `$CODEX_HOME` defaults to `~/.codex`; project config is inert until the *user* config trusts the
 // path, which is a manual step the planner owns, not a read-time concern.
 export function codexTiers(config: EngineConfig): Tier[] {
+  const codexRoot = config.codexHome ?? path.join(config.home, '.codex')
   return [
     {
       id: 'codex:user',
       nativeLabel: 'user',
       rank: 1,
       scopeBucket: 'user',
-      configPaths: [path.join(config.home, '.codex', 'config.toml')],
+      configPaths: [path.join(codexRoot, 'config.toml')],
       writability: 'writable',
     },
     {
@@ -50,5 +51,14 @@ export function createCodexAdapter(config: EngineConfig): Adapter {
 }
 
 function readMcpTier(tier: Tier): TierRead {
-  return readTier(tier, readCodexMcpToml, (server, file) => mcpInstallation(tier, file, server))
+  return readTier(tier, readCodexMcpToml, (server, file) =>
+    // A user-tier entry with neither `command` nor `url` names nothing to launch, so it is not a
+    // server. A project entry like that is a legitimate per-field override of the user one, so
+    // only the base tier filters.
+    tier.scopeBucket === 'user' &&
+    server.facts.command === undefined &&
+    server.facts.url === undefined
+      ? null
+      : mcpInstallation(tier, file, server),
+  )
 }

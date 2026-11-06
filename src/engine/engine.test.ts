@@ -242,6 +242,58 @@ test('one listing call returns installations from all three harnesses, filterabl
   assert.equal(JSON.parse(byName.get('ocserver')?.knownFieldsJson ?? '{}').enabled, false)
 })
 
+test('a relocated CODEX_HOME is read instead of ~/.codex', () => {
+  const config = fixture()
+  const codexHome = path.join(config.home, 'elsewhere')
+  fs.mkdirSync(codexHome, { recursive: true })
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), '[mcp_servers.relocated]\ncommand = "x"\n')
+  const relocated = { ...config, codexHome }
+
+  discover(relocated)
+  const rows = listInstallations(relocated, { harness: 'codex' }).installations
+  assert.deepEqual(rows.map((row) => row.name), ['relocated'])
+  // The row's native file is the relocated config, not `~/.codex/config.toml`.
+  assert.equal(rows[0]?.nativeFile, path.join(codexHome, 'config.toml'))
+})
+
+test('a Codex user-tier entry with neither command nor url is not a server, a project override is', () => {
+  const config = fixture()
+  fs.writeFileSync(
+    codexConfigFile(config, 'user'),
+    '[mcp_servers.serena]\ncommand = "serena"\n\n[mcp_servers.ghost]\nenabled = false\n',
+  )
+  fs.writeFileSync(codexConfigFile(config, 'project'), '[mcp_servers.serena]\nenabled = false\n')
+  discover(config)
+
+  assert.deepEqual([...rowsByName(config).keys()], ['serena'])
+  assert.deepEqual(
+    listInstallations(config, { scope: 'project' }).installations.map((row) => row.name),
+    ['serena'],
+  )
+})
+
+test('acm list --json --harness codex emits no other harness tier health', () => {
+  const config = fixture()
+  fs.writeFileSync(opencodeConfigFile(config, 'user'), '{ "mcp": ')
+  const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
+  const run = spawnSync(process.execPath, [cli, 'list', '--json', '--harness', 'codex'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ACM_HOME: config.home,
+      ACM_PROJECT_ROOT: config.projectRoot,
+      ACM_STORE: config.storePath,
+    },
+  })
+
+  assert.equal(run.status, 0)
+  const output: { scan: { tierHealth: { harness: string; tierId: string }[] } } = JSON.parse(run.stdout)
+  assert.deepEqual(
+    output.scan.tierHealth.map((health) => health.tierId),
+    ['codex:user', 'codex:project'],
+  )
+})
+
 test('every harness row names its tiers, their scope buckets, and which of them are writable', () => {
   const config = fixture()
   const { harnesses } = listInstallations(config, {})

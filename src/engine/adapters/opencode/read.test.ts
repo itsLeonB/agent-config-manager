@@ -103,6 +103,31 @@ test('a non-server key under mcp neither invents a server nor makes the tier unr
   )
 })
 
+test('a comma followed by a comment and a closing bracket is a trailing comma', () => {
+  const text = `{
+    "mcp": {
+      "servers": {
+        "a": { "type": "local", "command": ["x"], }, // https://example.test is not a comment
+      }, /* and neither is this /* */
+    },
+  }`
+  assert.deepEqual(
+    readOpenCodeMcpJsonc(text).kind === 'ok' ? readOpenCodeMcpJsonc(text) : null,
+    { kind: 'ok', entries: [{ name: 'a', pointerPrefix: 'mcp.servers', facts: factsOf(text, 'a') }] },
+  )
+})
+
+test('an unterminated block comment is invalid, not a document that lost its tail', () => {
+  assert.equal(readOpenCodeMcpJsonc('{ "mcp": {} } /* oops').kind, 'invalid')
+})
+
+test('a remote server with no url is invalid, and a malformed legacy value is too', () => {
+  assert.equal(readOpenCodeMcpJsonc('{"mcp":{"servers":{"a":{"type":"remote"}}}}').kind, 'invalid')
+  assert.equal(readOpenCodeMcpJsonc('{"mcp":{"legacy":null}}').kind, 'invalid')
+  // A reserved global key stays exempt.
+  assert.equal(readOpenCodeMcpJsonc('{"mcp":{"timeout":30000}}').kind, 'ok')
+})
+
 test('JSONC that does not parse, or an entry of the wrong shape, is invalid rather than empty', () => {
   assert.equal(readOpenCodeMcpJsonc('{ "mcp": { ').kind, 'invalid')
   assert.equal(readOpenCodeMcpJsonc('{"mcp":{"servers":{"a":{"command":"not-an-array"}}}}').kind, 'invalid')

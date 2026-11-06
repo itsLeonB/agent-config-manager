@@ -34,8 +34,11 @@ export function readCodexMcpToml(text: string): ParsedEntries<McpEntry> {
   let raw: unknown
   try {
     raw = parseToml(text)
-  } catch (error) {
-    return { kind: 'invalid', detail: error instanceof Error ? error.message : 'invalid TOML' }
+  } catch {
+    // The parser's message quotes the offending source lines, which can include a credential
+    // sitting next to a syntax error. The tier is unreadable either way, and the caller adds the
+    // file path.
+    return { kind: 'invalid', detail: 'config.toml is not valid TOML' }
   }
   const parsed = fileSchema.safeParse(raw)
   if (!parsed.success) {

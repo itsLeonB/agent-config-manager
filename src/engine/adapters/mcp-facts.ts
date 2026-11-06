@@ -91,7 +91,9 @@ function sortedMap(map: Record<string, string> | undefined): Record<string, stri
 // names two different entries in both JSON and TOML.
 export function pointerSegment(name: string): string {
   if (/^[A-Za-z0-9_-]+$/.test(name)) return name
-  return `"${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+  // JSON string escaping covers quotes, backslashes and control characters, so two names differing
+  // only in an unprintable character keep distinct addresses.
+  return JSON.stringify(name)
 }
 
 // Every harness reads an MCP server into this one row shape, so a listing is comparable across

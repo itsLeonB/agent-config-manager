@@ -43,7 +43,12 @@ function list(argv: string[]): number {
     includeRemoved: options.all,
   })
   if (options.json) {
-    process.stdout.write(`${JSON.stringify({ scan, ...inventory }, null, 2)}\n`)
+    // The pass always covers every harness; only what is emitted follows the filter.
+    const scanOut =
+      options.harness === undefined
+        ? scan
+        : { ...scan, tierHealth: scan.tierHealth.filter((health) => health.harness === options.harness) }
+    process.stdout.write(`${JSON.stringify({ scan: scanOut, ...inventory }, null, 2)}\n`)
     return 0
   }
   for (const row of inventory.installations) {

@@ -95,6 +95,14 @@ test('a quoted table name stays one server name', () => {
   assert.equal(facts.command, 'x')
 })
 
+test('a syntax error does not echo the source lines into the diagnostic', () => {
+  const read = readCodexMcpToml('[mcp_servers.a]\ncommand = "x\ntoken = "sk-fixturetoken\n')
+  assert.equal(read.kind, 'invalid')
+  const detail = read.kind === 'invalid' ? read.detail : ''
+  assert.equal(detail.includes('fixturetoken'), false)
+  assert.equal(detail.includes('command'), false)
+})
+
 test('TOML that does not parse, or an entry of the wrong shape, is invalid rather than empty', () => {
   assert.equal(readCodexMcpToml('[mcp_servers.serena\ncommand = "x"').kind, 'invalid')
   assert.equal(readCodexMcpToml('[mcp_servers.serena]\nargs = "not-an-array"\n').kind, 'invalid')
