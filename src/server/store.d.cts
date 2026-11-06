@@ -1,5 +1,8 @@
 import type { Json, LocalData } from '../types/dashboard'
 
+// The binding's latest status: what an apply leaves behind, and the only four values the store holds.
+export type VerificationStatus = 'verified' | 'unverified' | 'failed' | 'notApplicable'
+
 export interface DiscoveryBinding {
   harness: string
   tierId: string
@@ -80,7 +83,7 @@ export interface MirrorRecord {
   sourceInstallationId: string
   targetInstallationId: string | null
   landed: unknown[]
-  binding: { installationId: string; harness: string; tierId: string; status: string } | null
+  binding: { installationId: string; harness: string; tierId: string; status: VerificationStatus } | null
 }
 
 export interface OperationRow {

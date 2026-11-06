@@ -8,10 +8,9 @@ import {
   inspectInstallation,
   listInstallations,
   planMirror,
-  verifyPlan,
+  verifyPlanDocument,
 } from '../engine/service.ts'
 import type { Inspection } from '../engine/service.ts'
-import { validatePlan } from '../engine/plan.ts'
 import type { InstallationRow } from '../server/store.cjs'
 import type { Json } from '../types/dashboard'
 
@@ -193,14 +192,18 @@ function apply(argv: string[]): number {
 }
 
 function verify(argv: string[]): number {
-  const validated = validatePlan(readPlan(argv))
-  if (validated.kind === 'refused') {
-    process.stderr.write(`refused: ${validated.reason}\n`)
+  const raw = readPlan(argv)
+  if (raw === null) {
+    process.stderr.write('acm verify reads one plan document from a file or from stdin\n')
     return 1
   }
-  const result = verifyPlan(validated.plan)
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
-  return result.outcome === 'failed' ? 1 : 0
+  const result = verifyPlanDocument(raw)
+  if (result.kind === 'refused') {
+    process.stderr.write(`refused: ${result.reason}\n`)
+    return 1
+  }
+  process.stdout.write(`${JSON.stringify(result.verification, null, 2)}\n`)
+  return result.verification.outcome === 'failed' ? 1 : 0
 }
 
 interface InspectOptions {

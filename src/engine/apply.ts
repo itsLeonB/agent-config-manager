@@ -18,7 +18,7 @@ import { z } from 'zod'
 import {
   canonicalJson,
   readPointer,
-  type ApplyablePlan,
+  type MirrorPlan,
   type PlanManualStep,
   type PlanValue,
   type PlanWrite,
@@ -59,7 +59,8 @@ export interface VerifyResult {
 
 export interface ApplyResult {
   outcome: ApplyOutcome
-  planId: string
+  // Null when no document was accepted, so nothing can name a plan that never validated.
+  planId: string | null
   reason: string | null
   landed: LandedWrite[]
   failed: FailedWrite | null
@@ -69,7 +70,7 @@ export interface ApplyResult {
 
 // A plan is verified by re-reading the files it asserted, never by asking a harness: an executable
 // write and any pending manual step both mean the result cannot claim more than `unverified`.
-export function verifyPlan(plan: ApplyablePlan): VerifyResult {
+export function verifyPlan(plan: MirrorPlan): VerifyResult {
   const asserts = plan.verify.asserts.map((assert): AssertResult => {
     const read = readPointer(assert.file, assert.pointer)
     const actual = read.kind === 'ok' ? (read.value ?? null) : null
@@ -96,10 +97,10 @@ export function verifyPlan(plan: ApplyablePlan): VerifyResult {
 export function executePlan(
   config: EngineConfig,
   adapters: readonly Adapter[],
-  plan: ApplyablePlan,
+  plan: MirrorPlan,
 ): ApplyResult {
-  const refused = (reason: string): ApplyResult => ({
-    outcome: 'refused',
+  const refusal = (outcome: ApplyOutcome, reason: string): ApplyResult => ({
+    outcome,
     planId: plan.planId,
     reason,
     landed: [],
@@ -110,31 +111,24 @@ export function executePlan(
   const owned = adapters
     .flatMap((adapter) => adapter.tiers.map((tier) => ({ harness: adapter.harness, tier })))
     .find((entry) => entry.tier.id === plan.target.tierId)
-  if (owned === undefined) return refused(`${plan.target.tierId} is not a declared tier`)
+  if (owned === undefined) return refusal('refused', `${plan.target.tierId} is not a declared tier`)
   if (owned.harness !== plan.target.harness) {
-    return refused(`${plan.target.tierId} belongs to ${owned.harness}, not ${plan.target.harness}`)
+    return refusal('refused', `${plan.target.tierId} belongs to ${owned.harness}, not ${plan.target.harness}`)
   }
   if (owned.tier.writability !== 'writable') {
-    return refused(`${owned.tier.id} is ${owned.tier.writability}: a mirror target must be writable`)
+    return refusal('refused', `${owned.tier.id} is ${owned.tier.writability}: a mirror target must be writable`)
   }
   // Containment, in one rule: a write may only reach a path the target tier declares. Nothing else
   // is reachable, so no credential store or symlinked directory is even an option.
   const outside = plan.writes.find((write) => !owned.tier.configPaths.includes(write.file))
   if (outside !== undefined) {
-    return refused(`${outside.file} is not a path ${owned.tier.id} declares`)
+    return refusal('refused', `${outside.file} is not a path ${owned.tier.id} declares`)
   }
   const lock = acquireLock(config.storePath)
-  if (lock === null) {
-    return {
-      ...refused('another apply is in flight for this store'),
-      outcome: 'busy',
-    }
-  }
+  if (lock === null) return refusal('busy', 'another apply is in flight for this store')
   try {
     const stale = staleCondition(plan)
-    if (stale !== null) {
-      return { ...refused(stale), outcome: 'stale' }
-    }
+    if (stale !== null) return refusal('stale', stale)
     const { landed, failed } = landWrites(plan)
     const verification = verifyPlan(plan)
     return {
@@ -155,7 +149,7 @@ export function executePlan(
 
 // Every target is read once, before the first write: a file someone else edited since planning
 // makes the whole plan stale, and a stale plan writes nothing at all.
-function staleCondition(plan: ApplyablePlan): string | null {
+function staleCondition(plan: MirrorPlan): string | null {
   const checked = new Set<string>()
   for (const write of plan.writes) {
     if (checked.has(write.file)) continue
@@ -180,7 +174,7 @@ interface Landed {
 
 // One file at a time, one write at a time. A failure stops the run and leaves everything already
 // written where it is — rollback is described on the write, never performed.
-function landWrites(plan: ApplyablePlan): Landed {
+function landWrites(plan: MirrorPlan): Landed {
   const landed: LandedWrite[] = []
   const byFile = new Map<string, PlanWrite[]>()
   for (const write of plan.writes) {

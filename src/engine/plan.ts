@@ -13,10 +13,15 @@ import {
   type McpFacts,
   type McpValue,
 } from './adapters/mcp-facts.ts'
-import { matchRule, ruleValue, type McpWriteSurface, type Transform } from './adapters/mcp-write.ts'
+import {
+  TRANSFORMS,
+  matchRule,
+  ruleValue,
+  type McpWriteSurface,
+} from './adapters/mcp-write.ts'
 import { stripJsonc } from './adapters/opencode/read.ts'
-import type { Adapter, HarnessId, Tier, Writability } from './adapters/types.ts'
-import { classify, withheldMarker, type Verdict } from './secret.ts'
+import { HARNESSES, WRITABILITIES, type Adapter, type HarnessId, type Tier } from './adapters/types.ts'
+import { VERDICTS, classify, withheldMarker, type Verdict } from './secret.ts'
 
 // shortcut: a plan records the tool version that built it so an old blob can be told from a new one.
 // A constant until a build stamps the real one.
@@ -38,96 +43,103 @@ export const planValueSchema: z.ZodType<PlanValue> = z.lazy(() =>
 
 export const planObjectSchema = z.record(z.string(), planValueSchema)
 
-export interface MappedField {
-  transform: Transform
-  fields: string[]
+// The document, and the only place its shape is written down: the types below are inferred from the
+// schemas, so a field added to the plan cannot be missing from what apply validates.
+const mappedFieldSchema = z.object({
+  transform: z.enum(TRANSFORMS),
+  fields: z.array(z.string()),
   // Null when the target carries the fact through another field's presence (`transport`).
-  targetField: string | null
-  template?: string
-}
+  targetField: z.string().nullable(),
+  template: z.string().optional(),
+})
 
-export type GapReason = 'fieldAbsent' | 'shapeOnly' | 'credential' | 'executable' | 'categoryAbsent'
+const planGapSchema = z.object({
+  field: z.string(),
+  reason: z.enum(['fieldAbsent', 'shapeOnly', 'credential', 'executable', 'categoryAbsent']),
+  replacement: z.enum(['renamed', 'inverted', 'dropped']),
+})
 
-export interface PlanGap {
-  field: string
-  reason: GapReason
-  replacement: 'renamed' | 'inverted' | 'dropped'
-}
+const planConflictSchema = z.object({
+  file: z.string(),
+  pointer: z.string(),
+  current: planValueSchema,
+  proposed: planValueSchema,
+})
 
-export interface PlanWrite {
-  op: 'writeAtPointer'
-  file: string
-  pointer: string
-  value: PlanValue
-  precondition: { exists: boolean; digest: string | null }
-  reversible: boolean
-  priorValue: PlanValue
-  executable: boolean
-  secretValues: boolean
-  irreversible: boolean
-}
+const planManualStepSchema = z.object({ step: z.string(), why: z.string() })
 
-export interface PlanConflict {
-  file: string
-  pointer: string
-  current: PlanValue
-  proposed: PlanValue
-}
+const planAssertSchema = z.object({ file: z.string(), pointer: z.string(), equals: planValueSchema })
 
-export interface PlanManualStep {
-  step: string
-  why: string
-}
+export const planWriteSchema = z.object({
+  // One op only: the engine refuses a write it cannot perform, so a document carrying a future op
+  // is refused as caller input rather than half-applied.
+  op: z.literal('writeAtPointer'),
+  file: z.string(),
+  pointer: z.string(),
+  value: planValueSchema,
+  precondition: z.object({ exists: z.boolean(), digest: z.string().nullable() }),
+  reversible: z.boolean(),
+  priorValue: planValueSchema,
+  executable: z.boolean(),
+  secretValues: z.boolean(),
+  irreversible: z.boolean(),
+})
 
-export interface PlanAssert {
-  file: string
-  pointer: string
-  equals: PlanValue
-}
+export type MappedField = z.infer<typeof mappedFieldSchema>
+export type GapReason = z.infer<typeof planGapSchema>['reason']
+export type PlanGap = z.infer<typeof planGapSchema>
+export type PlanConflict = z.infer<typeof planConflictSchema>
+export type PlanManualStep = z.infer<typeof planManualStepSchema>
+export type PlanAssert = z.infer<typeof planAssertSchema>
+export type PlanWrite = z.infer<typeof planWriteSchema>
 
-export interface MirrorPlan {
-  planId: string
-  createdAt: string
-  toolVersion: string
-  kind: 'mirror'
-  source: {
-    installationId: string
-    harness: string
-    tierId: string
-    scope: string
-    nativeLocation: string
-    knownFields: McpFacts
-    contentDigest: string
-  }
-  target: {
-    harness: HarnessId
-    tierId: string
-    scope: string
-    nativeLocation: string
-    alsoReadBy: HarnessId[]
-  }
-  equivalence: {
-    carried: string[]
-    mapped: MappedField[]
-    gaps: PlanGap[]
-    preserved: string[]
-  }
-  prerequisites: { check: string; detail: string }[]
-  permissions: {
-    tierWritability: Writability
-    elevationRequired: boolean
-    trust: 'notRequired' | 'required'
-  }
-  conflicts: PlanConflict[]
-  security: {
-    grade: 'safe' | 'risky'
-    secrets: { pointer: string; verdict: Verdict }[]
-    executables: { file: string; why: string }[]
-  }
-  writes: PlanWrite[]
-  manualSteps: PlanManualStep[]
-  verify: { asserts: PlanAssert[] }
-}
+export const mirrorPlanSchema = z.object({
+  planId: z.string(),
+  createdAt: z.string(),
+  toolVersion: z.string(),
+  kind: z.literal('mirror'),
+  source: z.object({
+    installationId: z.string(),
+    harness: z.string(),
+    tierId: z.string(),
+    scope: z.string(),
+    nativeLocation: z.string(),
+    // The source's canonical facts, already classified. Opaque to apply, which reads none of them,
+    // and not re-checked field by field here: that table is the adapter's, not the plan's.
+    knownFields: z.custom<McpFacts>(),
+    contentDigest: z.string(),
+  }),
+  target: z.object({
+    harness: z.enum(HARNESSES),
+    tierId: z.string(),
+    scope: z.string(),
+    nativeLocation: z.string(),
+    alsoReadBy: z.array(z.enum(HARNESSES)),
+  }),
+  equivalence: z.object({
+    carried: z.array(z.string()),
+    mapped: z.array(mappedFieldSchema),
+    gaps: z.array(planGapSchema),
+    preserved: z.array(z.string()),
+  }),
+  prerequisites: z.array(z.object({ check: z.string(), detail: z.string() })),
+  permissions: z.object({
+    tierWritability: z.enum(WRITABILITIES),
+    elevationRequired: z.boolean(),
+    trust: z.enum(['notRequired', 'required']),
+  }),
+  conflicts: z.array(planConflictSchema),
+  security: z.object({
+    grade: z.enum(['safe', 'risky']),
+    secrets: z.array(z.object({ pointer: z.string(), verdict: z.enum(VERDICTS) })),
+    executables: z.array(z.object({ file: z.string(), why: z.string() })),
+  }),
+  writes: z.array(planWriteSchema),
+  manualSteps: z.array(planManualStepSchema),
+  verify: z.object({ asserts: z.array(planAssertSchema) }),
+})
+
+export type MirrorPlan = z.infer<typeof mirrorPlanSchema>
 
 // Everything the id covers. It is the plan document minus the id, so hashing it twice is the whole
 // integrity check.
@@ -163,51 +175,9 @@ export interface PlanInput {
   now: string
 }
 
-const planWriteSchema = z.object({
-  // One op only: the engine refuses a write it cannot perform, so a document carrying a future op
-  // is refused as caller input rather than half-applied.
-  op: z.literal('writeAtPointer'),
-  file: z.string(),
-  pointer: z.string(),
-  value: planValueSchema,
-  precondition: z.object({ exists: z.boolean(), digest: z.string().nullable() }),
-  reversible: z.boolean(),
-  priorValue: planValueSchema,
-  executable: z.boolean(),
-  secretValues: z.boolean(),
-  irreversible: z.boolean(),
-})
-
-// The document arrives from a caller, so apply pins every field it reads — and the one op it can
-// perform — before a byte is written. Sections apply never reads (equivalence, prerequisites,
-// conflicts) are the planner's own; so is `source.knownFields`, which only planning reads.
-const mirrorPlanSchema = z.object({
-  planId: z.string(),
-  createdAt: z.string(),
-  toolVersion: z.string(),
-  kind: z.literal('mirror'),
-  source: z.object({ installationId: z.string(), harness: z.string(), tierId: z.string() }),
-  target: z.object({
-    harness: z.enum(['pi', 'codex', 'opencode']),
-    tierId: z.string(),
-    nativeLocation: z.string(),
-  }),
-  security: z.object({ grade: z.enum(['safe', 'risky']) }),
-  writes: z.array(planWriteSchema),
-  manualSteps: z.array(z.object({ step: z.string(), why: z.string() })),
-  verify: z.object({
-    asserts: z.array(z.object({ file: z.string(), pointer: z.string(), equals: planValueSchema })),
-  }),
-})
-
 // A plan is validated in one place, so `acm apply` and the later `apply_plan` tool refuse the same
-// documents for the same reasons. Only the sections a write depends on are pinned by the schema;
-// the rest is the planner's own shape and travels untouched.
-export type ApplyablePlan = z.infer<typeof mirrorPlanSchema>
-
-export type ValidatedPlan =
-  | { kind: 'refused'; reason: string }
-  | { kind: 'plan'; plan: ApplyablePlan }
+// documents for the same reasons: the schema first, then the id the document claims for itself.
+export type ValidatedPlan = { kind: 'refused'; reason: string } | { kind: 'plan'; plan: MirrorPlan }
 
 export function validatePlan(raw: Json): ValidatedPlan {
   const parsed = mirrorPlanSchema.safeParse(raw)

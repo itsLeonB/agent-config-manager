@@ -33,7 +33,13 @@ import {
   type PlanValue,
   type PlanWrite,
 } from './plan.ts'
-import { applyPlan, discover, listInstallations, planMirror, verifyPlan } from './service.ts'
+import {
+  applyPlan,
+  discover,
+  listInstallations,
+  planMirror,
+  verifyPlanDocument,
+} from './service.ts'
 import { listOperations } from './repo.ts'
 
 function fixture(): EngineConfig {
@@ -93,6 +99,11 @@ function resign(planned: MirrorPlan, writes: PlanWrite[]): MirrorPlan {
   const body: Record<string, PlanValue> = JSON.parse(JSON.stringify({ ...planned, writes }))
   delete body.planId
   return { ...planned, writes, planId: planIdOf(body) }
+}
+
+function verifyOutcome(planned: MirrorPlan): string {
+  const result = verifyPlanDocument(planned)
+  return result.kind === 'ok' ? result.verification.outcome : `refused: ${result.reason}`
 }
 
 function digestOfFile(file: string): string {
@@ -205,7 +216,7 @@ test('verification re-reads the target and reports every assertion', () => {
     assert.deepEqual(assertion.actual, assertion.expected)
   }
   // A later re-assert reads the file again, and lands on the same answer.
-  assert.equal(verifyPlan(planned).outcome, 'verified')
+  assert.equal(verifyOutcome(planned), 'verified')
 })
 
 test('a target edited after planning is stale, and nothing is written', () => {
@@ -324,6 +335,8 @@ test('a tampered plan and a write outside the declared tier are both refused', (
   const refused = applyPlan(config, edited)
   assert.equal(refused.outcome, 'refused')
   assert.match(refused.reason ?? '', /does not hash to its planId/)
+  // Verifying a document nobody applied is refused the same way, before any file is read.
+  assert.match(verifyOutcome(edited), /^refused: /)
 
   const elsewhere = structuredClone(planned.writes[0])
   const outside = applyPlan(

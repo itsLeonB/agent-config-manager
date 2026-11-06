@@ -7,8 +7,9 @@ import { withheldVerdict, type McpFacts, type McpValue } from './mcp-facts.ts'
 import type { HarnessId } from './types.ts'
 
 // The seven transforms ticket 12 settled: every way a canonical MCP value reaches a target field
-// that is not a byte copy under the same name.
-export type Transform = 'rename' | 'invert' | 'concat' | 'unit' | 'infer' | 'extract' | 'wrap'
+// that is not a byte copy under the same name. One list, so the plan schema and the type agree.
+export const TRANSFORMS = ['rename', 'invert', 'concat', 'unit', 'infer', 'extract', 'wrap'] as const
+export type Transform = (typeof TRANSFORMS)[number]
 
 // One target field a harness can express, plus the transform that gets the source there. `fields`
 // names every canonical fact the rule consumes, because OpenCode's `command[]` takes two of them.

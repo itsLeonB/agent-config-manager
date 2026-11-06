@@ -9,7 +9,6 @@ import type {
   TierHealthRow,
 } from '../server/store.cjs'
 import type { DiscoveredInstallation, TierRead } from './adapters/types.ts'
-import type { LandedWrite } from './apply.ts'
 
 export interface TierReport extends TierRead {
   harness: string
@@ -83,23 +82,19 @@ export interface StoreInventory {
 }
 
 // What an apply leaves behind: one operation row, and — when the target entry is in the inventory
-// again — the plan's hash on the target and its verification status on the binding.
-export interface ApplyRecord {
-  at: string
-  planId: string
-  grade: string
-  outcome: string
-  toolVersion: string
-  sourceInstallationId: string
-  targetInstallationId: string | null
-  landed: LandedWrite[]
-  binding: { installationId: string; harness: string; tierId: string; status: string } | null
-}
+// again — the plan's hash on the target and its verification status on the binding. The operation's
+// target id is the binding's, so it has one source rather than two.
+export type ApplyRecord = Omit<MirrorRecord, 'id' | 'kind' | 'targetInstallationId'>
 
 export function recordApply(storePath: string, record: ApplyRecord): void {
   const store = openStore(storePath)
   try {
-    const row: MirrorRecord = { id: randomUUID(), kind: 'mirror', ...record }
+    const row: MirrorRecord = {
+      id: randomUUID(),
+      kind: 'mirror',
+      targetInstallationId: record.binding?.installationId ?? null,
+      ...record,
+    }
     store.recordMirror(row)
   } finally {
     store.close()
