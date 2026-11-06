@@ -17,7 +17,8 @@ so one harness's configuration can be mirrored into another. [README.md](README.
 does and how to run it. Configuration on claude.ai is deliberately out of scope; see
 [docs/adr/0002](docs/adr/0002-no-cloud-config-management.md).
 
-Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
+Bun is the package manager and script runner (`bun install`, `bun run <script>`, `bunx`); npm and
+npx are not used here.
 
 ## Engine tickets
 
@@ -25,15 +26,15 @@ Implementing a ticket under `.scratch/acm-rearchitecture/` starts at that ticket
 `Blocked by:` line, and read [`spec.md`](.scratch/acm-rearchitecture/spec.md) beside it for the
 settled decisions.
 
-- The spec is the authority. [`map.md`](.scratch/acm-rearchitecture/map.md) indexes every decision
-  with the ticket that settled it.
+- The spec is the authority. [`map.md`](.scratch/acm-rearchitecture/map.md) indexes each settled
+  decision by ticket: read it when the reasoning behind one of them matters.
 - [`CONTEXT.md`](CONTEXT.md) holds the vocabulary the spec, tickets, and code share; a word that is
   not there is a smell.
 - A resolved ticket's `## Answer` is settled — build on it instead of re-deriving it.
-- The verified native surfaces per harness are in
-  `docs/research/{pi,codex,opencode}-config-surface.md`: config paths and precedence, formats,
-  merge semantics, which gates are human-only. Canonical field tables and the seven transforms are
-  in ticket 12 §1.3 and §2.
+- `docs/research/{pi,codex,opencode}-config-surface.md` are the verified native surfaces for each
+  harness — config paths and precedence, formats, merge semantics, which gates are human-only. Read
+  the harness's file before changing its adapter or writing a mirror step for it. Canonical field
+  tables and the transforms are in ticket 12 §1.3 and §2.
 
 ## Architecture
 
@@ -64,26 +65,15 @@ settled decisions.
 
 - `bun run check` runs lint, typecheck, and the test suite under `bun test`; `.githooks/pre-commit`
   runs it, `bun install` points `core.hooksPath` there, and `.github/workflows/check.yml` runs the
-  same command on pushes and pull requests to `main`. A manual `git commit --no-verify` skips the local hook, so a
-  green `bun run check` is still the thing to report.
+  same command on pushes and pull requests to `main`. A manual `git commit --no-verify` skips the
+  local hook, so a green `bun run check` is still the thing to report.
 
-- `database/` is gitignored and holds `dashboard.db` — the only store. A fresh
-  clone has no data until `node scan.cjs` runs once (or the
-  container starts, which scans on boot); until then the store's snapshot table is empty and the
-  UI shows the "no scan stored yet" empty state with a Rescan button. Backing up means copying
-  `dashboard.db` while the server is stopped; resetting means deleting it. Deleting it also drops
-  the engine's inventory, which `acm list` rebuilds from the native configs on its next run.
+- `database/` is gitignored and holds `dashboard.db` — the only store. Deleting it drops the
+  engine's inventory too, which `acm list` rebuilds from the native configs on its next run.
 
 ## Agent skills
 
-### Issue tracker
-
-Local markdown under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: root `CONTEXT.md` + `docs/adr/`, created lazily by `/domain-modeling`. See `docs/agents/domain.md`.
+Issue tracker: local markdown under `.scratch/<feature-slug>/` — `docs/agents/issue-tracker.md`.
+Triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix` —
+`docs/agents/triage-labels.md`. Domain docs: root `CONTEXT.md` + `docs/adr/`, created lazily by
+`/domain-modeling` — `docs/agents/domain.md`.

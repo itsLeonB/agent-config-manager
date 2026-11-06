@@ -2,8 +2,7 @@
 
 The previous product, kept working unchanged by the engine work: it inventories this machine's
 Claude Code setup (plugins, MCP servers, skills, environment tools, project scope) and serves it as
-one page plus `/settings`. Reached from [AGENTS.md](../AGENTS.md); read this before changing
-anything under `src/routes/`, `src/components/`, `src/server/`, `scan.cjs`, or the container files.
+one page plus `/settings`. What follows is how that page, its scanner, and its container work.
 
 ## Rendering
 
@@ -11,6 +10,9 @@ anything under `src/routes/`, `src/components/`, `src/server/`, `scan.cjs`, or t
 version was a static `index.html` + `app.js` using hand-written DOM string templates; the React
 structure deliberately mirrors that page's modularity (one component per original render function in
 `src/components/dashboard/`, composed by `Dashboard.tsx`) rather than inventing new structure.
+
+TanStack Devtools in `src/routes/__root.tsx` are stripped from production builds by
+`@tanstack/devtools-vite`. No `removeDevtoolsOnBuild` config needed.
 
 **Tailwind v4 is wired but unused.** The dashboard keeps its original hand-written CSS (dark/light
 via `prefers-color-scheme`, no toggle) for pixel-identical UX. Leave `src/styles.css` for future
@@ -22,6 +24,16 @@ pages; there is no theme toggle or Google Fonts import to restore.
 `src/server/store.cjs`. The helper wraps all this in a `createServerFn`; the index route's `loader`
 calls that. Loaders are isomorphic (they also run on the client), so filesystem access belongs
 behind `createServerFn`, and a loader must not self-fetch a relative URL during SSR.
+
+`src/server/store.cjs` is loaded with `createRequire` from `process.cwd()` there, not statically
+imported: Vite's dev SSR serves a `.cjs` source file as-is, so a static import fails in dev with
+`require is not defined`. Loading it by path works in dev and in the built server.
+
+`database/dashboard.db` is the only store: scan snapshots plus the settings rows. A fresh clone has
+no data until `node scan.cjs` runs once (or the container starts, which scans on boot); until then
+the snapshot table is empty and the UI shows the "no scan stored yet" empty state with a Rescan
+button. Backing up means copying `dashboard.db` while the server is stopped; resetting means
+deleting it.
 
 **`src/types/dashboard.ts`** hand-mirrors the JSON shapes `scan.cjs` emits — kept in sync by hand,
 not derived from it. `mcpJson` / `pluginInstalls` need the recursive `Json` type because a server
@@ -39,7 +51,8 @@ instead of starting a second scanner.
 commands. TanStack's default CSRF middleware also runs; the explicit guard is deliberate and does
 not lean on framework defaults. Its allowlist is only `new URL(request.url).origin` plus
 `PUBLIC_ORIGIN`, never `x-forwarded-*`: a foreign page can send its own `Origin` with matching
-forwarded headers, so those headers cannot whitelist anything.
+forwarded headers, so those headers cannot whitelist anything. No environment variables are needed
+locally; `PUBLIC_ORIGIN` is required once a proxy fronts the server.
 
 **Settings live in the store's `config` table.** `src/routes/settings.tsx` renders
 `src/components/settings/SettingsForm.tsx`; the values are read and written by
@@ -65,14 +78,3 @@ via `/settings`.
 container restarts if that loop exits — a dead scanner would otherwise serve silently stale data. It
 then imports `tools/serve.mjs`, which serves `dist/client` and `dist/server` through `srvx` on
 `PORT` / `HOST`. `bun run build` emits those two directories (Node SSR).
-
-## Gotchas
-
-- `src/server/store.cjs` is loaded with `createRequire` from `process.cwd()` in
-  `dashboard.server.ts`, not statically imported: Vite's dev SSR serves a `.cjs` source file as-is,
-  so a static import fails in dev with `require is not defined`. Loading it by path works in dev and
-  in the built server.
-- No environment variables are required to run locally. `PUBLIC_ORIGIN` is required once a proxy
-  fronts the server (see `src/server/origin-guard.ts`).
-- TanStack Devtools in `src/routes/__root.tsx` are stripped from production builds by
-  `@tanstack/devtools-vite`. No `removeDevtoolsOnBuild` config needed.

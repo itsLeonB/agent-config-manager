@@ -8,6 +8,9 @@ Dashboard that inventories your Claude Code setup across:
 4. Standalone environment tools (RTK, Serena, i-have-adhd always-on) that
    need manual setup in every environment
 
+The repo also hosts the `acm` engine: it reads Pi, Codex, and OpenCode config natively so one
+harness's configuration can be mirrored into another. See [AGENTS.md](AGENTS.md).
+
 Configuration on claude.ai is deliberately out of scope — see
 [docs/adr/0002](docs/adr/0002-no-cloud-config-management.md).
 
@@ -37,7 +40,9 @@ on demand, so the CLI is optional once the page is up.
 
 The same repo builds a single image (`Dockerfile`) that serves the dashboard and
 rescans by itself: one scan at start, then every interval. Bun builds,
-`node:22-slim` runs (`bun run build`, then `node tools/entrypoint.mjs`).
+`node:22-slim` runs (`bun run build`, then `node tools/entrypoint.mjs`). The
+mechanism and mounts are in [docs/dashboard.md](docs/dashboard.md); hosting is
+undecided while the engine rearchitecture lands.
 
 ```
 docker build -t agent-config-manager .
@@ -91,13 +96,6 @@ For `bun run dev` against the same data, use the same commands without the
 | `PUBLIC_ORIGIN` | unset | This dashboard's public origin, e.g. `http://acm.localhost`; **required behind a proxy** — the origin guard trusts only the received URL's origin plus this value, never forwarded headers |
 | `PORT` | `3000` | Listen port inside the container (and for `tools/serve.mjs` locally) |
 | `HOST` | `0.0.0.0` | Listen hostname for `tools/serve.mjs` in the container |
-
-### Running in the container
-
-`bun run build` emits `dist/client` + `dist/server`; `tools/entrypoint.mjs` starts the scanner loop
-and then serves them through `srvx`. `HOME` comes from `HOST_HOME`, and the store lives under
-`/app/database`. See [docs/dashboard.md](docs/dashboard.md) for the container notes. Hosting is
-undecided while the engine rearchitecture lands.
 
 ## Notes
 
