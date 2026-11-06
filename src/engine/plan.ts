@@ -230,26 +230,30 @@ export function buildPlan(input: PlanInput): PlanResult {
     exists: existing.kind === 'parsed',
     digest: existing.kind === 'parsed' ? existing.digest : null,
   }
-  const writes: PlanWrite[] = legacy.kind === 'normalised' ? [] : partition.writes.map((write) => {
-    const pointer = `${entryPointer}.${write.target}`
-    const runs = z.string().safeParse(write.value)
-    return {
-      op: 'writeAtPointer',
-      file,
-      pointer,
-      value: write.value,
-      precondition,
-      reversible: true,
-      priorValue: priorValueAt(current, pointer),
-      executable: runs.success && runs.data.startsWith('!'),
-      secretValues: false,
-      irreversible: false,
-    }
-  })
+  // One write for a normalised block, one write per addressed leaf otherwise: the shapes differ, so
+  // a plan never carries both.
+  const writes: PlanWrite[] = []
   if (legacy.kind === 'normalised') {
     const container = normalisedWrite(file, precondition, legacy, document, source.name, partition)
     if (container.kind === 'refused') return container
     writes.push(container.write)
+  } else {
+    for (const write of partition.writes) {
+      const pointer = `${entryPointer}.${write.target}`
+      const runs = z.string().safeParse(write.value)
+      writes.push({
+        op: 'writeAtPointer',
+        file,
+        pointer,
+        value: write.value,
+        precondition,
+        reversible: true,
+        priorValue: priorValueAt(current, pointer),
+        executable: runs.success && runs.data.startsWith('!'),
+        secretValues: false,
+        irreversible: false,
+      })
+    }
   }
   const blocked = writes
     .map((write) => ancestorBlocker(current, write.pointer))
@@ -498,7 +502,13 @@ function entryValue(writes: TargetWrite[]): PlanValue {
 type LegacyBlock =
   | { kind: 'absent' }
   | { kind: 'invalid'; detail: string }
-  | { kind: 'normalised'; document: PlanValue; value: PlanValue; pointer: string }
+  | {
+      kind: 'normalised'
+      document: PlanValue
+      value: PlanValue
+      pointer: string
+      rewritten: { name: string; spellings: string[] }[]
+    }
 
 // The document the plan reads, with OpenCode's legacy flat entries already moved under
 // `mcp.servers`: only OpenCode keeps an old shape beside its new one, so no other target normalises.
@@ -515,11 +525,17 @@ function legacyBlock(document: PlanValue | null, target: PlanTarget): LegacyBloc
   const root = planObjectSchema.safeParse(document)
   if (!root.success) return { kind: 'absent' }
   const value = planObjectSchema.parse(normalised.value)
-  return { kind: 'normalised', document: { ...root.data, mcp: value }, value, pointer: 'mcp' }
+  return {
+    kind: 'normalised',
+    document: { ...root.data, mcp: value },
+    value,
+    pointer: 'mcp',
+    rewritten: normalised.rewritten,
+  }
 }
 
-// One write replaces the whole block: the mirrored entry at its V2 address, every sibling carried
-// across in the shape V2 reads. Siblings come from a file this engine did not write, so the value
+// One write replaces the whole block: the mirrored entry under `mcp.servers`, every sibling carried
+// across in the shape OpenCode reads today. Siblings come from a file this engine did not write, so the value
 // is classified before it can reach the plan — a literal token in one refuses the plan rather than
 // travelling with it, because a withheld marker cannot be written back into a config.
 function normalisedWrite(
@@ -536,6 +552,8 @@ function normalisedWrite(
   const carried = previous.success ? previous.data : {}
   const entry = { ...carried, ...planObjectSchema.parse(entryValue(partition.writes)) }
   const value: PlanValue = { ...container, servers: { ...servers, [name]: entry } }
+  // Both the value and the block it replaces are classified, because `priorValue` is shown verbatim:
+  // an unclean leaf in either one refuses the plan instead of travelling with it.
   const prior = resolvePointer(document, legacy.pointer)
   const unclean = uncleanPointer(value, legacy.pointer) ?? uncleanPointer(prior ?? null, legacy.pointer)
   if (unclean !== null) {
@@ -561,13 +579,16 @@ function normalisedWrite(
   }
 }
 
-// The first leaf of this value the classifier will not call clean, by its own address. `environment`
-// is read as the canonical `env`, so a literal token there is judged where the vocabulary puts it.
+// The first leaf of this value the classifier will not call clean, by its own address. The last two
+// steps are the canonical pointer, exactly as `priorValueAt` reads one — `environment` under the
+// name the credential pointers use — so a value at `env.K` is a `secret` by pointer alone, whatever
+// it looks like.
 function uncleanPointer(value: PlanValue | null, pointer: string): string | null {
   if (value === null) return null
   const scalar = z.string().safeParse(value)
   if (scalar.success) {
     const canonical = pointerSegments(pointer)
+      .slice(-2)
       .map((segment) => (segment === 'environment' ? 'env' : segment))
       .join('.')
     return classify(canonical, scalar.data, MCP_CREDENTIAL_POINTERS).verdict === 'clean' ? null : pointer
@@ -593,12 +614,21 @@ function uncleanPointer(value: PlanValue | null, pointer: string): string | null
 // human is told what it costs instead of discovering it after the fact.
 function legacySteps(legacy: LegacyBlock): PlanManualStep[] {
   if (legacy.kind !== 'normalised') return []
-  return [
+  const steps: PlanManualStep[] = [
     {
       step: 'review the normalised mcp block once it has been written',
       why: 'the legacy flat entries move under mcp.servers in one write, so comments inside the old mcp block do not survive it',
     },
   ]
+  // A sibling's spelling had to change for the block to have one shape, and nothing in the plan
+  // asked for that, so it is named rather than changed quietly.
+  for (const { name, spellings } of legacy.rewritten) {
+    steps.push({
+      step: `review mcp.servers.${name} in the normalised block`,
+      why: `this entry was written flat, so it is rewritten as ${spellings.join(' and ')}`,
+    })
+  }
+  return steps
 }
 
 function carriesCommandRetrieval(value: McpValue): boolean {

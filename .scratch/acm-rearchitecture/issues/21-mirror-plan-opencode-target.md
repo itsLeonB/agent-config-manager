@@ -46,15 +46,25 @@ Choices worth knowing beyond the ticket:
   transport in place is still refused.
 - **The block write is classified before it can reach the plan.** It carries sibling values from a
   file this engine did not write, and a withheld marker cannot be written back into a config, so an
-  unclean leaf anywhere in the value (or in the block it replaces) refuses the plan and names the
-  pointer. `environment` is read as the canonical `env` for that check, which is the address the
-  credential pointers name.
+  unclean leaf anywhere in the value (or in the block it replaces, which `priorValue` shows verbatim)
+  refuses the plan and names the pointer. The classifier reads the canonical last two segments, as
+  `priorValueAt` does, with `environment` under the name `env`: `env.<K>` is therefore
+  credential-bearing by declaration, so a sibling value there refuses without having to look like a
+  token. The refusal is caller input, not a gap — the same class as an unwritable tier — because the
+  alternative would write a marker into somebody's config.
+- **A sibling whose spelling had to change is named.** `normaliseLegacyMcp` returns the entries it
+  rewrote (`enabled` inverted, a numeric `timeout` split) and the plan carries one manual step per
+  entry, so a conversion nobody asked for is visible rather than quiet. An already per-phase
+  `timeout` — `catalog` included — is carried as it stands, because the vocabulary does not name
+  `catalog` but the file still holds it.
 - **A name defined in both shapes, or a legacy value that is not a table, is a refusal** — which of
   the two definitions the harness honours is unverified, so the plan does not pick one.
-- **The editor replaces a named container instead of refusing it.** `writeJson` used to accept only
-  a leaf; a plan that names `mcp` replaces that node and leaves every byte outside it alone. The cost
-  is stated: comments *inside* the old `mcp` block do not survive the rewrite, which is a manual
-  step, and the plan grades `risky` because the block it writes disagrees with the bytes on disk.
+- **The editor replaces a node of the same kind, and no other.** `writeJson` used to accept only a
+  leaf; a plan that names `mcp` now replaces that table, and an existing `command[]` is replaceable
+  too, which it was not before. A write that would turn a table into a scalar is still refused —
+  that is a plan the engine misread. The cost is stated where it happens: comments *inside* the old
+  `mcp` block do not survive the rewrite (a manual step), and the plan grades `risky` because the
+  block it writes disagrees with the bytes on disk.
 - **`oc:user` gets the same shadowing manual step `oc:project` had**, because a root-managed
   `/etc/opencode` outranks the user config too; its `why` also names `~/.opencode`, whose precedence
   against `~/.config/opencode` is still unverified.

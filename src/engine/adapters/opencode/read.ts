@@ -45,7 +45,9 @@ const RESERVED_MCP_KEYS = new Set(['servers', 'timeout'])
 export type LegacyMcpNormalisation =
   | { kind: 'absent' }
   | { kind: 'invalid'; detail: string }
-  | { kind: 'normalised'; value: Record<string, PlanValue> }
+  // `rewritten` names the entries whose spelling had to change, so the plan can report a conversion
+  // it made to somebody else's entry instead of changing it quietly.
+  | { kind: 'normalised'; value: Record<string, PlanValue>; rewritten: { name: string; spellings: string[] }[] }
 
 // Every legacy entry moves under `servers`, with its two legacy spellings converted: `enabled` is
 // `disabled` inverted, and one numeric `timeout` covers both phases. The reserved keys stay put, and
@@ -59,6 +61,7 @@ export function normaliseLegacyMcp(document: PlanValue): LegacyMcpNormalisation 
   const servers = planObjectSchema.safeParse(mcp.data.servers ?? {})
   if (!servers.success) return { kind: 'invalid', detail: 'mcp.servers is not a table' }
   const converted = { ...servers.data }
+  const rewritten: { name: string; spellings: string[] }[] = []
   for (const name of legacy) {
     const entry = planObjectSchema.safeParse(mcp.data[name])
     if (!entry.success) return { kind: 'invalid', detail: `mcp.${name} is not a server entry` }
@@ -67,24 +70,35 @@ export function normaliseLegacyMcp(document: PlanValue): LegacyMcpNormalisation 
     if (converted[name] !== undefined) {
       return { kind: 'invalid', detail: `mcp.${name} is defined both flat and under mcp.servers` }
     }
-    converted[name] = fromLegacyEntry(entry.data)
+    const lifted = fromLegacyEntry(entry.data)
+    converted[name] = lifted.entry
+    if (lifted.spellings.length > 0) rewritten.push({ name, spellings: lifted.spellings })
   }
   const reserved = Object.fromEntries(
     Object.entries(mcp.data).filter(([key]) => RESERVED_MCP_KEYS.has(key) && key !== 'servers'),
   )
-  return { kind: 'normalised', value: { servers: converted, ...reserved } }
+  return { kind: 'normalised', value: { servers: converted, ...reserved }, rewritten }
 }
 
+// A per-phase timeout object is already the current spelling, so it is carried as it stands —
+// including `catalog`, which the canonical vocabulary does not name but the file still holds.
 function fromLegacyEntry(entry: Record<string, PlanValue>) {
   const { enabled, timeout, ...rest } = entry
   const converted = { ...rest }
+  const spellings: string[] = []
   const flag = z.boolean().safeParse(enabled)
-  if (flag.success && converted.disabled === undefined) converted.disabled = !flag.data
+  if (flag.success && converted.disabled === undefined) {
+    converted.disabled = !flag.data
+    spellings.push('enabled inverted to disabled')
+  }
   const milliseconds = z.number().safeParse(timeout)
   if (milliseconds.success) {
     converted.timeout = { startup: milliseconds.data, execution: milliseconds.data }
+    spellings.push('numeric timeout split across timeout.startup and timeout.execution')
+  } else if (timeout !== undefined) {
+    converted.timeout = timeout
   }
-  return converted
+  return { entry: converted, spellings }
 }
 
 export function readOpenCodeMcpJsonc(text: string): ParsedEntries<McpEntry> {

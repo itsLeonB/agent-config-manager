@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { EngineConfig } from './config.ts'
 import { recordDiscovery } from './repo.ts'
-import { alsoReadBy, planIntact, type MirrorPlan } from './plan.ts'
+import { alsoReadBy, planIntact, planObjectSchema, type MirrorPlan } from './plan.ts'
 import type { Adapter } from './adapters/types.ts'
 import { MCP_FIELDS } from './adapters/mcp-facts.ts'
 import { MCP_WRITE_SURFACES } from './adapters/mcp-write.ts'
@@ -770,6 +770,54 @@ test('a target holding the legacy flat shape is normalised into one shape, sibli
     ],
   )
   assert.equal(fs.readFileSync(file, 'utf8'), written)
+})
+
+test('a sibling value at an env pointer is withheld by its address, not by looking like a token', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  fs.writeFileSync(
+    path.join(config.home, '.config', 'opencode', 'opencode.json'),
+    JSON.stringify({
+      mcp: { other: { type: 'local', command: ['other'], environment: { SERVICE_AUTH: 'correct-horse-battery' } } },
+    }),
+  )
+
+  const result = planMirror(config, onlyId(config, 'serena'), 'oc:user')
+
+  // `env.<K>` is credential-bearing by declaration, so the value needs no token shape to be refused.
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /mcp\.servers\.other\.environment\.SERVICE_AUTH/)
+})
+
+test('a sibling whose spelling changed is named in a manual step, not rewritten quietly', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+  fs.writeFileSync(
+    path.join(config.home, '.config', 'opencode', 'opencode.json'),
+    JSON.stringify({
+      mcp: {
+        other: { type: 'local', command: ['other'], enabled: true, timeout: 30_000 },
+        // Already the per-phase spelling, `catalog` included: nothing about it changes.
+        phase: { type: 'local', command: ['phase'], timeout: { startup: 1, catalog: 2, execution: 3 } },
+      },
+    }),
+  )
+
+  const planned = plan(config, 'serena', 'oc:user')
+
+  const rewritten = planned.manualSteps.find((step) => step.step.includes('mcp.servers.other'))
+  assert.ok(rewritten, planned.manualSteps.map((step) => step.step).join('; '))
+  assert.match(rewritten.why, /enabled inverted to disabled/)
+  assert.match(rewritten.why, /numeric timeout split across timeout\.startup and timeout\.execution/)
+  // The one entry whose spelling had to change is the only one named.
+  assert.equal(planned.manualSteps.some((step) => step.step.includes('mcp.servers.phase')), false)
+  const block = planObjectSchema.parse(writeValues(planned).get('mcp'))
+  const servers = planObjectSchema.parse(block.servers ?? {})
+  assert.deepEqual(servers.phase, {
+    type: 'local',
+    command: ['phase'],
+    timeout: { startup: 1, catalog: 2, execution: 3 },
+  })
 })
 
 test('a server defined in both OpenCode shapes is refused rather than resolved by picking one', () => {
