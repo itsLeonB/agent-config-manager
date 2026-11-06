@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "lint": "oxlint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test",
+    "test": "bun test --reporter=dots",
     "check": "bun run lint && bun run typecheck && bun run test",
     "prepare": "git config core.hooksPath .githooks",
     "acm": "node src/cli/main.ts",
