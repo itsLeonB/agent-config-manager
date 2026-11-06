@@ -6,8 +6,11 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
+import { parse as parseToml } from 'smol-toml'
+import { z } from 'zod'
 import { openStore } from '../server/store.cjs'
 import type { EngineConfig } from './config.ts'
+import { stripJsonc } from './adapters/opencode/read.ts'
 import { discover, listInstallations } from './service.ts'
 
 interface PiServerFixture {
@@ -240,6 +243,49 @@ test('one listing call returns installations from all three harnesses, filterabl
   assert.equal(byName.get('legacyoc')?.nativePointer, 'mcp.legacyoc')
   assert.deepEqual(byName.get('ocserver')?.bindings.map((binding) => binding.tierId), ['oc:project'])
   assert.equal(JSON.parse(byName.get('ocserver')?.knownFieldsJson ?? '{}').enabled, false)
+})
+
+// A row's native location is part of its identity and every later plan addresses it, so the pointer
+// must name something that exists in the file the row came from.
+function pointerResolves(file: string, pointer: string): boolean {
+  const text = fs.readFileSync(file, 'utf8')
+  const document: unknown = file.endsWith('.toml')
+    ? parseToml(text)
+    : JSON.parse(file.endsWith('.jsonc') ? stripJsonc(text) : text)
+  const record = z.record(z.string(), z.unknown())
+  let current: unknown = document
+  for (const segment of pointer.match(/"(?:[^"\\]|\\.)*"|[^.]+/g) ?? []) {
+    const step = record.safeParse(current)
+    if (!step.success) return false
+    current = step.data[segment.startsWith('"') ? JSON.parse(segment) : segment]
+    if (current === undefined) return false
+  }
+  return true
+}
+
+test('every stored native pointer resolves inside the file it names', () => {
+  const config = fixture()
+  writeMcp(userMcpFile(config), { piserver: { command: 'pi' } })
+  fs.writeFileSync(codexConfigFile(config, 'user'), '[mcp_servers.serena]\ncommand = "serena"\n')
+  fs.writeFileSync(
+    codexConfigFile(config, 'project'),
+    '[mcp_servers."dotted.name"]\nurl = "https://example.test/mcp"\n',
+  )
+  fs.writeFileSync(
+    opencodeConfigFile(config, 'project'),
+    '{ "mcp": { "legacyoc": { "type": "local", "command": ["z"] }, "servers": { "ocserver": { "type": "local", "command": ["oc"] } } } }',
+  )
+  discover(config)
+
+  const rows = listInstallations(config, { includeRemoved: true }).installations
+  assert.ok(rows.length >= 5)
+  for (const row of rows) {
+    assert.equal(
+      pointerResolves(row.nativeFile, row.nativePointer ?? ''),
+      true,
+      `${row.name} ${row.nativePointer} does not resolve in ${row.nativeFile}`,
+    )
+  }
 })
 
 test('a relocated CODEX_HOME is read instead of ~/.codex', () => {

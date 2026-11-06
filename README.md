@@ -92,13 +92,12 @@ For `bun run dev` against the same data, use the same commands without the
 | `PORT` | `3000` | Listen port inside the container (and for `tools/serve.mjs` locally) |
 | `HOST` | `0.0.0.0` | Listen hostname for `tools/serve.mjs` in the container |
 
-### Deploying to Dokploy
+### Running in the container
 
-This machine's deployment target is a Dokploy Application built from this
-repo's `Dockerfile`, served at `http://acm.localhost` (Traefik, HTTPS off) with
-the container port also published on the host as a fallback. The recipe — real
-values, mounts, env, port, domain, auto-deploy, rollback by commit, and the
-local restart/crash proof — is in [docs/deploy-dokploy.md](docs/deploy-dokploy.md).
+`bun run build` emits `dist/client` + `dist/server`; `tools/entrypoint.mjs` starts the scanner loop
+and then serves them through `srvx`. `HOME` comes from `HOST_HOME`, and the store lives under
+`/app/database`. See [docs/dashboard.md](docs/dashboard.md) for the container notes. Hosting is
+undecided while the engine rearchitecture lands.
 
 ## Notes
 
