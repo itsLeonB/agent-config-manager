@@ -19,6 +19,14 @@ claude.ai is deliberately out of scope; see
 
 Bun is the package manager and script runner. Never `npm` / `npx` for this repo.
 
+## Engine tickets
+
+Implementing a ticket under `.scratch/acm-rearchitecture/` starts at that ticket file: follow its
+`Blocked by:` line, and read [`spec.md`](.scratch/acm-rearchitecture/spec.md) beside it for the
+settled decisions. The spec is the authority; [`CONTEXT.md`](CONTEXT.md) holds the vocabulary the
+spec, tickets, and code share, so a word that is not there is a smell. A resolved ticket's
+`## Answer` is settled — build on it instead of re-deriving it.
+
 ## Architecture
 
 - **Rendering is TanStack Start** — React 19 + TypeScript, file-based routing
