@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { z } from 'zod'
@@ -588,6 +588,14 @@ function buildSkillPlan(input: PlanInput): PlanResult {
   if (sourceDigest === null) {
     return { kind: 'refused', reason: `${source.nativeFile} cannot be read, so there is nothing to copy` }
   }
+  // The listing this plan classifies came from the last scan. A tree that changed since is one the
+  // classifier never saw, so the copy is refused rather than offered half-inspected.
+  if (source.contentDigest !== '' && sourceDigest !== source.contentDigest) {
+    return {
+      kind: 'refused',
+      reason: `${source.nativeFile} changed since the last scan, so the files a copy would carry are not the ones that were inspected; run \`acm list\` and plan again`,
+    }
+  }
   // The skill is described by a directory the engine cannot read? Then there is nothing to plan from:
   // a copy of an unknown tree would claim a content it never saw.
   if (readTextOrNull(path.join(source.nativeFile, 'SKILL.md')) === null) {
@@ -703,10 +711,22 @@ function writeBody(
   }
 }
 
-// Files a copy would carry that are worth classifying: the entry point and anything whose name says
-// it is text. An image or a font is copied as it stands — the classifier has nothing to judge in it.
-const TEXT_FILE =
-  /\.(?:md|mdx|txt|sh|bash|zsh|py|js|jsx|ts|tsx|rb|go|rs|pl|php|ps1|ya?ml|json|jsonc|toml|ini|cfg|conf|html|css|sql|lua)$/i
+// Whether a file carries text the classifier can read, decided from the bytes rather than the name:
+// a dotfile and an extensionless script are text, and an image or a font is not. Valid UTF-8 with no
+// NUL is the whole test, so nothing is skipped for having an unexpected extension.
+type TreeFile = { kind: 'text'; text: string } | { kind: 'binary' } | { kind: 'unreadable' }
+
+function readTreeFile(file: string): TreeFile {
+  let bytes: Buffer
+  try {
+    bytes = readFileSync(file)
+  } catch {
+    return { kind: 'unreadable' }
+  }
+  if (bytes.includes(0)) return { kind: 'binary' }
+  const text = bytes.toString('utf8')
+  return Buffer.from(text, 'utf8').equals(bytes) ? { kind: 'text', text } : { kind: 'binary' }
+}
 
 // The first file of a tree the classifier will not call clean. A file this process cannot read is
 // the same answer as an unclean one: a copy it cannot describe is not one it may offer.
@@ -715,10 +735,10 @@ function uncleanTree(
   files: readonly string[],
 ): { file: string; verdict: Verdict } | null {
   for (const relative of files) {
-    if (!TEXT_FILE.test(relative) && relative !== 'SKILL.md') continue
-    const text = readTextOrNull(path.join(dir, relative))
-    if (text === null) return { file: relative, verdict: 'suspect' }
-    const verdict = classifyWholeFile(relative, text)
+    const read = readTreeFile(path.join(dir, relative))
+    if (read.kind === 'binary') continue
+    if (read.kind === 'unreadable') return { file: relative, verdict: 'suspect' }
+    const verdict = classifyWholeFile(relative, read.text)
     if (verdict !== 'clean') return { file: relative, verdict }
   }
   return null
@@ -861,6 +881,23 @@ const SHADOWING_INSTRUCTIONS: readonly { name: string; readers: readonly Harness
   { name: 'CLAUDE.MD', readers: ['pi'] },
 ]
 
+// A name that resolves to the target itself is not a shadow of it: on a case-insensitive filesystem
+// `AGENTS.MD` and `AGENTS.md` are one file, and a link with a shadow's name is the same entry again.
+// Where they really are decides it, so a distinct same-named file on a case-sensitive filesystem is
+// still reported.
+function isSameEntry(candidate: string, target: string): boolean {
+  const resolved = realpathOf(candidate)
+  return resolved !== null && resolved === realpathOf(target)
+}
+
+function realpathOf(file: string): string | null {
+  try {
+    return existsSync(file) ? realpathSync(file) : null
+  } catch {
+    return null
+  }
+}
+
 // What a human still has to know after the bytes land: a same-directory file that outranks this one
 // for a harness that reads it, Codex's project budget, and — only when something is written — the
 // ancestor instruction files every harness also loads.
@@ -876,7 +913,8 @@ function instructionManualSteps(
   const shadows = SHADOWING_INSTRUCTIONS.filter(
     (shadow) =>
       shadow.readers.some((harness) => readers.includes(harness)) &&
-      existsSync(path.join(directory, shadow.name)),
+      existsSync(path.join(directory, shadow.name)) &&
+      !isSameEntry(path.join(directory, shadow.name), targetFile),
   ).map((shadow) => ({ rank: shadow, file: path.join(directory, shadow.name) }))
   for (const { rank, file } of shadows) {
     steps.push({

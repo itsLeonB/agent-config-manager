@@ -186,6 +186,10 @@ An instruction body travels inside the plan, so its source is checked against th
 edited since then is a refusal (`run acm list and plan again`) rather than a stale body written over
 a target whose own digest would never reveal it.
 
+A skill installed as a symlink is mirrored as a real directory: the executor resolves the source root
+before copying, because a linked skill directory is the form none of the three harnesses verifies.
+Links *inside* the tree are reproduced as links.
+
 A `symlink` is used only where the spec permits one: the source and the target sit in the same scope
 bucket, the target is a declared path, nothing exists there, and the digest the plan names is the
 source's resolved content — which is exactly what verification re-reads. A skill is never linked:

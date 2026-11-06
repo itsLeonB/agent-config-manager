@@ -48,6 +48,12 @@ Choices worth knowing beyond the ticket:
   `pointer`, never as its value, since a withheld value is a marker. A plan whose every write is
   gated is `refused` with those steps and writes nothing, rather than `applied` with an empty
   `landed[]`.
+> **Amended by [ticket 23](23-skills-and-instructions.md):** `writeFile`, `copyFile` and `symlink` are
+> ops this engine performs now, so the flag gate above covers the `executable` / `secretValues` /
+> `irreversible` flags and the empty-allowlist `runCommand` only. The two paragraphs above describe
+> the state before those ops existed; the grade is unchanged, so a client that can ask a human still
+> asks.
+
 - **The narrowed plan is what gets asserted.** A gated write's assertion would report a correctly
   applied plan as `failed`, so the assertions are filtered down to the writes that can land before
   verification runs.

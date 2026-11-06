@@ -533,7 +533,9 @@ test('one file written two ways by one plan is refused before anything lands', (
   assert.equal(fs.existsSync(copy.file), false)
 })
 
-test('a skill directory the scan cannot list makes the tier unreadable, and tombstones nothing', () => {
+test('a skill directory the scan cannot list makes the tier unreadable, and tombstones nothing', (t) => {
+  // A root user reads through mode 0, so there is no listing failure to observe.
+  if (process.getuid?.() === 0) return t.skip('root bypasses permissions')
   const config = fixture()
   const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
   writeSkill(piSkill, { script: '#!/bin/sh\n' })
@@ -556,4 +558,86 @@ test('a skill directory the scan cannot list makes the tier unreadable, and tomb
   } finally {
     fs.chmodSync(unreadable, 0o755)
   }
+})
+
+test('a skill installed as a symlink lands as a real directory, keeping the links inside it', () => {
+  const config = fixture()
+  // What `npx skills` leaves on disk: the shared location holds a link, not a directory.
+  const installed = path.join(config.home, 'installed', 'review')
+  writeSkill(installed)
+  fs.symlinkSync(path.join(installed, 'SKILL.md'), path.join(installed, 'alias.md'))
+  fs.mkdirSync(path.join(config.home, '.pi', 'agent', 'skills'), { recursive: true })
+  const link = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  fs.symlinkSync(installed, link)
+  discover(config)
+
+  const planned = plan(config, link, 'codex:user')
+  const applied = applyPlan(config, planned)
+  assert.equal(applied.outcome, 'applied', applied.reason ?? '')
+
+  const target = path.join(sharedSkills(config), 'review')
+  // The root is a directory of real files: a linked skill directory is the form no harness verifies.
+  assert.equal(fs.lstatSync(target).isDirectory(), true)
+  assert.equal(fs.lstatSync(path.join(target, 'SKILL.md')).isFile(), true)
+  // The link the source holds inside the tree is reproduced as a link.
+  assert.equal(fs.lstatSync(path.join(target, 'alias.md')).isSymbolicLink(), true)
+})
+
+test('a skill tree that gained a file since the scan is refused, not copied half-inspected', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  discover(config)
+  fs.writeFileSync(path.join(piSkill, 'added-after-the-scan.md'), 'token = sk-proj-AbCdEfGhIjKlMnOpQrStUvWx\n')
+
+  const result = planMirror(
+    config,
+    listInstallations(config, {}).installations.find((row) => row.nativeFile === piSkill)?.id ?? '',
+    'codex:user',
+  )
+
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /changed since the last scan/)
+})
+
+test('a dotfile with no extension is classified, and a binary asset is copied as it stands', () => {
+  const config = fixture()
+  const piSkill = path.join(config.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(piSkill)
+  fs.writeFileSync(path.join(piSkill, '.env.example'), 'GITHUB_TOKEN=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789\n')
+  discover(config)
+
+  const planned = plan(config, piSkill, 'codex:user')
+  assert.equal(planned.writes.length, 0)
+  assert.deepEqual(planned.equivalence.gaps, [
+    { field: '.env.example', reason: 'credential', replacement: 'dropped' },
+  ])
+
+  // The same skill without that dotfile, holding an image instead, is copied whole.
+  const clean = fixture()
+  const other = path.join(clean.home, '.pi', 'agent', 'skills', 'review')
+  writeSkill(other)
+  fs.writeFileSync(path.join(other, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02, 0xff]))
+  discover(clean)
+
+  const copy = plan(clean, other, 'codex:user')
+  assert.equal(copy.writes[0]?.op, 'copyFile')
+  assert.equal(applyPlan(clean, copy).outcome, 'applied')
+  assert.equal(
+    fs.readFileSync(path.join(sharedSkills(clean), 'review', 'logo.png')).length,
+    8,
+  )
+})
+
+test('a shadow name that resolves to the target itself is not reported as a shadow', () => {
+  const config = fixture()
+  const target = path.join(config.home, '.codex', 'AGENTS.md')
+  fs.writeFileSync(target, '# Rules\n')
+  // A same-directory name that is the same entry: what a case-insensitive filesystem hands back.
+  fs.symlinkSync(target, path.join(config.home, '.codex', 'AGENTS.MD'))
+  discover(config)
+
+  const planned = plan(config, target, 'pi:user')
+
+  assert.equal(planned.manualSteps.some((step) => step.step.includes('AGENTS.MD')), false)
 })

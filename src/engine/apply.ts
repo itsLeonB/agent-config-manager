@@ -256,10 +256,9 @@ export function executePlan(
   }
 }
 
-// The risk a human has to tick, per write. A conflict is gated separately, by `onConflict`. A file
-// op is not in this list: `writeFile`, `copyFile` and `symlink` are writes this engine performs, and
-// they are graded risky so a client that can ask a human does — the empty-allowlist `runCommand` is
-// the one op it refuses, and the plan schema does not admit it either.
+// The risk a human has to tick, per write: the flags this face cannot obtain an answer for. A
+// conflict is gated separately, by `onConflict`. File ops are performed here and graded risky, so a
+// client that can ask a human still asks; `runCommand` is the op the engine refuses.
 function isGated(write: PlanWrite): boolean {
   return write.executable || write.secretValues || write.irreversible
 }
@@ -590,8 +589,12 @@ function writeWhole(file: string, write: WholeWrite): Landed {
   try {
     mkdirSync(path.dirname(file), { recursive: true })
     if (write.op === 'writeFile') writeFileSync(file, write.content)
-    else if (write.op === 'copyFile') cpSync(write.source, file, { recursive: true, force: true })
-    else symlinkSync(write.source, file)
+    else if (write.op === 'copyFile') {
+      // The root is resolved, so a skill installed as a symlink lands as a real directory: a linked
+      // skill directory is the form none of the three harnesses verifies. Links *inside* the tree
+      // are copied as links, which is what the source holds.
+      cpSync(realpathSync(write.source), file, { recursive: true, force: true })
+    } else symlinkSync(write.source, file)
   } catch (caught) {
     return {
       landed,

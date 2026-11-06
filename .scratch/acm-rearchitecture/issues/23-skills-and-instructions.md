@@ -158,3 +158,22 @@ Skipped, with the reason:
   client could apply it.
 - **Recording a binding status for a plan with no writes.** Nothing changed, nothing is asserted; the
   match is stated on the plan's `disposition` instead.
+
+### Review follow-up (second pass)
+
+- **A skill whose tree changed since the scan is refused.** The plan classifies the files the listing
+  named, while the copy carries whatever is on disk at apply, so a file added after the scan would be
+  copied without ever being classified. The listing's digest is compared before the copy is offered.
+- **Text is detected from the bytes, not the extension**: valid UTF-8 with no NUL. A `.env.example`
+  and an extensionless script are classified; a PNG is copied as it stands.
+- **A skill installed as a symlink lands as a real directory.** `cpSync` resolves the source root
+  first, because a linked skill *directory* is the form none of the three harnesses verifies; links
+  inside the tree are still copied as links.
+- **A shadow that resolves to the target is not reported.** On a case-insensitive filesystem
+  `AGENTS.MD` and `AGENTS.md` are one entry, so the comparison is by realpath, which also covers a
+  link wearing a shadow's name. A distinct same-named file on a case-sensitive filesystem is still
+  reported.
+- **Containment resolves both sides** before comparing a write to a declared skill root, so a `..`
+  segment cannot walk out of it on paper.
+- Ticket 22's answer carries a note that the file ops are performed by the engine now, so its gate
+  describes only the flags and `runCommand`.

@@ -66,9 +66,14 @@ export function writePaths(tier: Tier, category: Category): readonly string[] {
 }
 
 // A write may reach a declared path itself or anything beneath it: a mirrored skill is
-// `<root>/<name>`, and the root is what the tier declares.
+// `<root>/<name>`, and the root is what the tier declares. Both sides are resolved before the
+// comparison, so a `..` segment cannot walk out of a declared root on paper.
 function under(declared: readonly string[], file: string): boolean {
-  return declared.some((entry) => entry === file || file.startsWith(`${entry}${path.sep}`))
+  const lexical = path.resolve(file)
+  return declared.some((entry) => {
+    const root = path.resolve(entry)
+    return lexical === root || lexical.startsWith(`${root}${path.sep}`)
+  })
 }
 
 export function declaresWritePath(tier: Tier, category: Category, file: string): boolean {
