@@ -43,7 +43,12 @@ function list(argv: string[]): number {
     includeRemoved: options.all,
   })
   if (options.json) {
-    process.stdout.write(`${JSON.stringify({ scan, ...inventory }, null, 2)}\n`)
+    // The pass always covers every harness; only what is emitted follows the filter.
+    const scanOut =
+      options.harness === undefined
+        ? scan
+        : { ...scan, tierHealth: scan.tierHealth.filter((health) => health.harness === options.harness) }
+    process.stdout.write(`${JSON.stringify({ scan: scanOut, ...inventory }, null, 2)}\n`)
     return 0
   }
   for (const row of inventory.installations) {
@@ -51,6 +56,14 @@ function list(argv: string[]): number {
   }
   const counted = `${inventory.installations.length} installation${inventory.installations.length === 1 ? '' : 's'}`
   process.stdout.write(`\n${counted} · scanned ${scan.scannedAt}\n`)
+  // The tier legend is the answer to "may I propose a write here": one line per harness, each tier
+  // with the scope bucket it maps to and whether it is a mirror target.
+  for (const harness of inventory.harnesses) {
+    const tiers = harness.tiers
+      .map((tier) => `${tier.id}(${tier.scopeBucket},${tier.writability})`)
+      .join(' ')
+    process.stdout.write(`${harness.harness}  ${tiers}\n`)
+  }
   for (const health of inventory.tierHealth) {
     if (health.status !== 'ok') {
       process.stdout.write(`unreadable tier ${health.tierId}: ${health.detail ?? 'unknown'}\n`)

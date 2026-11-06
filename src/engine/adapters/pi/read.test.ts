@@ -1,12 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert'
-import { factsDigest, knownFieldsForStorage, readPiMcpJson } from './read.ts'
-import type { McpFacts } from './read.ts'
+import { factsDigest, knownFieldsForStorage } from '../mcp-facts.ts'
+import type { McpFacts } from '../mcp-facts.ts'
+import { readPiMcpJson } from './read.ts'
 
 function factsOf(text: string, name: string): McpFacts {
   const read = readPiMcpJson(text)
   if (read.kind !== 'ok') throw new Error(`expected a readable mcp.json: ${read.detail}`)
-  const server = read.servers.find((candidate) => candidate.name === name)
+  const server = read.entries.find((candidate) => candidate.name === name)
   if (server === undefined) throw new Error(`${name} was not read`)
   return server.facts
 }
@@ -24,7 +25,7 @@ test('transport is inferred from url first, then command, matching Pi', () => {
 test('a file that does not parse is invalid rather than empty', () => {
   assert.equal(readPiMcpJson('{ "mcpServers": ').kind, 'invalid')
   assert.equal(readPiMcpJson('{"mcpServers":{"a":{"args":"not-an-array"}}}').kind, 'invalid')
-  assert.deepEqual(readPiMcpJson('{}'), { kind: 'ok', servers: [] })
+  assert.deepEqual(readPiMcpJson('{}'), { kind: 'ok', entries: [] })
 })
 
 test('credential-pointer values are withheld from what reaches the store', () => {

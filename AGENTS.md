@@ -50,7 +50,8 @@ spec, tickets, and code share, so a word that is not there is a smell. A resolve
   scanner all open the file.
 - **The engine and the CLI are a second face over that store.** `src/engine/service.ts` exposes
   `discover()` and `listInstallations()`; `src/engine/repo.ts` is the only module that calls
-  `store.cjs`; `src/engine/adapters/` holds one directory per harness (Pi only so far) and
+  `store.cjs`; `src/engine/adapters/` holds one directory per harness (Pi, Codex, OpenCode), shared
+  MCP fact storage in `mcp-facts.ts`, and per-tier file reading in `tier.ts`; and
   `src/engine/adapters/registry.ts` fails at load when a claimed category has no handler. Roots
   (home, project root, store path) arrive as an injected `EngineConfig`, never read from the
   working directory; `ACM_HOME` / `ACM_PROJECT_ROOT` / `ACM_STORE` are the boundary overrides a
