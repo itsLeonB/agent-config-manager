@@ -11,6 +11,8 @@ preserved, explicit approval before any write. Adapters in this slice: **Pi, Cod
 (Claude Code skipped). The way is clear when nothing is left to decide before someone builds
 that slice.
 
+**Handoff spec:** [spec.md](spec.md) — the destination, published as `ready-for-agent`.
+
 ## Notes
 
 - **Domain:** AI coding-agent harness configuration management. Use the vocabulary of
