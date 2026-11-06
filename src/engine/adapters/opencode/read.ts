@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { planObjectSchema, type PlanValue } from '../../plan-value.ts'
 import type { McpEntry, McpFacts } from '../mcp-facts.ts'
 import type { ParsedEntries } from '../tier.ts'
 
@@ -37,6 +38,70 @@ const fileSchema = z.object({
 // reserved keys hold global defaults, so they are exempt from server validation; every other key
 // must be a server, and a malformed one makes the tier unreadable instead of vanishing.
 const RESERVED_MCP_KEYS = new Set(['servers', 'timeout'])
+
+// The legacy flat shape a plan cannot leave in place: OpenCode reads `mcp.<name>` beside
+// `mcp.servers`, so a document holding both defines every legacy server twice. The plan therefore
+// normalises the block before it writes into it, and `absent` means there is nothing to convert.
+export type LegacyMcpNormalisation =
+  | { kind: 'absent' }
+  | { kind: 'invalid'; detail: string }
+  // `rewritten` names the entries whose spelling had to change, so the plan can report a conversion
+  // it made to somebody else's entry instead of changing it quietly.
+  | { kind: 'normalised'; value: Record<string, PlanValue>; rewritten: { name: string; spellings: string[] }[] }
+
+// Every legacy entry moves under `servers`, with its two legacy spellings converted: `enabled` is
+// `disabled` inverted, and one numeric `timeout` covers both phases. The reserved keys stay put, and
+// a value that is not a table is reported rather than guessed at.
+export function normaliseLegacyMcp(document: PlanValue): LegacyMcpNormalisation {
+  const root = planObjectSchema.safeParse(document)
+  const mcp = planObjectSchema.safeParse(root.success ? root.data.mcp : null)
+  if (!mcp.success) return { kind: 'absent' }
+  const legacy = Object.keys(mcp.data).filter((key) => !RESERVED_MCP_KEYS.has(key))
+  if (legacy.length === 0) return { kind: 'absent' }
+  const servers = planObjectSchema.safeParse(mcp.data.servers ?? {})
+  if (!servers.success) return { kind: 'invalid', detail: 'mcp.servers is not a table' }
+  const converted = { ...servers.data }
+  const rewritten: { name: string; spellings: string[] }[] = []
+  for (const name of legacy) {
+    const entry = planObjectSchema.safeParse(mcp.data[name])
+    if (!entry.success) return { kind: 'invalid', detail: `mcp.${name} is not a server entry` }
+    // Which of the two definitions the harness honours is not verified, so a name in both is
+    // reported rather than resolved by picking one.
+    // `Object.hasOwn`, not a value test: a server can legitimately be named `toString`, and the
+    // inherited member is not a definition the file holds.
+    if (Object.hasOwn(converted, name)) {
+      return { kind: 'invalid', detail: `mcp.${name} is defined both flat and under mcp.servers` }
+    }
+    const lifted = fromLegacyEntry(entry.data)
+    converted[name] = lifted.entry
+    if (lifted.spellings.length > 0) rewritten.push({ name, spellings: lifted.spellings })
+  }
+  const reserved = Object.fromEntries(
+    Object.entries(mcp.data).filter(([key]) => RESERVED_MCP_KEYS.has(key) && key !== 'servers'),
+  )
+  return { kind: 'normalised', value: { servers: converted, ...reserved }, rewritten }
+}
+
+// A per-phase timeout object is already the current spelling, so it is carried as it stands —
+// including `catalog`, which the canonical vocabulary does not name but the file still holds.
+function fromLegacyEntry(entry: Record<string, PlanValue>) {
+  const { enabled, timeout, ...rest } = entry
+  const converted = { ...rest }
+  const spellings: string[] = []
+  const flag = z.boolean().safeParse(enabled)
+  if (flag.success && converted.disabled === undefined) {
+    converted.disabled = !flag.data
+    spellings.push('enabled inverted to disabled')
+  }
+  const milliseconds = z.number().safeParse(timeout)
+  if (milliseconds.success) {
+    converted.timeout = { startup: milliseconds.data, execution: milliseconds.data }
+    spellings.push('numeric timeout split across timeout.startup and timeout.execution')
+  } else if (timeout !== undefined) {
+    converted.timeout = timeout
+  }
+  return { entry: converted, spellings }
+}
 
 export function readOpenCodeMcpJsonc(text: string): ParsedEntries<McpEntry> {
   let raw: unknown

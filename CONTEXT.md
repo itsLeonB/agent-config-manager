@@ -73,6 +73,12 @@ source Installation's `known fields` are fully partitioned into what the target 
 claim that two harnesses behave the same.
 _Avoid_: parity, identical, same config, lossless
 
+**Legacy shape**: a harness's older spelling of a Component that its current format still reads beside
+the new one — OpenCode accepts `mcp.<name>` next to `mcp.servers`, in the same file. Read the same
+way; a mirror normalises the block into the current shape in one write, because the plan has no
+removal op that could leave both behind.
+_Avoid_: v1, deprecated format, old schema
+
 **Gap**: a field or behaviour present in the source Installation that the target harness cannot
 express. Recorded on the plan, never on the Installation.
 _Avoid_: limitation, difference, loss

@@ -1,6 +1,6 @@
 import { parse as parseToml } from 'smol-toml'
 import { z } from 'zod'
-import { planObjectSchema, planValueSchema, type PlanValue } from './plan.ts'
+import { planObjectSchema, planValueSchema, type PlanValue } from './plan-value.ts'
 
 // A native config file is edited in place, not re-serialised: a plan writes addresses, and every
 // byte it did not address — comments, key order, sibling entries — is somebody else's.
@@ -200,8 +200,19 @@ function writeJson(text: string, segments: string[], value: PlanValue): EditResu
           : `,\n${indent}${inserted}`
     return { kind: 'ok', text: text.slice(0, node.insertAt) + insert + text.slice(node.insertAt) }
   }
-  if (node.kind !== 'scalar') throw new Error(`${segments.join('.')} holds a ${node.kind}, not a value this engine writes`)
-  return { kind: 'ok', text: text.slice(0, node.start) + JSON.stringify(value) + text.slice(node.end) }
+  // A node is replaced only by a value of its own kind: a table by a table (OpenCode's normalised
+  // `mcp` block is one), a list by a list (an existing `command[]`), a leaf by a leaf. A write that
+  // would change the kind of what it names is a plan the engine misread, not an edit to make.
+  if (node.kind !== kindOf(value)) {
+    throw new Error(`${segments.join('.')} holds a ${node.kind}, and this engine does not write a ${kindOf(value)} there`)
+  }
+  const rendered = pretty(value, indentAt(text, node.start), !text.slice(node.start, node.end).includes('\n'))
+  return { kind: 'ok', text: text.slice(0, node.start) + rendered + text.slice(node.end) }
+}
+
+function kindOf(value: PlanValue): 'object' | 'array' | 'scalar' {
+  if (z.array(planValueSchema).safeParse(value).success) return 'array'
+  return planObjectSchema.safeParse(value).success ? 'object' : 'scalar'
 }
 
 function nest(segments: string[], value: PlanValue): PlanValue {

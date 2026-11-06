@@ -139,6 +139,13 @@ function storedValue(pointer: string, value: string): string {
 // and a credential-shaped query parameter are. Userinfo is dropped, the address survives, so inspect
 // still names the server; a query parameter is judged by its own name and value, because a `?token=`
 // whose value is not provider-shaped would otherwise read as clean and reach the store verbatim.
+// A url carried whole — as a plan carries a legacy block — is judged the way the reader judges it:
+// userinfo this process can strip, or a credential-shaped query parameter, makes it unclean. A
+// pointer list cannot express this, because what is wrong is inside the value, not its name.
+export function urlVerdict(url: string): Verdict {
+  return withoutUserinfo(url) === url ? 'clean' : 'secret'
+}
+
 function withoutUserinfo(url: string): string {
   let parsed: URL
   let hadUserinfo: boolean

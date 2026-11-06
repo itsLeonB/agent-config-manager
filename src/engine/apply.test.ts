@@ -200,6 +200,42 @@ args = ["--stdio"]
   assert.deepEqual(document.mcp?.servers?.local?.command, ['codex-local', '--stdio'])
 })
 
+test('a legacy flat OpenCode block is normalised on apply and left as one shape', () => {
+  const config = fixture()
+  piServers(config, { local: { command: 'pi-local', args: ['--stdio'] } })
+  const target = path.join(config.home, '.config', 'opencode', 'opencode.json')
+  const before = JSON.stringify(
+    {
+      theme: 'dark',
+      mcp: { other: { type: 'local', command: ['other'], enabled: true, timeout: 30_000 } },
+    },
+    null,
+    2,
+  )
+  fs.writeFileSync(target, before)
+  discover(config)
+
+  const planned = plan(config, 'local', 'oc:user')
+  const result = applyPlan(config, planned)
+
+  assert.equal(result.outcome, 'applied', result.reason ?? '')
+  assert.equal(result.verification?.outcome, 'unverified')
+  assert.ok(result.verification?.asserts.every((assertion) => assertion.holds))
+  // One shape: the legacy key is gone, and the sibling it named now lives under `servers`.
+  const document = JSON.parse(fs.readFileSync(target, 'utf8'))
+  assert.deepEqual(Object.keys(document), ['theme', 'mcp'])
+  assert.deepEqual(Object.keys(document.mcp), ['servers'])
+  assert.deepEqual(document, {
+    theme: 'dark',
+    mcp: {
+      servers: {
+        other: { type: 'local', command: ['other'], disabled: false, timeout: { startup: 30_000, execution: 30_000 } },
+        local: { type: 'local', command: ['pi-local', '--stdio'] },
+      },
+    },
+  })
+})
+
 test('verification re-reads the target and reports every assertion', () => {
   const config = fixture()
   codexFile_(config, '# empty codex config\n')

@@ -3,8 +3,9 @@ import assert from 'node:assert'
 import { parse as parseToml } from 'smol-toml'
 import { stripJsonc } from './adapters/opencode/read.ts'
 import { parses, writePointer } from './edit.ts'
+import type { PlanValue } from './plan-value.ts'
 
-function json(text: string, pointer: string, value: string | number): string {
+function json(text: string, pointer: string, value: PlanValue): string {
   const result = writePointer(text, 'json', pointer.split('.'), value)
   assert.equal(result.kind, 'ok', result.kind === 'failed' ? result.reason : '')
   return result.kind === 'ok' ? result.text : ''
@@ -29,6 +30,17 @@ test('a JSON pointer write replaces the value and leaves the rest of the documen
     a: { b: 2, untouched: [1, 2] },
     c: 'last',
   })
+})
+
+test('a node of one kind is never replaced by another kind', () => {
+  const before = `{ "a": { "b": 1 }, "c": [1, 2] }`
+  // A table replaced by a table, and a list by a list: both are the plan's own addresses.
+  assert.deepEqual(JSON.parse(json(before, 'a', { b: 2, d: [3] })), { a: { b: 2, d: [3] }, c: [1, 2] })
+  assert.deepEqual(JSON.parse(json(before, 'c', [3])), { a: { b: 1 }, c: [3] })
+  // A table replaced by a scalar is the engine misreading the plan, so it is refused.
+  const refused = writePointer(before, 'json', ['a'], 'gone')
+  assert.equal(refused.kind, 'failed')
+  assert.match(refused.kind === 'failed' ? refused.reason : '', /holds a object/)
 })
 
 test('a JSON address that does not exist is created whole, indented like its siblings', () => {

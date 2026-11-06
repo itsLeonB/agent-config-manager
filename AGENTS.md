@@ -57,7 +57,9 @@ settled decisions.
   every precondition read before the first byte, one file at a time, `partial` with no rollback
   when a write fails — and re-reads the target to verify it; `src/engine/edit.ts` is the
   pointer-level native editor, so a write lands only on the addresses the plan named and comments
-  and sibling entries survive; `src/engine/adapters/`
+  and sibling entries survive — the one exception being a write that names a whole container
+  (OpenCode's `mcp` block, normalised out of its legacy flat shape), which replaces that node and
+  drops the comments inside it, which the plan says as a manual step; `src/engine/adapters/`
   holds one directory per harness (Pi, Codex, OpenCode), shared
   MCP fact storage in `mcp-facts.ts`, the per-harness MCP write surfaces and transforms in
   `mcp-write.ts`, and per-tier file reading in `tier.ts`; and
