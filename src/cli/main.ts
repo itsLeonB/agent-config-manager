@@ -1,13 +1,16 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util'
 import { resolveDefaultConfig } from '../engine/config.ts'
-import { discover, listInstallations } from '../engine/service.ts'
+import { discover, inspectInstallation, listInstallations } from '../engine/service.ts'
+import type { Inspection } from '../engine/service.ts'
 import type { InstallationRow } from '../server/store.cjs'
 
 const USAGE = `usage: acm <command>
 
-  list   report the inventory the store holds
-         [--category <category>] [--harness <harness>] [--scope <scope>] [--all] [--json]
+  list     report the inventory the store holds
+           [--category <category>] [--harness <harness>] [--scope <scope>] [--all] [--json]
+  inspect  report one installation's known fields, each credential withheld with its verdict
+           <id|prefix> [--json]
 `
 
 interface ListOptions {
@@ -22,6 +25,7 @@ function main(argv: string[]): number {
   const command = argv[0]
   const rest = argv.slice(1)
   if (command === 'list') return list(rest)
+  if (command === 'inspect') return inspect(rest)
   process.stderr.write(USAGE)
   return 1
 }
@@ -72,6 +76,78 @@ function list(argv: string[]): number {
   return 0
 }
 
+function inspect(argv: string[]): number {
+  const { id, json } = parseInspectOptions(argv)
+  if (id === undefined) {
+    process.stderr.write(USAGE)
+    return 1
+  }
+  const config = resolveDefaultConfig()
+  // An inspection reports what the store holds: discovery already classified the source bytes, so
+  // this reads the persisted, secret-free row rather than the native file.
+  const result = inspectInstallation(config, id)
+  if (result.kind === 'notFound') {
+    process.stderr.write(`no installation matches ${printable(id)}\n`)
+    return 1
+  }
+  if (result.kind === 'ambiguous') {
+    process.stderr.write(`ambiguous id ${printable(id)}: ${result.ids.map(printable).join(', ')}\n`)
+    return 1
+  }
+  if (json) {
+    process.stdout.write(`${JSON.stringify(result.inspection, null, 2)}\n`)
+    return 0
+  }
+  process.stdout.write(formatInspection(result.inspection, config.home))
+  return 0
+}
+
+interface InspectOptions {
+  id?: string
+  json: boolean
+}
+
+function parseInspectOptions(argv: string[]): InspectOptions {
+  try {
+    const { values, positionals } = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { json: { type: 'boolean' } },
+    })
+    return { id: positionals[0], json: values.json === true }
+  } catch {
+    return { json: false }
+  }
+}
+
+function formatInspection(inspection: Inspection, home: string): string {
+  const row = inspection.installation
+  const lines = [
+    `${row.category}  ${printable(row.name)}  ${row.scope}`,
+    row.bindings
+      .map((binding) => `${binding.tierId} (${binding.method}, ${binding.verificationStatus})`)
+      .join('  '),
+    `${shorten(row.nativeFile, home)}#${printable(row.nativePointer ?? '')}`,
+    `digest ${row.contentDigest ?? '-'}  first seen ${inspection.provenance.firstSeenAt}  last seen ${inspection.provenance.lastSeenAt}` +
+      (inspection.provenance.removedAt === null ? '' : `  removed ${inspection.provenance.removedAt}`),
+  ]
+  if (inspection.alsoReadBy.length > 0) lines.push(`also read by  ${inspection.alsoReadBy.join(', ')}`)
+  lines.push('fields')
+  for (const leaf of inspection.leaves) lines.push(`  ${printable(leaf.pointer)} = ${printable(leaf.value)}`)
+  // A section that would be empty is left out: the verdict is already on the field it belongs to.
+  if (inspection.secrets.length > 0) {
+    lines.push('secrets')
+    for (const secret of inspection.secrets) lines.push(`  ${printable(secret.pointer)} = ${secret.verdict}`)
+  }
+  if (inspection.executables.length > 0) {
+    lines.push('executables')
+    for (const executable of inspection.executables) {
+      lines.push(`  ${printable(executable.pointer)} = ${executable.why}`)
+    }
+  }
+  return `${lines.join('\n')}\n`
+}
+
 function parseListOptions(argv: string[]): ListOptions | null {
   try {
     const { values } = parseArgs({
@@ -100,7 +176,16 @@ function formatRow(row: InstallationRow, home: string): string {
   const tiers = row.bindings.map((binding) => binding.tierId).join(',')
   const location = `${shorten(row.nativeFile, home)}#${row.nativePointer ?? ''}`
   const removed = row.removedAt === null ? '' : '  (removed)'
-  return [row.category, printable(row.name), row.scope, tiers, printable(location), shortDigest(row.contentDigest)].join('  ') + removed
+  return [
+    row.category,
+    printable(row.name),
+    row.scope,
+    tiers,
+    printable(location),
+    shortDigest(row.contentDigest),
+    // The id is what `acm inspect` takes, and only its prefix is short enough for a row.
+    row.id.replace(/^sha256:/, '').slice(0, 8),
+  ].join('  ') + removed
 }
 
 // A server name and its path come from a config file, so control characters in them would forge or

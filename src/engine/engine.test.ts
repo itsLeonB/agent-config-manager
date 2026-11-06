@@ -11,7 +11,7 @@ import { z } from 'zod'
 import { openStore } from '../server/store.cjs'
 import type { EngineConfig } from './config.ts'
 import { stripJsonc } from './adapters/opencode/read.ts'
-import { discover, listInstallations } from './service.ts'
+import { discover, inspectInstallation, listInstallations } from './service.ts'
 
 interface PiServerFixture {
   command?: string
@@ -494,7 +494,7 @@ test('credential-shaped values in a fixture are withheld from the store and the 
   const stored = listInstallations(config, {}).installations[0]?.knownFieldsJson ?? ''
   assert.equal(stored.includes('fixturetoken'), false)
   assert.equal(stored.includes('user:pass'), false)
-  assert.match(stored, /"\[withheld\]"/)
+  assert.match(stored, /\[withheld: secret\]/)
 
   const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
   const run = spawnSync(process.execPath, [cli, 'list', '--json'], {
@@ -509,6 +509,98 @@ test('credential-shaped values in a fixture are withheld from the store and the 
   assert.equal(run.status, 0)
   assert.equal(run.stdout.includes('fixturetoken'), false)
   assert.equal(run.stdout.includes('user:pass'), false)
+})
+
+function runCli(config: EngineConfig, args: string[]): { status: number | null; stdout: string; stderr: string } {
+  const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
+  return spawnSync(process.execPath, [cli, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ACM_HOME: config.home,
+      ACM_PROJECT_ROOT: config.projectRoot,
+      ACM_STORE: config.storePath,
+    },
+  })
+}
+
+test('acm inspect reports a verdict in place of every credential-shaped value', () => {
+  const config = fixture()
+  writeMcp(userMcpFile(config), {
+    remote: {
+      command: 'x',
+      args: ['--api-key', 'sk-proj-AbCdEfGhIjKlMnOpQrStUvWx'],
+      env: {
+        GITHUB_TOKEN: 'ghp_AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRr',
+        OPENAI_API_KEY: '${OPENAI_API_KEY}',
+        KEYCHAIN_TOKEN: '!op read op://vault/token',
+      },
+      headers: { Authorization: 'Bearer sk-AaBbCcDdEeFfGgHhIiJjKkLl' },
+      url: 'https://user:pass@example.test/mcp',
+      description: 'symbol tools',
+    },
+  })
+  discover(config)
+
+  const id = listInstallations(config, {}).installations[0]?.id ?? ''
+  assert.match(id, /^sha256:[0-9a-f]{64}$/)
+  const inspected = runCli(config, ['inspect', id.slice(7, 15), '--json'])
+  assert.equal(inspected.status, 0)
+  // A clean command-retrieval value is printed: it is the reference, not the credential.
+  for (const token of ['ghp_AaBb', 'sk-proj', 'sk-AaBb', 'user:pass']) {
+    assert.equal(inspected.stdout.includes(token), false, token)
+  }
+
+  const output: {
+    leaves: { pointer: string; value: string }[]
+    secrets: { pointer: string; verdict: string }[]
+    executables: { pointer: string; why: string }[]
+  } = JSON.parse(inspected.stdout)
+  const leaf = (pointer: string): string | undefined =>
+    output.leaves.find((candidate) => candidate.pointer === pointer)?.value
+
+  // A reference is clean and stays itself; a command-loaded value is clean but flagged executable.
+  assert.equal(leaf('env.OPENAI_API_KEY'), '${OPENAI_API_KEY}')
+  assert.equal(leaf('env.KEYCHAIN_TOKEN'), '!op read op://vault/token')
+  assert.deepEqual(output.executables, [{ pointer: 'env.KEYCHAIN_TOKEN', why: 'command retrieval' }])
+  assert.equal(leaf('description'), 'symbol tools')
+  // The address survives; only the userinfo that made it a credential is gone.
+  assert.equal(leaf('url'), '[withheld: secret] https://example.test/mcp')
+  assert.deepEqual(
+    output.secrets.map((secret) => [secret.pointer, secret.verdict]),
+    [
+      ['args.1', 'secret'],
+      ['env.GITHUB_TOKEN', 'secret'],
+      ['url', 'secret'],
+      ['headers.Authorization', 'secret'],
+    ],
+  )
+
+  const text = runCli(config, ['inspect', id.slice(7, 15)])
+  assert.equal(text.status, 0)
+  assert.match(text.stdout, /env\.GITHUB_TOKEN = \[withheld: secret\]/)
+  assert.match(text.stdout, /env\.OPENAI_API_KEY = \$\{OPENAI_API_KEY\}/)
+  assert.equal(text.stdout.includes('ghp_AaBb'), false)
+})
+
+test('acm inspect refuses an id that matches nothing, and the stored row keeps the verdict', () => {
+  const config = fixture()
+  writeMcp(userMcpFile(config), { serena: { command: 'serena', env: { GITHUB_TOKEN: 'ghp_fixturetoken' } } })
+  discover(config)
+
+  const row = listInstallations(config, {}).installations[0]
+  assert.ok(row)
+  // The verdict travels with the pointer it belongs to, so no side table can drift from it.
+  assert.match(row.knownFieldsJson, /"env":\{"GITHUB_TOKEN":"\[withheld: secret\]"\}/)
+
+  const missing = runCli(config, ['inspect', 'deadbeef'])
+  assert.equal(missing.status, 1)
+  assert.match(missing.stderr, /no installation matches deadbeef/)
+
+  // The service is the face the MCP server will use, and it reads the same store.
+  const service = inspectInstallation(config, row.id)
+  assert.equal(service.kind, 'ok')
+  assert.equal(inspectInstallation(config, 'deadbeef').kind, 'notFound')
 })
 
 test('acm list prints the stored inventory from a fixture home', () => {

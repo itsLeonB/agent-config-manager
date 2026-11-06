@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { classify, withheldMarker, type CredentialPointer } from '../secret.ts'
 import type { DiscoveredInstallation, Tier } from './types.ts'
 
 // One server as an adapter read it: its name, its canonical facts, and the native address prefix it
@@ -37,38 +38,91 @@ export interface McpFacts {
   codemode?: boolean
 }
 
-// Each harness's MCP credential pointers are `env.<K>`, `headers.<H>` and `url` userinfo, so no
-// value at those pointers reaches the store. Keys stay, so a row still says which variables the
-// server needs.
-// shortcut: coarse withholding until ticket 18's classifier reports a verdict instead.
-const WITHHELD = '[withheld]'
+// The canonical credential pointers. Values at these never reach the store: `env.<K>` and
+// `headers.<H>` are where every harness keeps an MCP token, and each one is withheld with its
+// verdict. `auth` and `oauth` never become facts, so they have nothing to classify here. Keys stay,
+// so a row still says which variables the server needs.
+export const MCP_CREDENTIAL_POINTERS: readonly CredentialPointer[] = [
+  { pointer: 'env.*', kind: 'leaf' },
+  { pointer: 'headers.*', kind: 'leaf' },
+]
 
+// Every leaf of the canonical vocabulary. A fact added above must be projected here, or its value
+// would reach the store verbatim.
 export function knownFieldsForStorage(facts: McpFacts): McpFacts {
   return {
-    ...facts,
-    url: facts.url === undefined ? undefined : withoutUserinfo(facts.url),
-    env: withheldValues(facts.env),
-    headers: withheldValues(facts.headers),
+    // An inferred transport is `stdio` or `http`, never a credential.
+    transport: facts.transport,
+    command: classifyScalar('command', facts.command),
+    args: classifyList('args', facts.args),
+    cwd: classifyScalar('cwd', facts.cwd),
+    env: classifyMap('env', facts.env),
+    envPassthrough: classifyList('envPassthrough', facts.envPassthrough),
+    url: classifyScalar('url', facts.url),
+    headers: classifyMap('headers', facts.headers),
+    enabled: facts.enabled,
+    timeoutStartup: facts.timeoutStartup,
+    timeoutRequest: facts.timeoutRequest,
+    // The value is an environment-variable name — the secret-free form itself — so classifying it
+    // by the credential-shaped pointer name would withhold the one field a mirror has to carry.
+    bearerTokenEnvVar: facts.bearerTokenEnvVar,
+    description: classifyScalar('description', facts.description),
+    exposure: classifyScalar('exposure', facts.exposure),
+    toolExposure: classifyScalar('toolExposure', facts.toolExposure),
+    approvalMode: classifyScalar('approvalMode', facts.approvalMode),
+    disabledTools: classifyList('disabledTools', facts.disabledTools),
+    required: facts.required,
+    supportsParallelToolCalls: facts.supportsParallelToolCalls,
+    codemode: facts.codemode,
   }
 }
 
-function withheldValues(map: Record<string, string> | undefined): Record<string, string> | undefined {
-  if (map === undefined) return undefined
-  return Object.fromEntries(Object.keys(map).map((key) => [key, WITHHELD]))
+function classifyScalar(pointer: string, value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  if (pointer === 'url' && value.includes('@')) return withoutUserinfo(value)
+  const { verdict } = classify(pointer, value, MCP_CREDENTIAL_POINTERS)
+  return verdict === 'clean' ? value : withheldMarker(verdict)
 }
 
+function classifyMap(
+  pointer: string,
+  map: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (map === undefined) return undefined
+  return Object.fromEntries(
+    Object.entries(map).map(([key, value]) => [key, storedValue(`${pointer}.${key}`, value)]),
+  )
+}
+
+function classifyList(pointer: string, list: string[] | undefined): string[] | undefined {
+  return list?.map((value, index) => storedValue(`${pointer}.${index}`, value))
+}
+
+function storedValue(pointer: string, value: string): string {
+  const { verdict } = classify(pointer, value, MCP_CREDENTIAL_POINTERS)
+  return verdict === 'clean' ? value : withheldMarker(verdict)
+}
+
+// A url is not a credential pointer — a plain address has to stay readable — but basic-auth userinfo
+// is one. It is the userinfo that is dropped, not the address, so inspect still names the server; a
+// token anywhere else in the address is still caught by the rules every other value goes through.
 function withoutUserinfo(url: string): string {
-  if (!url.includes('@')) return url
+  let stripped: string
+  let hadUserinfo: boolean
   try {
     const parsed = new URL(url)
+    hadUserinfo = parsed.username !== '' || parsed.password !== ''
     parsed.username = ''
     parsed.password = ''
-    return parsed.toString()
+    stripped = parsed.toString()
   } catch {
     // Fail closed: an address this process cannot parse is exactly the one whose userinfo it
     // cannot prove it removed.
-    return '[withheld]'
+    return withheldMarker('secret')
   }
+  const { verdict } = classify('url', stripped, MCP_CREDENTIAL_POINTERS)
+  if (verdict !== 'clean') return withheldMarker(verdict)
+  return hadUserinfo ? `${withheldMarker('secret')} ${stripped}` : stripped
 }
 
 // shortcut: the digest covers adapter-known fields only, so an edit to a field no adapter names is
