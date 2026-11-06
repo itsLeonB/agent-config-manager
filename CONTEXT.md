@@ -80,7 +80,8 @@ removal op that could leave both behind.
 _Avoid_: v1, deprecated format, old schema
 
 **Gap**: a field or behaviour present in the source Installation that the target harness cannot
-express. Recorded on the plan, never on the Installation.
+express. Recorded on the plan, never on the Installation. Each reason maps to exactly one **gap
+disposition** — `planApplies`, `manualStep`, or `notTranslatable` — from one table in the engine.
 _Avoid_: limitation, difference, loss
 
 **Plan**: the reviewed, approval-gated description of one mutation (here: one mirror), including its
@@ -88,8 +89,23 @@ equivalence partition, its gaps, and the preconditions each write must still sat
 execution; nothing is written before approval. A plan is **stateless and content-addressed** — its id
 is the hash of its own body, so it is handed around rather than stored, and a target file that
 changed since planning makes the plan apply-ineligible (`stale`) instead of silently different. The
-verification result belongs to the binding, never to the plan.
+verification result belongs to the binding, never to the plan. Its **disposition** says what became of
+the target: `mirror` (write these), `alreadyPresent` (it already says this), or `alreadyShared` (it is
+where the source lives), the last two with no writes and a stated reason.
 _Avoid_: job, task, transaction, changeset
+
+**Grade**: the engine's answer to whether a plan needs a human's own answer before it runs — `safe`
+(no risk condition) or `risky` (at least one). Computed from one table of **risk conditions**
+(`executable`, `secretValues`, `irreversible`, `copyFile`, `symlink`, `runCommand`, a target path that
+does not exist yet, a conflict, an elevation), never taken from the caller and never trusted from the
+document, because a document can be re-signed.
+_Avoid_: severity, danger, risk level
+
+**Consent basis**: what authorised one apply — `client-policy` (the harness's own permission
+configuration) or `elicitation` (a human's answer in that client's own dialog). Recorded on every
+apply result, never in advance and never reusable: there is no stored approval, no `--yes`, and no
+environment variable that skips a gate.
+_Avoid_: approval, confirmation, authorization token
 
 ## Rules that follow from the vocabulary
 

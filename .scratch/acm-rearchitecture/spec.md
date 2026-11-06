@@ -287,6 +287,9 @@ One JSON document, stateless, content-addressed. Nothing is stored; the agent ca
                    gaps[{ field, reason, replacement }], preserved[] },
   "prerequisites": [ … ],
   "permissions": { tierWritability, elevationRequired, trust },
+  // Amended by ticket 22: the reason a plan came back with no writes rides here, because the gap
+  // vocabulary is closed at five field-level reasons and a conflict has no entry for "nothing to do".
+  "disposition": { kind: "mirror" | "alreadyPresent" | "alreadyShared", reason },
   "conflicts": [ { file, pointer, current, proposed } ],
   "security": { grade: "safe" | "risky",
                 secrets: [{ pointer, verdict }],
@@ -310,12 +313,16 @@ One JSON document, stateless, content-addressed. Nothing is stored; the agent ca
   irreversible. No `.bak` files.
 - `apply` validates in order and refuses at the first failure: plan schema, recomputed `planId`,
   every precondition digest, target tier writability, conflict gate. It executes exactly the given
-  writes and never re-derives them.
+  writes and never re-derives them; it does re-compute the grade (§5) rather than trust the one the
+  document claims, because a re-signed document can claim anything.
+- The conflict gate is answered by `onConflict: replace` and by nothing else — no approval, flag, or
+  stored consent stands in for it, and it answers only the conflict: a conflicting write that also
+  runs a command still needs its own risk tick.
 - Verification result: `verified` when every assert holds and `manualSteps` is empty; `unverified`
   when asserts hold but manual steps remain (reported verbatim); `failed` when any assert misses. A
   plan containing an executable write can never land `verified`. Verify never launches a harness.
 - One artefact type, no error channel: `notTranslatable`, `alreadyPresent`, and `already shared` all
-  return a plan with `writes: []` and the reason in gaps or conflicts.
+  return a plan with `writes: []` and the reason in `disposition.reason`, gaps or conflicts.
 
 ### 5. Consent, containment, and refusal
 
@@ -640,8 +647,8 @@ each has a fallback that keeps the slice shippable):
    on the timeout; the pragma itself is fine.
 
 **ADR owed.** The graded-consent model is security-critical and hard to reverse; ticket 08 requires a
-record for it. ADRs 0001–0004 already exist, so this becomes 0005 (trust boundary, grading, the four
-gates, and the explicit absence of automation).
+record for it. Written as [ADR 0005](../../docs/adr/0005-graded-consent-in-the-engine.md) when ticket
+22 landed the gate.
 
 **Build order that keeps each step reviewable.** Each step should land as its own issue:
 

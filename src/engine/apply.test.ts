@@ -93,11 +93,27 @@ function plan(config: EngineConfig, name: string, target: string): MirrorPlan {
   return result.kind === 'plan' ? result.plan : assert.fail('unreachable')
 }
 
+// A fixture can hold the same server in two tiers; the Pi user file is the source these tests read.
+function piId(config: EngineConfig, name: string): string {
+  const row = listInstallations(config, {}).installations.find(
+    (candidate) =>
+      candidate.name === name && candidate.nativeFile === path.join(config.home, '.pi', 'agent', 'mcp.json'),
+  )
+  assert.ok(row, `${name} was not discovered in the Pi user tier`)
+  return row.id
+}
+
+function planFrom(config: EngineConfig, id: string, target: string): MirrorPlan {
+  const result = planMirror(config, id, target)
+  assert.equal(result.kind, 'plan', result.kind === 'refused' ? result.reason : '')
+  return result.kind === 'plan' ? result.plan : assert.fail('unreachable')
+}
+
 // A plan is self-identifying, so a plan built by hand here is stamped the way the planner stamps
 // one: the same integrity check apply runs, never a bypass of it.
 function resign(
   planned: MirrorPlan,
-  change: Partial<Pick<MirrorPlan, 'writes' | 'verify'>>,
+  change: Partial<Pick<MirrorPlan, 'writes' | 'verify' | 'security'>>,
 ): MirrorPlan {
   const body: Record<string, PlanValue> = JSON.parse(JSON.stringify({ ...planned, ...change }))
   delete body.planId
@@ -154,6 +170,9 @@ trust_level = "trusted"
 
   assert.equal(result.outcome, 'applied', result.reason ?? '')
   assert.equal(result.failed, null)
+  // Nothing was asked of a human: the harness's own permission configuration authorised this.
+  assert.equal(result.consent, 'client-policy')
+  assert.equal(result.grade, 'safe')
   assert.equal(result.landed.length, planned.writes.length)
   const text = fs.readFileSync(codexFile(config), 'utf8')
   // Only the addressed pointers moved: everything the plan did not name is byte-identical in meaning.
@@ -200,6 +219,135 @@ args = ["--stdio"]
   assert.deepEqual(document.mcp?.servers?.local?.command, ['codex-local', '--stdio'])
 })
 
+test('a write that needs a human answer is a manual step, even when the document claims safe', () => {
+  const config = fixture()
+  codexFile_(config, '# empty codex config\n')
+  piServers(config, { serena: { command: 'serena', args: ['start-mcp-server'] } })
+  discover(config)
+
+  const planned = plan(config, 'serena', 'codex:user')
+  const [first] = planned.writes
+  assert.ok(first)
+  // The flag is what the planner sets for a value that runs at harness runtime; the grade it carries
+  // here is a claim a forged document can make, so apply must not trust it.
+  const gated: PlanWrite = { ...first, executable: true }
+  const forged = resign(planned, {
+    writes: [gated, ...planned.writes.slice(1)],
+    security: { ...planned.security, grade: 'safe' },
+  })
+
+  const result = applyPlan(config, forged)
+
+  assert.equal(result.outcome, 'applied', result.reason ?? '')
+  assert.equal(result.grade, 'risky')
+  // `client-policy` authorises the safe remainder, never the write nobody answered for.
+  assert.equal(result.consent, 'client-policy')
+  assert.equal(result.landed.some((landed) => landed.pointer === gated.pointer), false)
+  assert.equal(result.landed.length, planned.writes.length - 1)
+  assert.ok(result.manualSteps.some((step) => step.step.includes(gated.pointer)))
+  assert.equal(result.verification?.outcome, 'unverified')
+  assert.ok(result.verification?.asserts.every((assertion) => assertion.pointer !== gated.pointer))
+  // The gated pointer is the one value the file does not hold.
+  const written = parseToml(fs.readFileSync(codexFile(config), 'utf8'))
+  const entry = z.record(z.string(), z.unknown()).parse(written.mcp_servers).serena
+  const held = z.record(z.string(), z.unknown()).parse(entry)
+  assert.equal(held.command, undefined)
+  assert.deepEqual(held.args, ['start-mcp-server'])
+
+  // The audit row carries the grade apply computed, not the one the document claimed.
+  const [operation] = listOperations(config.storePath)
+  assert.equal(operation?.grade, 'risky')
+})
+
+test('a plan whose every write needs a human answer is refused, and nothing is written', () => {
+  const config = fixture()
+  const before = '# empty codex config\n'
+  codexFile_(config, before)
+  piServers(config, { serena: { command: 'serena' } })
+  discover(config)
+
+  const planned = plan(config, 'serena', 'codex:user')
+  const gated = resign(planned, {
+    writes: planned.writes.map((write) => ({ ...write, secretValues: true })),
+  })
+  const result = applyPlan(config, gated)
+
+  assert.equal(result.outcome, 'refused')
+  assert.match(result.reason ?? '', /needs a human's own answer/)
+  assert.deepEqual(result.landed, [])
+  assert.equal(result.consent, null)
+  // The steps are handed back so a human can still do the work, by hand.
+  assert.equal(result.manualSteps.length, planned.writes.length)
+  assert.equal(fs.readFileSync(codexFile(config), 'utf8'), before)
+})
+
+test('a differing target refuses by default, shows both values, and replaces only when asked', () => {
+  const config = fixture()
+  const target = codexFile(config)
+  const before = ['[mcp_servers.serena]', "command = 'serena-old'", ''].join('\n')
+  codexFile_(config, before)
+  piServers(config, { serena: { command: 'serena' } })
+  discover(config)
+
+  const planned = planFrom(config, piId(config, 'serena'), 'codex:user')
+  const refused = applyPlan(config, planned)
+
+  assert.equal(refused.outcome, 'refused')
+  assert.match(refused.reason ?? '', /serena-old/)
+  assert.match(refused.reason ?? '', /"serena"/)
+  assert.deepEqual(refused.landed, [])
+  assert.equal(fs.readFileSync(target, 'utf8'), before)
+  // Nothing was stored by the refusal: the next call refuses on the same grounds.
+  assert.equal(applyPlan(config, planned).outcome, 'refused')
+
+  const replaced = applyPlan(config, planned, { onConflict: 'replace' })
+  assert.equal(replaced.outcome, 'applied', replaced.reason ?? '')
+  assert.equal(replaced.landed.length, planned.writes.length)
+  const document = codexDocument.parse(parseToml(fs.readFileSync(target, 'utf8')))
+  assert.equal(document.mcp_servers.serena?.command, 'serena')
+})
+
+test('asking for replacement does not answer for an executable write', () => {
+  const config = fixture()
+  const target = codexFile(config)
+  codexFile_(config, ['[mcp_servers.serena]', "command = 'serena-old'", ''].join('\n'))
+  piServers(config, { serena: { command: 'serena' } })
+  discover(config)
+
+  const planned = planFrom(config, piId(config, 'serena'), 'codex:user')
+  const [first] = planned.writes
+  assert.ok(first)
+  // The conflict gate and the risk-flag gate are separate answers: one `onConflict` replaces a value,
+  // it does not stand in for the tick a running command needs.
+  const replaced = applyPlan(
+    config,
+    resign(planned, { writes: [{ ...first, executable: true }] }),
+    { onConflict: 'replace' },
+  )
+
+  assert.equal(replaced.outcome, 'refused')
+  assert.match(replaced.reason ?? '', /needs a human's own answer/)
+  assert.deepEqual(replaced.landed, [])
+  assert.equal(fs.readFileSync(target, 'utf8'), ['[mcp_servers.serena]', "command = 'serena-old'", ''].join('\n'))
+})
+
+test('a plan with nothing to write applies without touching the target', () => {
+  const config = fixture()
+  const before = ['[mcp_servers.serena]', "command = 'serena'", ''].join('\n')
+  codexFile_(config, before)
+  piServers(config, { serena: { command: 'serena' } })
+  discover(config)
+
+  const planned = planFrom(config, piId(config, 'serena'), 'codex:user')
+  assert.equal(planned.disposition.kind, 'alreadyPresent')
+  const result = applyPlan(config, planned)
+
+  assert.equal(result.outcome, 'applied', result.reason ?? '')
+  assert.deepEqual(result.landed, [])
+  assert.equal(result.verification?.outcome, 'verified')
+  assert.equal(fs.readFileSync(codexFile(config), 'utf8'), before)
+})
+
 test('a legacy flat OpenCode block is normalised on apply and left as one shape', () => {
   const config = fixture()
   piServers(config, { local: { command: 'pi-local', args: ['--stdio'] } })
@@ -216,7 +364,10 @@ test('a legacy flat OpenCode block is normalised on apply and left as one shape'
   discover(config)
 
   const planned = plan(config, 'local', 'oc:user')
-  const result = applyPlan(config, planned)
+  // The block rewrite replaces bytes that are already there, so it is a conflict until replacement is
+  // asked for by name.
+  assert.equal(applyPlan(config, planned).outcome, 'refused')
+  const result = applyPlan(config, planned, { onConflict: 'replace' })
 
   assert.equal(result.outcome, 'applied', result.reason ?? '')
   assert.equal(result.verification?.outcome, 'unverified')

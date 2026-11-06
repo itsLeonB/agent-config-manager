@@ -7,7 +7,20 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { EngineConfig } from './config.ts'
 import { recordDiscovery } from './repo.ts'
-import { alsoReadBy, planIntact, planObjectSchema, type MirrorPlan } from './plan.ts'
+import {
+  GAP_DISPOSITIONS,
+  GAP_REASONS,
+  RISK_CONDITIONS,
+  alsoReadBy,
+  gapDisposition,
+  planGrade,
+  planIntact,
+  planObjectSchema,
+  riskConditions,
+  type MirrorPlan,
+  type RiskCondition,
+  type RiskFacts,
+} from './plan.ts'
 import type { Adapter } from './adapters/types.ts'
 import { MCP_FIELDS } from './adapters/mcp-facts.ts'
 import { MCP_WRITE_SURFACES } from './adapters/mcp-write.ts'
@@ -249,22 +262,27 @@ test('a literal token already in the target is withheld from the diff', () => {
 
 test('a Pi command retrieval is flagged executable and is not graded safe', () => {
   const config = fixture()
+  const home = path.join(config.home, '.pi', 'agent', 'mcp.json')
   piFixture(config, { serena: { command: 'serena', env: { TOKEN: '!op read op://vault/token' } } })
-  // The same entry is already in the project tier, so nothing conflicts — only the content runs.
+  // The project entry lacks the command retrieval, so nothing conflicts — only the content runs.
   fs.writeFileSync(
     path.join(config.projectRoot, '.pi', 'mcp.json'),
-    JSON.stringify({
-      mcpServers: {
-        serena: { command: 'serena', env: { TOKEN: '!op read op://vault/token' } },
-      },
-    }),
+    JSON.stringify({ mcpServers: { serena: { command: 'serena' } } }),
   )
   discover(config)
 
-  const planned = plan(config, 'serena', 'pi:project')
+  // Both tiers hold a `serena`: the user entry is the source, the project one the target.
+  const source = listInstallations(config, {}).installations.find(
+    (row) => row.name === 'serena' && row.nativeFile === home,
+  )
+  assert.ok(source)
+  const result = planMirror(config, source.id, 'pi:project')
+  assert.equal(result.kind, 'plan', result.kind === 'refused' ? result.reason : '')
+  const planned = result.kind === 'plan' ? result.plan : assert.fail('unreachable')
 
   const executable = planned.writes.filter((write) => write.executable)
   assert.equal(executable.length, 1)
+  assert.deepEqual(riskConditions(planned), ['executable'])
   assert.equal(planned.security.grade, 'risky')
   assert.deepEqual(planned.security.executables, [
     { file: path.join(config.projectRoot, '.pi', 'mcp.json'), why: 'mcpServers.serena.env.TOKEN runs a command at harness runtime' },
@@ -336,7 +354,7 @@ test('an existing target reports its digest and its value as the diff, and is le
   assert.equal(fs.readFileSync(target, 'utf8'), written)
 })
 
-test('a plan whose writes already hold the target values is safe, not risky', () => {
+test('a target that already holds every value plans no writes and says why', () => {
   const config = fixture()
   piFixture(config, { serena: { command: 'serena' } })
   fs.writeFileSync(
@@ -347,8 +365,75 @@ test('a plan whose writes already hold the target values is safe, not risky', ()
   const planned = plan(config, 'serena', 'codex:user')
 
   assert.deepEqual(planned.conflicts, [])
+  assert.deepEqual(planned.writes, [])
+  assert.deepEqual(planned.verify.asserts, [])
+  assert.equal(planned.disposition.kind, 'alreadyPresent')
+  assert.match(planned.disposition.reason ?? '', /already holds every value/)
   assert.equal(planned.security.grade, 'safe')
   assert.equal(planned.manualSteps.length, 0)
+})
+
+test('a target that is the source location plans no writes and says why', () => {
+  const config = fixture()
+  piFixture(config, { serena: { command: 'serena' } })
+
+  // The Pi user file is both where the source lives and what a Pi user target would be written to.
+  const planned = plan(config, 'serena', 'pi:user')
+
+  assert.deepEqual(planned.writes, [])
+  assert.equal(planned.disposition.kind, 'alreadyShared')
+  assert.match(planned.disposition.reason ?? '', /is where mcpServers\.serena already lives/)
+})
+
+test('each risk condition grades a plan risky on its own, and one with none of them stays safe', () => {
+  const safeWrite = {
+    op: 'writeAtPointer',
+    executable: false,
+    secretValues: false,
+    irreversible: false,
+    precondition: { exists: true },
+  }
+  const facts = (overrides: Partial<RiskFacts> = {}): RiskFacts => ({
+    writes: [safeWrite],
+    conflicts: [],
+    permissions: { elevationRequired: false },
+    ...overrides,
+  })
+  // One entry per condition: a condition added to the table without a case here fails to typecheck.
+  const cases = {
+    executable: facts({ writes: [{ ...safeWrite, executable: true }] }),
+    secretValues: facts({ writes: [{ ...safeWrite, secretValues: true }] }),
+    irreversible: facts({ writes: [{ ...safeWrite, irreversible: true }] }),
+    copyFile: facts({ writes: [{ ...safeWrite, op: 'copyFile' }] }),
+    symlink: facts({ writes: [{ ...safeWrite, op: 'symlink' }] }),
+    runCommand: facts({ writes: [{ ...safeWrite, op: 'runCommand' }] }),
+    newTargetFile: facts({ writes: [{ ...safeWrite, precondition: { exists: false } }] }),
+    conflict: facts({ conflicts: [{ file: '/tmp/config.toml', pointer: 'a.b' }] }),
+    elevation: facts({ permissions: { elevationRequired: true } }),
+  } satisfies Record<RiskCondition, RiskFacts>
+
+  for (const condition of RISK_CONDITIONS) {
+    assert.deepEqual(riskConditions(cases[condition]), [condition], condition)
+    assert.equal(planGrade(cases[condition]), 'risky', condition)
+  }
+  assert.deepEqual(
+    Object.keys(cases).sort(),
+    [...RISK_CONDITIONS].sort(),
+    'a risk condition has no case, or a case names no condition',
+  )
+  assert.deepEqual(riskConditions(facts()), [])
+  assert.equal(planGrade(facts()), 'safe')
+})
+
+test('every gap reason maps to exactly one disposition, and an unmapped reason has no rule', () => {
+  assert.deepEqual(Object.keys(GAP_DISPOSITIONS).sort(), [...GAP_REASONS].sort())
+  assert.deepEqual(
+    GAP_REASONS.map((reason) => gapDisposition(reason)),
+    ['planApplies', 'planApplies', 'manualStep', 'manualStep', 'notTranslatable'],
+  )
+  // The five reasons reach three dispositions, and no gap reaches a human without a rule.
+  assert.equal(new Set(GAP_REASONS.map((reason) => gapDisposition(reason))).size, 3)
+  assert.throws(() => gapDisposition('tierUnavailable'), /no disposition is declared/)
 })
 
 test('a plan id is the hash of its own body, so a hand edit fails the check', () => {

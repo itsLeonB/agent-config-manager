@@ -21,6 +21,7 @@ import { formatOf, parses, writePointer } from './edit.ts'
 import { z } from 'zod'
 import {
   canonicalJson,
+  planGrade,
   readPointer,
   type MirrorPlan,
   type PlanManualStep,
@@ -29,6 +30,16 @@ import {
 } from './plan.ts'
 
 export type ApplyOutcome = 'applied' | 'partial' | 'refused' | 'stale' | 'busy'
+
+// What authorised this apply. `client-policy` is the harness's own permission configuration; the
+// engine never records consent it did not obtain. A human's own answer (`elicitation`) arrives with
+// the MCP surface, because only a client can render that dialog.
+export type ConsentBasis = 'client-policy' | 'elicitation'
+
+export interface ApplyOptions {
+  // Overwriting a value a human already wrote at the same address is a named act, never the default.
+  onConflict?: 'abort' | 'replace'
+}
 
 // One write that reached disk, with the digest of the file it reached it in, so a caller can see
 // what landed without re-reading every target itself.
@@ -66,6 +77,9 @@ export interface ApplyResult {
   // Null when no document was accepted, so nothing can name a plan that never validated.
   planId: string | null
   reason: string | null
+  // The grade apply itself computed, which is the stricter of the document's own and its facts.
+  grade: 'safe' | 'risky' | null
+  consent: ConsentBasis | null
   landed: LandedWrite[]
   failed: FailedWrite | null
   verification: VerifyResult | null
@@ -96,21 +110,28 @@ export function verifyPlan(plan: MirrorPlan): VerifyResult {
   }
 }
 
-// Executes exactly the given writes: the plan is never re-derived, so what lands is what was
-// approved. Every refusal happens before the first byte.
+// Executes exactly the given writes: they are never re-derived, so what lands is what was approved.
+// The grade is re-computed rather than trusted. Every refusal happens before the first byte.
 export function executePlan(
   config: EngineConfig,
   adapters: readonly Adapter[],
   plan: MirrorPlan,
+  options: ApplyOptions = {},
 ): ApplyResult {
-  const refusal = (outcome: ApplyOutcome, reason: string): ApplyResult => ({
+  // A document is self-addressed and `planIdOf` is public, so the grade on it is a claim: the gate is
+  // computed here, from the writes about to be performed, and the stricter of the two wins.
+  const grade = planGrade(plan) === 'risky' || plan.security.grade === 'risky' ? 'risky' : 'safe'
+  const refusal = (outcome: ApplyOutcome, reason: string, steps = plan.manualSteps): ApplyResult => ({
     outcome,
     planId: plan.planId,
     reason,
+    grade,
+    // A refusal is not an authorisation, whatever it refuses for.
+    consent: null,
     landed: [],
     failed: null,
     verification: null,
-    manualSteps: plan.manualSteps,
+    manualSteps: steps,
   })
   const owned = ownedTier(adapters, plan)
   if (owned === undefined) return refusal('refused', `${plan.target.tierId} is not a declared tier`)
@@ -124,26 +145,94 @@ export function executePlan(
   // written at all. An unwritable target is refused here rather than discovered half way through.
   const fault = containmentFault(config, adapters, plan) ?? preflightFault(plan)
   if (fault !== null) return refusal('refused', fault)
+  // A write flagged executable, secret-bearing, irreversible, or an op this engine does not perform
+  // needs a human's own answer, and this face cannot ask for one. Those writes become manual steps.
+  const gated = plan.writes.filter(isGated)
+  const safe = plan.writes.filter((write) => !isGated(write))
+  const steps = [...plan.manualSteps, ...gated.map(gatedStep)]
+  // Nothing in this plan can land without an answer nobody gave, so it is refused with the steps
+  // rather than reported as applied with an empty landed set.
+  if (plan.writes.length > 0 && safe.length === 0) {
+    return refusal(
+      'refused',
+      `every write in this plan needs a human's own answer (${gated.map((write) => write.pointer).join(', ')}) and this client cannot ask for one; nothing was written and they are returned as manual steps`,
+      steps,
+    )
+  }
+  const effective: MirrorPlan =
+    gated.length === 0
+      ? plan
+      : {
+          ...plan,
+          writes: safe,
+          manualSteps: steps,
+          // Only the writes that can land are asserted: an assertion on a gated write would report a
+          // verified target as failed.
+          verify: {
+            asserts: plan.verify.asserts.filter((assertion) =>
+              safe.some(
+                (write) => write.file === assertion.file && write.pointer === assertion.pointer,
+              ),
+            ),
+          },
+        }
   const lock = acquireLock(config.storePath)
   if (lock === null) return refusal('busy', 'another apply is in flight for this store')
   try {
-    const stale = staleCondition(plan)
+    const stale = staleCondition(effective)
     if (stale !== null) return refusal('stale', stale)
-    const { landed, failed } = landWrites(plan)
-    const verification = verifyPlan(plan)
+    // A differing target is a conflict until the caller names replacement: both values are shown, so
+    // nothing on disk is overwritten silently. It runs after the digests, because what a human reads
+    // here is the current value, not the planning-time one.
+    if (effective.conflicts.length > 0 && options.onConflict !== 'replace') {
+      const shown = effective.conflicts
+        .map(
+          (conflict) =>
+            `${conflict.pointer}: ${JSON.stringify(conflict.current)} holds now, this plan would write ${JSON.stringify(conflict.proposed)}`,
+        )
+        .join('; ')
+      return refusal(
+        'refused',
+        `${effective.conflicts.length} value(s) in ${plan.target.nativeLocation} disagree with this plan (${shown}); nothing was written, pass onConflict: replace to overwrite them`,
+      )
+    }
+    const { landed, failed } = landWrites(effective)
+    const verification = verifyPlan(effective)
     return {
       outcome: failed === null ? 'applied' : 'partial',
       planId: plan.planId,
       reason: failed === null ? null : `writing ${failed.pointer} failed; the writes before it were left in place`,
+      grade,
+      consent: 'client-policy',
       landed,
       failed,
       // A run that stopped short cannot claim the target is verified, however many of its own
       // assertions happen to hold.
       verification: failed === null ? verification : { ...verification, outcome: 'failed' },
-      manualSteps: plan.manualSteps,
+      manualSteps: effective.manualSteps,
     }
   } finally {
     lock()
+  }
+}
+
+// The risk a human has to tick, per write. A conflict is gated separately, by `onConflict`.
+function isGated(write: PlanWrite): boolean {
+  return write.executable || write.secretValues || write.irreversible || write.op !== 'writeAtPointer'
+}
+
+// A gated write is handed to the human as an address, never as its value: a withheld one is a marker,
+// and the rest is what they asked the engine to do in the first place.
+function gatedStep(write: PlanWrite): PlanManualStep {
+  const flags = [
+    write.executable ? 'runs a command at harness runtime' : null,
+    write.secretValues ? 'carries a credential value' : null,
+    write.irreversible ? 'cannot be undone' : null,
+    write.op === 'writeAtPointer' ? null : `is a ${write.op} this engine does not perform`,
+  ].filter((flag) => flag !== null)
+  return {
+    step: `write ${write.pointer} in ${write.file} by hand`,
+    why: `this write ${flags.join(' and ')}: it needs a human's own answer, and nothing was written`,
   }
 }
 

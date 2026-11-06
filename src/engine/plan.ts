@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { z } from 'zod'
 import type { Json } from '../types/dashboard'
@@ -41,9 +42,42 @@ const mappedFieldSchema = z.object({
   template: z.string().optional(),
 })
 
+// The closed five, and one policy table that says what each of them does to the plan. A sixth
+// reason is a schema change; an adapter cannot invent a gap the planner has no rule for.
+export const GAP_REASONS = [
+  'fieldAbsent',
+  'shapeOnly',
+  'credential',
+  'executable',
+  'categoryAbsent',
+] as const
+export type GapReason = (typeof GAP_REASONS)[number]
+export type GapDisposition = 'planApplies' | 'manualStep' | 'notTranslatable'
+
+export const GAP_DISPOSITIONS = {
+  fieldAbsent: 'planApplies',
+  // Quoted because this reason's spelling is the gap vocabulary's, not a name chosen here.
+  'shapeOnly': 'planApplies',
+  credential: 'manualStep',
+  executable: 'manualStep',
+  categoryAbsent: 'notTranslatable',
+} satisfies Record<GapReason, GapDisposition>
+
+// Indexed through a map so a reason that arrived from outside the type is a throw, not an undefined
+// disposition that travels to a human ungraded.
+const DISPOSITIONS_BY_REASON = new Map<string, GapDisposition>(
+  Object.entries(GAP_DISPOSITIONS),
+)
+
+export function gapDisposition(reason: string): GapDisposition {
+  const rule = DISPOSITIONS_BY_REASON.get(reason)
+  if (rule === undefined) throw new Error(`no disposition is declared for the gap reason ${reason}`)
+  return rule
+}
+
 const planGapSchema = z.object({
   field: z.string(),
-  reason: z.enum(['fieldAbsent', 'shapeOnly', 'credential', 'executable', 'categoryAbsent']),
+  reason: z.enum(GAP_REASONS),
   replacement: z.enum(['renamed', 'inverted', 'dropped']),
 })
 
@@ -74,12 +108,62 @@ export const planWriteSchema = z.object({
 })
 
 export type MappedField = z.infer<typeof mappedFieldSchema>
-export type GapReason = z.infer<typeof planGapSchema>['reason']
 export type PlanGap = z.infer<typeof planGapSchema>
 export type PlanConflict = z.infer<typeof planConflictSchema>
 export type PlanManualStep = z.infer<typeof planManualStepSchema>
 export type PlanAssert = z.infer<typeof planAssertSchema>
 export type PlanWrite = z.infer<typeof planWriteSchema>
+
+// The engine grades the plan, not the caller, and apply re-grades the document it is handed rather
+// than trusting the grade on it: `planIdOf` is public, so a forged document can claim `safe`.
+// One table, so a condition cannot be graded into existence by an adapter or forgotten by apply.
+export const RISK_CONDITIONS = [
+  'executable',
+  'secretValues',
+  'irreversible',
+  'copyFile',
+  'symlink',
+  'runCommand',
+  'newTargetFile',
+  'conflict',
+  'elevation',
+] as const
+export type RiskCondition = (typeof RISK_CONDITIONS)[number]
+
+// Everything a plan already carries, so one function grades a document whether the planner built it
+// or a hand-edited one arrived at apply.
+export interface RiskFacts {
+  writes: readonly {
+    op: string
+    executable: boolean
+    secretValues: boolean
+    irreversible: boolean
+    precondition: { exists: boolean }
+  }[]
+  conflicts: readonly unknown[]
+  permissions: { elevationRequired: boolean }
+}
+
+export function riskConditions(facts: RiskFacts): RiskCondition[] {
+  const found = new Set<RiskCondition>()
+  for (const write of facts.writes) {
+    if (write.executable) found.add('executable')
+    if (write.secretValues) found.add('secretValues')
+    if (write.irreversible) found.add('irreversible')
+    if (write.op === 'copyFile') found.add('copyFile')
+    if (write.op === 'symlink') found.add('symlink')
+    if (write.op === 'runCommand') found.add('runCommand')
+    // A file that does not exist yet is a directory entry this plan creates.
+    if (!write.precondition.exists) found.add('newTargetFile')
+  }
+  if (facts.conflicts.length > 0) found.add('conflict')
+  if (facts.permissions.elevationRequired) found.add('elevation')
+  return [...found]
+}
+
+export function planGrade(facts: RiskFacts): 'safe' | 'risky' {
+  return riskConditions(facts).length === 0 ? 'safe' : 'risky'
+}
 
 export const mirrorPlanSchema = z.object({
   planId: z.string(),
@@ -115,6 +199,12 @@ export const mirrorPlanSchema = z.object({
     tierWritability: z.enum(WRITABILITIES),
     elevationRequired: z.boolean(),
     trust: z.enum(['notRequired', 'required']),
+  }),
+  // What became of the target: one artefact type, never a separate error shape, so a plan that has
+  // nothing to write still arrives as a plan and says why.
+  disposition: z.object({
+    kind: z.enum(['mirror', 'alreadyPresent', 'alreadyShared']),
+    reason: z.string().nullable(),
   }),
   conflicts: z.array(planConflictSchema),
   security: z.object({
@@ -263,13 +353,17 @@ export function buildPlan(input: PlanInput): PlanResult {
     .map((write) => ancestorBlocker(current, write.pointer))
     .find((found) => found !== null)
   if (blocked !== null && blocked !== undefined) return { kind: 'refused', reason: blocked }
-  const conflicts = writes.flatMap<PlanConflict>((write) => {
+  // Nothing to copy onto itself, and nothing to write where the target already says it: both are
+  // plans with no writes and a stated reason, never a refusal or a silent rewrite.
+  const disposition = dispositionOf(file, source, writes, existing.kind === 'parsed')
+  const pending = disposition.kind === 'mirror' ? writes : []
+  const conflicts = pending.flatMap<PlanConflict>((write) => {
     if (write.priorValue === null || JSON.stringify(write.priorValue) === JSON.stringify(write.value)) {
       return []
     }
     return [{ file, pointer: write.pointer, current: write.priorValue, proposed: write.value }]
   })
-  const executables = writes
+  const executables = pending
     .filter((write) => write.executable)
     .map((write) => ({ file, why: `${write.pointer} runs a command at harness runtime` }))
   const body: PlanBody = {
@@ -316,16 +410,17 @@ export function buildPlan(input: PlanInput): PlanResult {
       elevationRequired: false,
       trust: target.tier.id === 'codex:project' ? 'required' : 'notRequired',
     },
+    disposition,
     conflicts,
     security: {
-      grade: gradeOf(conflicts, writes, precondition.exists),
+      grade: planGrade({ writes: pending, conflicts, permissions: { elevationRequired: false } }),
       secrets: partition.secrets,
       executables,
     },
-    writes,
+    writes: pending,
     manualSteps: [...partition.manualSteps, ...legacySteps(legacy), ...tierManualSteps(target.tier.id)],
     verify: {
-      asserts: writes.map((write) => ({
+      asserts: pending.map((write) => ({
         file: write.file,
         pointer: write.pointer,
         equals: write.value,
@@ -415,20 +510,27 @@ function partitionFields(facts: McpFacts, surface: McpWriteSurface, tierId: stri
     if (verdict !== 'clean') {
       // Never written, never claimed: the migrate-out instruction is the manual step.
       consumed.add(field)
-      partition.gaps.push({ field, reason: 'credential', replacement: 'dropped' })
+      const gap: PlanGap = { field, reason: 'credential', replacement: 'dropped' }
+      partition.gaps.push(gap)
       partition.secrets.push({ pointer: field, verdict })
-      partition.manualSteps.push({
-        step: `set ${field} on ${tierId} from the source harness's own credential store`,
-        why: 'the value is credential-bearing and never leaves the engine',
-      })
+      // The policy table decides whether a gap owes the human a step, not this branch.
+      if (gapDisposition(gap.reason) === 'manualStep') {
+        partition.manualSteps.push({
+          step: `set ${field} on ${tierId} from the source harness's own credential store`,
+          why: 'the value is credential-bearing and never leaves the engine',
+        })
+      }
       continue
     }
     if (!isPi(tierId) && carriesCommandRetrieval(value)) {
-      partition.gaps.push({ field, reason: 'executable', replacement: 'dropped' })
-      partition.manualSteps.push({
-        step: `re-create ${field} on ${tierId} without a command retrieval`,
-        why: 'the source value runs a program (`!command`), which only Pi executes',
-      })
+      const gap: PlanGap = { field, reason: 'executable', replacement: 'dropped' }
+      partition.gaps.push(gap)
+      if (gapDisposition(gap.reason) === 'manualStep') {
+        partition.manualSteps.push({
+          step: `re-create ${field} on ${tierId} without a command retrieval`,
+          why: 'the source value runs a program (`!command`), which only Pi executes',
+        })
+      }
       continue
     }
     const rule = matchRule(surface, field, value, facts)
@@ -800,17 +902,28 @@ function readTargetFile(file: string): TargetFile {
   }
 }
 
-// The engine grades the plan, not the caller: a location that is not on disk yet, a value that
-// disagrees with it, or executable content all mean a human answer is required before apply.
-function gradeOf(
-  conflicts: PlanConflict[],
+// One artefact type, no error channel: a target that already says everything the plan would write,
+// or that is where the source already lives, comes back with no writes and the reason stated.
+function dispositionOf(
+  file: string,
+  source: PlanSource,
   writes: PlanWrite[],
   targetExists: boolean,
-): 'safe' | 'risky' {
-  if (conflicts.length > 0 || !targetExists) return 'risky'
-  return writes.some((write) => write.executable || write.secretValues || write.irreversible)
-    ? 'risky'
-    : 'safe'
+): MirrorPlan['disposition'] {
+  if (path.resolve(file) === path.resolve(source.nativeFile)) {
+    return {
+      kind: 'alreadyShared',
+      reason: `${file} is where ${source.nativePointer} already lives, so there is nothing to copy`,
+    }
+  }
+  const matches =
+    targetExists &&
+    writes.length > 0 &&
+    writes.every((write) => JSON.stringify(write.priorValue) === JSON.stringify(write.value))
+  if (matches) {
+    return { kind: 'alreadyPresent', reason: `${file} already holds every value this plan would write` }
+  }
+  return { kind: 'mirror', reason: null }
 }
 
 // A plan's id is the hash of its own body. Recomputing it after a hand edit cannot match, which is
