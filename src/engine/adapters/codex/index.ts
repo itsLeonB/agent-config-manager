@@ -1,5 +1,7 @@
 import path from 'node:path'
 import type { EngineConfig } from '../../config.ts'
+import { HOOK_WRITE_SURFACES } from '../hook-write.ts'
+import { readHookTier } from '../hooks.ts'
 import { mcpInstallation } from '../mcp-facts.ts'
 import { MCP_WRITE_SURFACES } from '../mcp-write.ts'
 import { readInstructionTier } from '../instructions.ts'
@@ -18,6 +20,11 @@ export function codexTiers(config: EngineConfig): Tier[] {
   // `/etc/codex/skills` are the documented locations, and the last is not one ACM may write.
   const userSkills = path.join(config.home, '.agents', 'skills')
   const projectSkills = path.join(config.projectRoot, '.agents', 'skills')
+  // Hooks are their own file beside the config layer, and hooks.json is the form a mirror writes:
+  // inline `[hooks]` in config.toml is merged with it rather than replaced, so one file per layer is
+  // what keeps a write and its trust review in one place.
+  const userHooks = path.join(codexRoot, 'hooks.json')
+  const projectHooks = path.join(config.projectRoot, '.codex', 'hooks.json')
   return [
     {
       id: 'codex:user',
@@ -30,6 +37,7 @@ export function codexTiers(config: EngineConfig): Tier[] {
         // `AGENTS.override.md` outranks this file when both exist, which the planner names as a
         // manual step rather than reading.
         instructions: { reads: [path.join(codexRoot, 'AGENTS.md')], target: path.join(codexRoot, 'AGENTS.md') },
+        hooks: { reads: [userHooks], target: userHooks },
       },
       writability: 'writable',
     },
@@ -57,6 +65,7 @@ export function codexTiers(config: EngineConfig): Tier[] {
           reads: [path.join(config.projectRoot, 'AGENTS.md')],
           target: path.join(config.projectRoot, 'AGENTS.md'),
         },
+        hooks: { reads: [projectHooks], target: projectHooks },
       },
       writability: 'writable',
     },
@@ -67,13 +76,15 @@ export function createCodexAdapter(config: EngineConfig): Adapter {
   return {
     harness: 'codex',
     tiers: codexTiers(config),
-    claimedCategories: ['mcp', 'skills', 'instructions'],
+    claimedCategories: ['mcp', 'skills', 'instructions', 'hooks'],
     handlers: {
       mcp: { read: readMcpTier },
       skills: { read: readSkillTier },
       instructions: { read: readInstructionTier },
+      hooks: { read: (tier) => readHookTier(tier, 'codex') },
     },
     mcpWrite: MCP_WRITE_SURFACES.codex,
+    hookWrite: HOOK_WRITE_SURFACES.codex,
   }
 }
 

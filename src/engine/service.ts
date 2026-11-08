@@ -252,7 +252,7 @@ export function planMirror(
       reason: `${row.id} was removed from ${JSON.stringify(row.nativeFile)} by a later scan; nothing left to mirror`,
     }
   }
-  if (row.category !== 'mcp' && row.category !== 'skills' && row.category !== 'instructions') {
+  if (row.category !== 'mcp' && row.category !== 'skills' && row.category !== 'instructions' && row.category !== 'hooks') {
     return { kind: 'refused', reason: `${row.category} has no mirror planner yet` }
   }
   const binding = row.bindings[0]
@@ -271,7 +271,12 @@ export function planMirror(
   return buildPlan({
     adapters,
     source,
-    target: { harness: adapter.harness, tier, surface: adapter.mcpWrite },
+    target: {
+      harness: adapter.harness,
+      tier,
+      surface: adapter.mcpWrite,
+      hookSurface: adapter.hookWrite,
+    },
     now: new Date().toISOString(),
   })
 }
@@ -384,10 +389,18 @@ function targetLocation(plan: MirrorPlan, adapters: readonly Adapter[]): NativeA
   const write = plan.writes[0]
   if (write === undefined) return null
   if (write.op !== 'writeAtPointer') return { file: write.file, pointer: '' }
+  const segments = pointerSegments(write.pointer)
+  // A hook row is one entry in that event's list, so the address the next scan reports is the first
+  // one this plan appends: `hooks.<event>.<index>`, where the index is the list's own length before
+  // the write.
+  if (plan.category === 'hooks') {
+    const prior = Array.isArray(write.priorValue) ? write.priorValue.length : 0
+    const event = segments.slice(0, 2).map(pointerSegment).join('.')
+    return { file: write.file, pointer: `${event}.${prior}` }
+  }
   const surface = adapters.find((adapter) => adapter.harness === plan.target.harness)?.mcpWrite
   if (surface === undefined) return null
   const prefix = pointerSegments(surface.pointerPrefix)
-  const segments = pointerSegments(write.pointer)
   if (segments.length <= prefix.length) return null
   const pointer = segments
     .slice(0, prefix.length + 1)

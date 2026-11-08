@@ -22,6 +22,8 @@ import {
   type McpWriteSurface,
 } from './adapters/mcp-write.ts'
 import { normaliseLegacyMcp, stripJsonc } from './adapters/opencode/read.ts'
+import type { HookCarried, HookHandlerField, HookWriteSurface } from './adapters/hook-write.ts'
+import { hookFactsSchema, type HookHandler } from './adapters/hooks.ts'
 import { SKILL_FIELDS } from './adapters/skills.ts'
 import {
   HARNESSES,
@@ -312,6 +314,9 @@ export interface PlanTarget {
   // The MCP write surface, for an MCP source. Skills and instructions are file work, so their
   // planner reads the tier's own category locations instead.
   surface?: McpWriteSurface
+  // Hooks are three methods rather than one: a pointer write into a native hooks file for two
+  // targets, generated plugin code for the third.
+  hookSurface?: HookWriteSurface
 }
 
 export interface PlanInput {
@@ -355,9 +360,10 @@ export function buildPlan(input: PlanInput): PlanResult {
   }
   if (input.source.category === 'skills') return buildSkillPlan(input)
   if (input.source.category === 'instructions') return buildInstructionPlan(input)
+  if (input.source.category === 'hooks') return buildHookPlan(input)
   return {
     kind: 'refused',
-    reason: `${input.source.category} has no mirror planner yet; only mcp, skills and instructions do`,
+    reason: `${input.source.category} has no mirror planner yet; only mcp, skills, instructions and hooks do`,
   }
 }
 
@@ -871,6 +877,351 @@ function buildInstructionPlan(input: PlanInput): PlanResult {
   })
 }
 
+// Hooks ---------------------------------------------------------------------------------------
+
+// One category, three methods, decided by what the target actually has: a pointer write into the
+// hooks file Codex reads natively and Pi reads through a bridge, or generated plugin code for
+// OpenCode, which has no hook config at all. The event is renamed per target; an event or a matcher
+// with no counterpart is a gap and nothing is written for it, because a hook that fires more widely
+// than its source is a different hook. Every write carrying a command is executable, needs its own
+// tick, and can never be reported as verified.
+function buildHookPlan(input: PlanInput): PlanResult {
+  const { source, target } = input
+  const surface = target.hookSurface
+  if (surface === undefined) {
+    return { kind: 'refused', reason: `${target.harness} declares no hook write surface` }
+  }
+  const facts = decode(source.knownFieldsJson, hookFactsSchema)
+  if (facts === null) {
+    return {
+      kind: 'refused',
+      reason: `${source.nativeFile} known fields are not a hook entry, so there is nothing to mirror`,
+    }
+  }
+  const root = mirrorTarget(target.tier, 'hooks')
+  if (root === undefined) return categoryAbsentPlan(input, 'hooks')
+  // The commands travel inside the plan, so the file they came from has to still be what the scan
+  // saw: a hook edited since would otherwise land a command no classifier ever read.
+  const sourceDigest = digestOfPath(source.nativeFile)
+  if (sourceDigest === null) {
+    return { kind: 'refused', reason: `${source.nativeFile} cannot be read, so there is nothing to mirror` }
+  }
+  if (sourceDigest !== source.contentDigest) {
+    return {
+      kind: 'refused',
+      reason: `${source.nativeFile} changed since the last scan, so the stored hook is stale; run \`acm list\` and plan again`,
+    }
+  }
+
+  const gaps: PlanGap[] = []
+  const manualSteps: PlanManualStep[] = []
+  const mapped: MappedField[] = []
+  const secrets: { pointer: string; verdict: Verdict }[] = []
+  const carried: string[] = []
+
+  const targetEvent = surface.eventName(facts.event)
+  if (targetEvent === undefined) {
+    gaps.push({ field: 'event', reason: 'fieldAbsent', replacement: 'dropped' })
+    manualSteps.push({
+      step: `author this ${facts.event} hook in ${target.harness} by hand`,
+      why: `${target.harness} has no ${facts.event} event, so writing it here would give the hook no event to fire on`,
+    })
+  } else {
+    mapped.push({ transform: 'rename', fields: ['event'], targetField: targetEvent })
+  }
+
+  // A wildcard matcher is carried as it stands. A narrower one is carried only where the target can
+  // narrow a hook at all; on the other two it is their own gap, because writing the hook without it
+  // would fire where the source did not.
+  const wildcard = facts.matcher === undefined || facts.matcher === '' || facts.matcher === '*'
+  const keepsMatcher = wildcard || surface.holdsMatcher
+  if (facts.matcher !== undefined && keepsMatcher) carried.push('matcher')
+  if (!keepsMatcher) {
+    gaps.push({ field: 'matcher', reason: 'fieldAbsent', replacement: 'dropped' })
+    manualSteps.push({
+      step: `narrow the mirrored hook in ${target.harness} to ${JSON.stringify(facts.matcher)} by hand`,
+      why: `${target.harness} has no matcher on a hook, so writing it here would fire it wherever a tool runs rather than only where the source narrowed it`,
+    })
+  }
+
+  const handlers: HookCarried[] = []
+  let unitMapped = false
+  facts.handlers.forEach((handler, index) => {
+    // A handler that runs a tool is neither a command nor code this engine can generate, so it is
+    // stated rather than approximated.
+    if (handler.type !== undefined && handler.type !== 'command') {
+      gaps.push({ field: `handlers.${index}.type`, reason: 'fieldAbsent', replacement: 'dropped' })
+      return
+    }
+    if (handler.command === undefined) {
+      gaps.push({ field: `handlers.${index}.command`, reason: 'fieldAbsent', replacement: 'dropped' })
+      return
+    }
+    // The scan stored a command it would not call clean as its marker, so what this reads is the
+    // verdict the classifier reached there — the value itself never reached the store.
+    const verdict = storedVerdict(handler.command)
+    if (verdict !== 'clean') {
+      gaps.push({ field: `handlers.${index}.command`, reason: 'credential', replacement: 'dropped' })
+      secrets.push({ pointer: `handlers.${index}.command`, verdict })
+      if (gapDisposition('credential') === 'manualStep') {
+        manualSteps.push(credentialStep(target.harness, 'the hook'))
+      }
+      return
+    }
+    // A status message is free text the scan already classified: a value it would not call clean
+    // reached this row as its marker, and a marker is never written anywhere.
+    if (handler.statusMessage !== undefined) {
+      const message = storedVerdict(handler.statusMessage)
+      if (message !== 'clean') {
+        gaps.push({ field: `handlers.${index}.statusMessage`, reason: 'credential', replacement: 'dropped' })
+        secrets.push({ pointer: `handlers.${index}.statusMessage`, verdict: message })
+        if (gapDisposition('credential') === 'manualStep') {
+          manualSteps.push(credentialStep(target.harness, 'the hook'))
+        }
+      }
+    }
+    // A handler field this target has no place for is a gap, never a silent drop.
+    for (const field of ['statusMessage', 'print', 'async'] as const) {
+      if (handler[field] !== undefined && !surface.holds.includes(field)) {
+        gaps.push({ field: `handlers.${index}.${field}`, reason: 'fieldAbsent', replacement: 'dropped' })
+      }
+    }
+    // Only a target reading milliseconds is a mapped field: the same unit is a carry, not a
+    // translation, and one plan names the transform once however many handlers it holds.
+    if (handler.timeout !== undefined && surface.timeoutUnit === 'milliseconds' && !unitMapped) {
+      mapped.push({ transform: 'unit', fields: ['handlers.timeout'], targetField: 'timeout' })
+      unitMapped = true
+    }
+    handlers.push(carriedHandler(handler, surface.holds))
+  })
+  if (handlers.length === facts.handlers.length) carried.push('handlers')
+
+  const writes: PlanWrite[] = []
+  const conflicts: PlanConflict[] = []
+  const asserts: PlanAssert[] = []
+  let disposition: Disposition = { kind: 'mirror', reason: null }
+  let targetNativeLocation = root
+  // Nothing is written when the event has no counterpart, the matcher would have to be widened, or
+  // every handler was a gap: the plan states that instead of writing a hook that behaves differently.
+  if (targetEvent !== undefined && keepsMatcher && handlers.length > 0) {
+    if (surface.kind === 'pointer') {
+      const file = root
+      const existing = readTargetFile(file)
+      if (existing.kind === 'unreadable') {
+        return {
+          kind: 'refused',
+          reason: `${file} exists but cannot be parsed, so the hooks it already holds are unknown`,
+        }
+      }
+      const pointer = `hooks.${targetEvent}`
+      targetNativeLocation = `${file}#${pointer}`
+      const document = existing.kind === 'parsed' ? existing.document : null
+      // An ancestor that is a literal or a list is not something an entry can be written into, and
+      // `hooks` is the one this category always needs.
+      const blocked = ancestorBlocker(document, pointer)
+      if (blocked !== null) {
+        return { kind: 'refused', reason: blocked }
+      }
+      const current = document === null ? undefined : resolvePointer(document, pointer)
+      const list = z.array(planValueSchema).safeParse(current ?? [])
+      if (!list.success) {
+        return {
+          kind: 'refused',
+          reason: `${pointer} in ${file} is not a list of hooks, so writing an entry there would replace something this engine cannot describe`,
+        }
+      }
+      // The whole list would travel in `priorValue`, which is shown verbatim, so a credential-shaped
+      // command already at that address is refused rather than printed.
+      const unclean = uncleanPointer(current ?? null, pointer)
+      if (unclean !== null) {
+        return {
+          kind: 'refused',
+          reason: `${unclean} in ${file} holds a credential-shaped value, and appending to that list would carry it into the plan; move that command to the harness's own indirection by hand first`,
+        }
+      }
+      // Only what is missing is appended: a group that overlaps the target's list partially would
+      // otherwise duplicate the entries that are already there.
+      const added = surface
+        .entries(handlers, facts.matcher)
+        .filter((entry) => !list.data.some((item) => JSON.stringify(item) === JSON.stringify(entry)))
+      const value: PlanValue = [...list.data, ...added]
+      if (added.length === 0) {
+        disposition = { kind: 'alreadyPresent', reason: `${file} already holds this hook at ${pointer}` }
+      } else {
+        // The append is a rewrite of that event's list, so a comment written inside the list is not
+        // part of what the plan carries. Said out loud rather than discovered after the fact.
+        if (list.data.length > 0) {
+          manualSteps.push({
+            step: `review ${pointer} in ${file} once it has been written`,
+            why: 'the entry is added by rewriting that event\'s list, so a comment inside the list does not survive it; keep notes above the list or in a sibling key',
+          })
+        }
+        writes.push({
+          op: 'writeAtPointer',
+          file,
+          pointer,
+          value,
+          precondition: {
+            exists: existing.kind === 'parsed',
+            digest: existing.kind === 'parsed' ? existing.digest : null,
+          },
+          reversible: true,
+          priorValue: current === undefined ? null : list.data,
+          executable: true,
+          secretValues: false,
+          irreversible: false,
+        })
+        asserts.push({ file, pointer, equals: value })
+      }
+    } else {
+      const plugin = surface.plugin(
+        // The module is named for the source's own address, so two hooks on one event stay two
+        // modules instead of the second overwriting the first.
+        {
+          harness: source.harness,
+          event: facts.event,
+          location: `${source.nativeFile}#${source.nativePointer}`,
+        },
+        targetEvent,
+        handlers,
+      )
+      const file = path.join(root, plugin.file)
+      targetNativeLocation = file
+      // Generated code is a whole-file category, so its own text is the value the classifier reads.
+      const verdict = classifyWholeFile(plugin.file, plugin.text)
+      if (verdict !== 'clean') {
+        gaps.push({ field: 'plugin', reason: 'credential', replacement: 'dropped' })
+        secrets.push({ pointer: 'plugin', verdict })
+        if (gapDisposition('credential') === 'manualStep') {
+          manualSteps.push(credentialStep(target.harness, 'the generated module'))
+        }
+      } else {
+        const existing = digestOfPath(file)
+        const written = digestOfBytes(Buffer.from(plugin.text, 'utf8'))
+        if (existing === written) {
+          disposition = { kind: 'alreadyPresent', reason: `${file} already holds this module` }
+        } else {
+          if (existing !== null) {
+            conflicts.push({ file, pointer: '', current: existing, proposed: written })
+          }
+          writes.push({
+            op: 'writeFile',
+            file,
+            content: plugin.text,
+            precondition:
+              existing === null ? { exists: false, digest: null } : { exists: true, digest: existing },
+            reversible: false,
+            priorValue: existing,
+            executable: true,
+            secretValues: false,
+            irreversible: false,
+          })
+          asserts.push({ file, digest: written })
+        }
+      }
+    }
+  }
+
+  return sealPlan(input, {
+    disposition,
+    equivalence: { carried, mapped, gaps, preserved: [] },
+    prerequisites: [
+      { check: 'source-known-fields', detail: `${source.nativeFile}#${source.nativePointer} decoded from the last scan` },
+      { check: 'target-tier-writable', detail: `${target.tier.id} is a declared writable tier` },
+      {
+        check: 'target-hook-location',
+        detail: `${targetNativeLocation} ${writes.length === 0 ? (existsSync(targetNativeLocation) ? 'exists' : 'does not exist yet') : 'is the address this plan writes'}`,
+      },
+    ],
+    permissions: {
+      tierWritability: target.tier.writability,
+      elevationRequired: false,
+      trust: trustRequired(target.tier.id, 'hooks') ? 'required' : 'notRequired',
+    },
+    conflicts,
+    security: {
+      grade: planGrade({ writes, conflicts, permissions: { elevationRequired: false } }),
+      secrets,
+      executables: [...new Set(writes.map((write) => write.file))].map((file) => ({
+        file,
+        why: 'the hook runs a command at harness runtime',
+      })),
+    },
+    writes,
+    manualSteps: [...manualSteps, ...hookSteps(target.harness), ...trustSteps(target.tier.id, 'hooks')],
+    verify: asserts,
+    targetNativeLocation,
+    alsoReadBy: alsoReadBy(input.adapters, target.harness, targetNativeLocation.split('#')[0] ?? ''),
+  })
+}
+
+// One manual step for every withheld hook value, whichever write it stopped: the human routes the
+// credential through the target harness's own indirection instead of the mirrored hook.
+function credentialStep(target: HarnessId, where: string): PlanManualStep {
+  return {
+    step: `read the value this hook command needs through ${target}'s own indirection, and keep it out of ${where}`,
+    why: 'the command carries a credential-shaped value, and a mirror never writes one',
+  }
+}
+
+// One source handler as the target will hold it: its command, the timeout in milliseconds whichever
+// unit the target reads, and the fields that target has a place for. A field it does not hold stays
+// out here and is reported as the gap it is.
+function carriedHandler(handler: HookHandler, holds: readonly HookHandlerField[]): HookCarried {
+  const carried: HookCarried = { command: handler.command ?? '' }
+  if (handler.timeout !== undefined) carried.timeoutMs = handler.timeout * 1000
+  if (
+    handler.statusMessage !== undefined &&
+    holds.includes('statusMessage') &&
+    storedVerdict(handler.statusMessage) === 'clean'
+  ) {
+    carried.statusMessage = handler.statusMessage
+  }
+  if (handler.print !== undefined && holds.includes('print')) carried.print = handler.print
+  if (handler.async !== undefined && holds.includes('async')) carried.async = handler.async
+  return carried
+}
+
+// What a human still has to do before a mirrored hook actually fires. Each target gates this its own
+// way: a feature switch and a trust review, a bridge package and a restart, or a generated module
+// and the restart that loads it.
+function hookSteps(harness: HarnessId): PlanManualStep[] {
+  if (harness === 'codex') {
+    return [
+      {
+        step: 'set [features] hooks = true in $CODEX_HOME/config.toml',
+        why: 'Codex loads no hook while its hooks feature is off, so a correct hooks.json is inert until the switch is on',
+      },
+      {
+        step: 'review the new hook with `/hooks` in Codex and approve it',
+        why: "Codex runs no hook it has not trusted, and it keys trust to a content hash and the hook's position, so inserting one ahead of an existing hook needs the later ones reviewed again",
+      },
+    ]
+  }
+  if (harness === 'pi') {
+    return [
+      {
+        step: 'install the bridge: `pi install npm:@vahor/pi-hooks`',
+        why: 'Pi has no hook config of its own; this package is what reads hooks.json, so the file this plan writes is inert until it is installed',
+      },
+      {
+        step: 'restart Pi',
+        why: 'Pi loads its extensions at startup, so the mirrored hook does not load until it is restarted',
+      },
+    ]
+  }
+  return [
+    {
+      step: 'review the generated plugin module, then restart OpenCode',
+      why: 'OpenCode has no hook config: this module is executable code that runs the hook command, and plugins load at startup',
+    },
+    {
+      step: 'check that each mirrored command reads the payload it expects',
+      why: "a hook command receives its event as JSON on stdin, and what this module passes is OpenCode's own event rather than the source harness's, so a command that parses specific fields has to be checked",
+    },
+  ]
+}
+
 // The files a harness reads ahead of the one this plan writes, in the same directory, each with the
 // harnesses it outranks. Same directory only: these replace the file, whereas an ancestor's is
 // combined with it.
@@ -939,21 +1290,27 @@ function instructionManualSteps(
 
 // The layers that outrank a written file, named rather than assumed away.
 // A trust gate makes a correct write inert, and only a human can lift it. Codex gates its whole
-// project layer; Pi gates a project's `.agents/skills` and its own project config, but not its
-// instruction-file discovery, so a project `AGENTS.md` needs no step there.
-function trustRequired(tierId: string, category: 'skills' | 'instructions'): boolean {
+// project layer; Pi gates a project's `.agents/skills` and its own project config — which is what a
+// project `hooks.json` is — but not its instruction-file discovery, so a project `AGENTS.md` needs
+// no step there.
+function trustRequired(tierId: string, category: Category): boolean {
   if (tierId === 'codex:project') return true
-  return tierId === 'pi:project' && category === 'skills'
+  return tierId === 'pi:project' && (category === 'skills' || category === 'hooks')
 }
 
-function trustSteps(tierId: string, category: 'skills' | 'instructions'): PlanManualStep[] {
-  const what = category === 'skills' ? 'the copied skill directory' : 'this instruction file'
+function trustSteps(tierId: string, category: Category): PlanManualStep[] {
+  const what =
+    category === 'skills'
+      ? 'the copied skill directory'
+      : category === 'hooks'
+        ? 'the mirrored hook'
+        : 'this instruction file'
   if (tierId === 'codex:project') return [codexTrustStep(what)]
-  if (tierId === 'pi:project' && category === 'skills') {
+  if (tierId === 'pi:project' && (category === 'skills' || category === 'hooks')) {
     return [
       {
         step: 'trust this project in Pi (`/trust`), or set defaultProjectTrust',
-        why: `Pi loads no project or ancestor .agents/skills until a trust decision is saved in ~/.pi/agent/trust.json, so ${what} is inert`,
+        why: `Pi loads no project or ancestor config until a trust decision is saved in ~/.pi/agent/trust.json, so ${what} is inert`,
       },
     ]
   }

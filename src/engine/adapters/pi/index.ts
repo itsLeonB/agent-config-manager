@@ -1,5 +1,7 @@
 import path from 'node:path'
 import type { EngineConfig } from '../../config.ts'
+import { HOOK_WRITE_SURFACES } from '../hook-write.ts'
+import { readHookTier } from '../hooks.ts'
 import { mcpInstallation } from '../mcp-facts.ts'
 import { MCP_WRITE_SURFACES } from '../mcp-write.ts'
 import { readInstructionTier } from '../instructions.ts'
@@ -17,6 +19,10 @@ export function piTiers(config: EngineConfig): Tier[] {
   const projectSkills = path.join(config.projectRoot, '.agents', 'skills')
   const userAgentsMd = path.join(agentDir, 'AGENTS.md')
   const projectAgentsMd = path.join(config.projectRoot, 'AGENTS.md')
+  // Hooks under Pi are the file the `@vahor/pi-hooks` extension reads; without that package the file
+  // is inert, which the plan says as a manual step rather than checking for it.
+  const userHooks = path.join(agentDir, 'hooks.json')
+  const projectHooks = path.join(piProject, 'hooks.json')
   return [
     {
       id: 'pi:user',
@@ -32,6 +38,7 @@ export function piTiers(config: EngineConfig): Tier[] {
           target: userSkills,
         },
         instructions: { reads: [userAgentsMd], target: userAgentsMd },
+        hooks: { reads: [userHooks], target: userHooks },
       },
       writability: 'writable',
     },
@@ -47,6 +54,7 @@ export function piTiers(config: EngineConfig): Tier[] {
           target: projectSkills,
         },
         instructions: { reads: [projectAgentsMd], target: projectAgentsMd },
+        hooks: { reads: [projectHooks], target: projectHooks },
       },
       writability: 'writable',
     },
@@ -57,13 +65,15 @@ export function createPiAdapter(config: EngineConfig): Adapter {
   return {
     harness: 'pi',
     tiers: piTiers(config),
-    claimedCategories: ['mcp', 'skills', 'instructions'],
+    claimedCategories: ['mcp', 'skills', 'instructions', 'hooks'],
     handlers: {
       mcp: { read: readMcpTier },
       skills: { read: readSkillTier },
       instructions: { read: readInstructionTier },
+      hooks: { read: (tier) => readHookTier(tier, 'pi') },
     },
     mcpWrite: MCP_WRITE_SURFACES.pi,
+    hookWrite: HOOK_WRITE_SURFACES.pi,
   }
 }
 
