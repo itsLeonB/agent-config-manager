@@ -156,6 +156,22 @@ test('a hand edit updates the digest on the same row', () => {
   assert.notEqual(after.contentDigest, before.contentDigest)
 })
 
+test('a listing answers from the store unless it is asked to re-scan', () => {
+  const config = fixture()
+  writeMcp(userMcpFile(config), { serena: { command: 'serena' } })
+  discover(config)
+  assert.deepEqual([...rowsByName(config).keys()], ['serena'])
+
+  // A native file written after the scan is invisible until someone asks for a fresh read, and the
+  // read that asks for one answers from the store the scan filled, like every other listing.
+  writeMcp(userMcpFile(config), { serena: { command: 'serena' }, context7: { command: 'context7' } })
+  assert.deepEqual([...rowsByName(config).keys()], ['serena'])
+  assert.deepEqual(
+    listInstallations(config, { fresh: true }).installations.map((row) => row.name).sort(),
+    ['context7', 'serena'],
+  )
+})
+
 test('a removed server leaves the default listing but keeps its row, and re-adding revives it', () => {
   const config = fixture()
   writeMcp(userMcpFile(config), { serena: { command: 'serena' }, context7: { command: 'context7' } })

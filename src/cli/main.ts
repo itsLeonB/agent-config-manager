@@ -26,6 +26,7 @@ const USAGE = `usage: acm <command>
            <plan.json|-> [--on-conflict abort|replace]
   verify   re-read the target and report each of the plan's assertions
            <plan.json|->
+  mcp serve  speak the MCP protocol over stdin/stdout, exposing the five tools
 `
 
 interface ListOptions {
@@ -36,9 +37,11 @@ interface ListOptions {
   json: boolean
 }
 
-function main(argv: string[]): number {
+function main(argv: string[]): number | Promise<number> {
   const command = argv[0]
   const rest = argv.slice(1)
+  // The MCP face loads the SDK only when it is asked for it: every other subcommand stays lean.
+  if (command === 'mcp' && rest[0] === 'serve' && rest.length === 1) return mcpServe()
   if (command === 'list') return list(rest)
   if (command === 'inspect') return inspect(rest)
   if (command === 'mirror') return mirror(rest)
@@ -48,8 +51,7 @@ function main(argv: string[]): number {
   return 1
 }
 
-function list(argv: string[]): number {
-  const options = parseListOptions(argv)
+function list(argv: string[]): number {  const options = parseListOptions(argv)
   if (options === null) {
     process.stderr.write(USAGE)
     return 1
@@ -334,4 +336,11 @@ function shorten(file: string, home: string): string {
   return file === home || file.startsWith(`${home}/`) ? `~${file.slice(home.length)}` : file
 }
 
-process.exitCode = main(process.argv.slice(2))
+// The server runs until the client closes stdin; there is no exit code to report on success.
+async function mcpServe(): Promise<number> {
+  const { serve } = await import('../mcp/server.ts')
+  await serve()
+  return 0
+}
+
+process.exitCode = await main(process.argv.slice(2))
