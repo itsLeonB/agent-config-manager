@@ -134,17 +134,29 @@ ${commands}
 
 export default Plugin.define({
   id: ${JSON.stringify(id)},
-  setup(ctx) {
+  async setup(ctx) {
     for (const { command, timeout } of commands) {
-      ctx.${hook}.hook(${JSON.stringify(targetEvent)}, async () => {
-        execSync(command, { timeout })
-      })
+      await ${registration(hook, targetEvent)}
     }
   },
 })
 `
     return { file: `${id}.ts`, text }
   },
+}
+
+// The callback OpenCode documents for each hook kind: a tool hook is handed the call it is about to
+// allow or has just run, and the context hook owns the parts of the model request, so this is where a
+// command's output becomes the context part a Codex `PreModelRequest` handler was written to supply.
+function registration(hook: 'tool' | 'session', targetEvent: string): string {
+  if (hook === 'session') {
+    return `ctx.session.hook(${JSON.stringify(targetEvent)}, (event) => {
+        event.system.push({ type: 'text', text: execSync(command, { timeout, encoding: 'utf8' }) })
+      })`
+  }
+  return `ctx.tool.hook(${JSON.stringify(targetEvent)}, () => {
+        execSync(command, { timeout })
+      })`
 }
 
 export const HOOK_WRITE_SURFACES = { codex, pi, opencode } satisfies Record<

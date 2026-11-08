@@ -51,16 +51,23 @@ Choices worth knowing beyond the ticket:
 - **A command is a plain string, so a credential in one stops the write.** Each handler command goes
   through the classifier before it can reach the plan: a provider token or private-key block is a
   `credential` gap with its own manual step and no write, and the generated module is put through the
-  whole-file classifier for the same reason. An existing command already sitting at the target's own
-  pointer refuses the plan, because appending would carry it into `priorValue`, which is shown
-  verbatim.
+  whole-file classifier for the same reason. This is ticket 13's rule table applied to a category it
+  did not name, and the spec's invariant that no credential value leaves the engine is what asks for
+  it — not a hook-table decision. A command already sitting at the target's own pointer refuses the
+  plan, because appending would carry it into `priorValue`, which is shown verbatim.
 - **A handler field a target has no place for is a gap, not a silent drop.** `statusMessage` is
   Codex's, `print` is the bridge's, `mcp_tool` handlers are neither target's — each is named by
   pointer in `gaps[]`. The carried handler only holds what its target's `holds` list says.
-- **The generated module is `Plugin.define` with `node:child_process` for the command**, because the
-  API for a hook's own shell call is not settled the way `Plugin.define` and `ctx.tool.hook` /
-  `ctx.session.hook` are (ticket 12). It is flagged `executable`, asserted by digest, and handed to a
-  human to read before they restart OpenCode — which is the whole reason it can never verify.
+- **The generated module registers the callback OpenCode documents, not a bare shell call.** The
+  context hook owns the request's own parts, so a `PreModelRequest` command's output is pushed into
+  `event.system` as a text part — that is what the Codex handler was written to supply. A tool hook
+  has no such part, so `PreToolUse` / `PostToolUse` run the command and observe the call. `setup` is
+  async and awaits each registration, which is what that API returns.
+- **Manual steps are facts about the target, so a no-write plan names them too.** A hook already in
+  place, or one that could not be written at all, still sits behind Codex's feature switch, the
+  bridge package, or a restart; the engine never checks for those, so the plan says what it did not
+  check instead of guessing. This is ticket 23's rule for shadow files and the project size cap,
+  applied to the hook gates.
 - **A hook file's digest is the source's digest.** Commands travel inside the plan (nothing is
   re-read at apply the way a copied tree is), so a hooks file edited since the scan refuses the plan
   rather than landing a command no classifier saw.
@@ -74,8 +81,8 @@ Limits, stated rather than hidden:
 - **Codex's inline `[hooks]` table is not read.** Only `hooks.json` is a source and a target, because
   one layer holding both is merged by Codex with a startup warning; a hook written inline stays
   invisible to the inventory.
-- **The generated plugin's hook signature is a convention, not a verified compile.** Nothing in this
-  slice runs OpenCode, so the module is reviewed by a human, not typechecked against
-  `@opencode/plugin`.
+- **The generated plugin is not typechecked against `@opencode/plugin`.** Nothing in this slice runs
+  OpenCode, so the module is written to the documented API, flagged `executable`, and read by a human
+  before they restart, rather than proven to compile.
 - **`hooks.state.*.trusted_hash` is not written and not read.** Trust is Codex's own record, keyed by
   content hash and position, so the plan names the `/hooks` review and changes nothing there.

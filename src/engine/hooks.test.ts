@@ -223,7 +223,7 @@ test('a Codex hook targeting OpenCode lands as generated plugin code, executable
   assert.ok(write !== undefined && write.op === 'writeFile')
   assert.equal(write.file, path.join(config.projectRoot, '.opencode', 'plugins', 'acm-codex-pre-tool-use.ts'))
   // The event became a plugin hook, and the command it runs is in the generated module.
-  assert.match(write.content, /ctx\.tool\.hook\("execute\.before"/)
+  assert.match(write.content, /await ctx\.tool\.hook\("execute\.before"/)
   assert.match(write.content, /serena-hooks remind --client=codex/)
   assert.equal(write.executable, true)
   assert.equal(planned.security.grade, 'risky')
@@ -237,6 +237,28 @@ test('a Codex hook targeting OpenCode lands as generated plugin code, executable
   const verification = verifyPlan(planned)
   assert.ok(verification.asserts.every((assertion) => assertion.holds))
   assert.equal(verification.outcome, 'unverified')
+})
+
+test('a generated module registers the callback OpenCode documents for that hook', () => {
+  const config = fixture()
+  const source = writeCodexHooks(config, [
+    { event: 'PreToolUse', command: 'serena-hooks remind' },
+    { event: 'PreModelRequest', command: 'serena-hooks plan-context' },
+  ])
+  discover(config)
+
+  // A tool hook observes the call; the command's output cannot change it, so the callback is a call.
+  const tool = hookPlan(config, source, 'oc:project', 'hooks.PreToolUse.0')
+  const [toolWrite] = tool.writes
+  assert.ok(toolWrite !== undefined && toolWrite.op === 'writeFile')
+  assert.match(toolWrite.content, /ctx\.tool\.hook\("execute\.before", \(\) => \{/)
+
+  // The context hook owns the request's own parts, so the command's output becomes one of them.
+  const context = hookPlan(config, source, 'oc:project', 'hooks.PreModelRequest.0')
+  const [contextWrite] = context.writes
+  assert.ok(contextWrite !== undefined && contextWrite.op === 'writeFile')
+  assert.match(contextWrite.content, /ctx\.session\.hook\("context", \(event\) => \{/)
+  assert.match(contextWrite.content, /event\.system\.push\(\{ type: 'text', text: execSync\(command, \{ timeout, encoding: 'utf8' \}\) \}\)/)
 })
 
 test('event names are mapped per target, and an unmapped event is a gap with no write', () => {
