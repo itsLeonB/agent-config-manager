@@ -2,7 +2,8 @@ import { z } from 'zod'
 import { createAdapters } from './adapters/registry.ts'
 import { pointerSegment, pointerSegments } from './adapters/mcp-facts.ts'
 import type { Adapter } from './adapters/types.ts'
-import type { Category, ScopeBucket, Writability } from './adapters/types.ts'
+import { HARNESSES } from './adapters/types.ts'
+import type { Category, HarnessId, ScopeBucket, Writability } from './adapters/types.ts'
 import {
   containmentFault,
   executePlan,
@@ -250,6 +251,95 @@ function consentRequest(
   }
 }
 
+// `acm setup` is a mirror whose source is this tool's own declaration of itself: the entry point
+// spec §11 settles, as the canonical facts a planner can write into any target. It is planned,
+// validated and applied by the same functions every other mutation goes through, so ACM's own
+// install is not a second write path.
+export const ACM_SERVER_NAME = 'acm'
+export const ACM_SERVER_ARGS = ['mcp', 'serve']
+
+// One harness, reported on its own: a refusal here is a value, so an unwritable target cannot hide
+// the two harnesses that did land.
+export interface SetupHarness {
+  harness: HarnessId
+  tierId: string | null
+  plan: MirrorPlan | null
+  // Null when no plan existed to apply: there is nothing to report but the refusal.
+  applied: ApplyResult | null
+  refused: string | null
+}
+
+export interface SetupReport {
+  bin: string
+  harnesses: SetupHarness[]
+}
+
+export function setupSelf(config: EngineConfig, bin: string, options: ApplyOptions = {}): SetupReport {
+  const adapters = createAdapters(config)
+  return {
+    bin,
+    harnesses: HARNESSES.map((harness) => setupHarness(config, adapters, harness, bin, options)),
+  }
+}
+
+function setupHarness(
+  config: EngineConfig,
+  adapters: readonly Adapter[],
+  harness: HarnessId,
+  bin: string,
+  options: ApplyOptions,
+): SetupHarness {
+  const adapter = adapters.find((candidate) => candidate.harness === harness)
+  // The user scope is the one layer every harness reads without a project open.
+  const tier = adapter?.tiers.find(
+    (candidate) =>
+      candidate.scopeBucket === 'user' &&
+      candidate.writability === 'writable' &&
+      candidate.configPaths.length > 0,
+  )
+  if (adapter === undefined || tier === undefined) {
+    return {
+      harness,
+      tierId: null,
+      plan: null,
+      applied: null,
+      refused: `${harness} declares no writable user-scope MCP tier`,
+    }
+  }
+  const planned = buildPlan({
+    adapters,
+    source: selfSource(bin, tier.scopeBucket),
+    target: { harness, tier, surface: adapter.mcpWrite },
+    now: new Date().toISOString(),
+  })
+  if (planned.kind === 'refused') {
+    return { harness, tierId: tier.id, plan: null, applied: null, refused: planned.reason }
+  }
+  // The same document a `mirror` would hand a caller, applied through the same executor: every
+  // precondition, containment check and verification is the one every other write gets.
+  return { harness, tierId: tier.id, plan: planned.plan, applied: applyPlan(config, planned.plan, options), refused: null }
+}
+
+function selfSource(bin: string, scope: ScopeBucket): PlanSource {
+  return {
+    // Not a store row, and unable to collide with one: an installation id is `sha256:<digest>`.
+    installationId: '',
+    category: 'mcp',
+    // No harness tier holds this entry as config of its own, which is what these two say.
+    harness: '',
+    tierId: '',
+    scope,
+    name: ACM_SERVER_NAME,
+    nativeFile: bin,
+    nativePointer: '',
+    // `transport` is stated so OpenCode gets the `type: "local"` its local entries require; the
+    // other two infer it from `command` and write nothing for it.
+    knownFieldsJson: JSON.stringify({ transport: 'stdio', command: bin, args: ACM_SERVER_ARGS }),
+    contentDigest: '',
+    origin: 'declared by `acm setup`, not read from a scan',
+  }
+}
+
 export interface Inspection {
   installation: InstallationRow
   // Where the row came from: when it was first and last seen, and when it left the config.
@@ -427,7 +517,7 @@ function recordMirror(
     grade,
     outcome: result.outcome,
     toolVersion: plan.toolVersion,
-    sourceInstallationId: plan.source.installationId,
+    sourceInstallationId: plan.source.installationId === '' ? null : plan.source.installationId,
     landed: result.landed,
     binding:
       target === undefined

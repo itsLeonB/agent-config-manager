@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
+import path from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import {
   applyPlan,
@@ -8,9 +9,10 @@ import {
   inspectInstallation,
   listInstallations,
   planMirror,
+  setupSelf,
   verifyPlanDocument,
 } from '../engine/service.ts'
-import type { Inspection } from '../engine/service.ts'
+import type { Inspection, SetupReport } from '../engine/service.ts'
 import type { InstallationRow } from '../server/store.cjs'
 import type { Json } from '../types/dashboard'
 
@@ -26,6 +28,8 @@ const USAGE = `usage: acm <command>
            <plan.json|-> [--on-conflict abort|replace]
   verify   re-read the target and report each of the plan's assertions
            <plan.json|->
+  setup    install this acm into all three harnesses through a plan, then apply it
+           [--on-conflict abort|replace] [--json]
   mcp serve  speak the MCP protocol over stdin/stdout, exposing the five tools
 `
 
@@ -47,6 +51,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'mirror') return mirror(rest)
   if (command === 'apply') return apply(rest)
   if (command === 'verify') return verify(rest)
+  if (command === 'setup') return setup(rest)
   process.stderr.write(USAGE)
   return 1
 }
@@ -250,6 +255,64 @@ function parseInspectOptions(argv: string[]): InspectOptions {
   } catch {
     return { json: false }
   }
+}
+
+// ACM's own install is a mirror like any other: planned against each harness's user tier, shown,
+// then applied by the same executor. A harness that refuses is reported on its own line, so one
+// unwritable target never hides the two that landed.
+function setup(argv: string[]): number {
+  let onConflict: 'abort' | 'replace' = 'abort'
+  let json = false
+  try {
+    const { values } = parseArgs({
+      args: argv,
+      options: { 'on-conflict': { type: 'string' }, json: { type: 'boolean' } },
+    })
+    const wanted = values['on-conflict']
+    if (wanted !== undefined && wanted !== 'abort' && wanted !== 'replace') {
+      process.stderr.write(`--on-conflict takes abort or replace, not ${printable(wanted)}\n`)
+      return 1
+    }
+    onConflict = wanted === 'replace' ? 'replace' : 'abort'
+    json = values.json === true
+  } catch {
+    process.stderr.write(USAGE)
+    return 1
+  }
+  // A harness spawns what this process was started as, never what `PATH` resolves later, so the
+  // entry records the absolute path of this bin.
+  const bin = realpathSync(path.resolve(process.argv[1]))
+  const report = setupSelf(resolveDefaultConfig(), bin, { onConflict })
+  process.stdout.write(json ? `${JSON.stringify(report, null, 2)}\n` : formatSetup(report))
+  const settled = report.harnesses.every(
+    (harness) => harness.refused === null && harness.applied?.outcome === 'applied',
+  )
+  return settled ? 0 : 1
+}
+
+function formatSetup(report: SetupReport): string {
+  const lines: string[] = []
+  for (const harness of report.harnesses) {
+    const where = harness.tierId ?? harness.harness
+    if (harness.refused !== null) {
+      lines.push(`${where}  refused  ${printable(harness.refused)}`)
+      continue
+    }
+    const applied = harness.applied
+    const state =
+      harness.plan?.disposition.kind === 'alreadyPresent' ? 'already present' : (applied?.outcome ?? 'planned')
+    lines.push(`${where}  ${state}  ${applied?.landed.length ?? 0} write(s)  ${shortDigest(harness.plan?.planId ?? null)}`)
+    // Only a run that landed shows the writes: a plan's writes are what it would have done, and
+    // printing them under a refusal reads as though they reached disk.
+    for (const write of applied?.outcome === 'applied' ? (harness.plan?.writes ?? []) : []) {
+      const at = write.op === 'writeAtPointer' ? printable(write.pointer) : printable(write.file)
+      const value = write.op === 'writeAtPointer' ? JSON.stringify(write.value) : write.op
+      lines.push(`  ${at} = ${value}`)
+    }
+    if (applied?.reason !== null && applied?.reason !== undefined) lines.push(`  ${printable(applied.reason)}`)
+    for (const step of applied?.manualSteps ?? []) lines.push(`  manual  ${printable(step.step)}`)
+  }
+  return `${lines.join('\n')}\n`
 }
 
 function formatInspection(inspection: Inspection, home: string): string {

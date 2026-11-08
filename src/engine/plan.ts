@@ -306,6 +306,9 @@ export interface PlanSource {
   nativePointer: string
   knownFieldsJson: string
   contentDigest: string
+  // Where the known fields came from when no scan read them — `acm setup` plans its own entry. The
+  // default clause the plan states is the last scan.
+  origin?: string
 }
 
 export interface PlanTarget {
@@ -537,7 +540,7 @@ function buildMcpPlan(input: PlanInput, surface: McpWriteSurface): PlanResult {
     prerequisites: [
       {
         check: 'source-known-fields',
-        detail: `${source.nativeFile}#${source.nativePointer} decoded from the last scan`,
+        detail: `${source.nativeFile}#${source.nativePointer} ${source.origin ?? 'decoded from the last scan'}`,
       },
       { check: 'target-tier-writable', detail: `${target.tier.id} is a declared writable tier` },
       {
