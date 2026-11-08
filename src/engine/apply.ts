@@ -33,6 +33,7 @@ import {
   canonicalJson,
   planGrade,
   readPointer,
+  type RiskCondition,
   type MirrorPlan,
   type PlanManualStep,
   type PlanValue,
@@ -42,7 +43,7 @@ import {
 type PointerWrite = Extract<PlanWrite, { op: 'writeAtPointer' }>
 type WholeWrite = Exclude<PlanWrite, { op: 'writeAtPointer' }>
 
-export type ApplyOutcome = 'applied' | 'partial' | 'refused' | 'stale' | 'busy'
+export type ApplyOutcome = 'applied' | 'partial' | 'refused' | 'stale' | 'busy' | 'declined'
 
 // What authorised this apply. `client-policy` is the harness's own permission configuration; the
 // engine never records consent it did not obtain. A human's own answer (`elicitation`) arrives with
@@ -52,6 +53,9 @@ export type ConsentBasis = 'client-policy' | 'elicitation'
 export interface ApplyOptions {
   // Overwriting a value a human already wrote at the same address is a named act, never the default.
   onConflict?: 'abort' | 'replace'
+  // A human's own answer, obtained through the client's own dialog. Only the MCP face can set it:
+  // no flag, environment variable, or stored approval reaches this.
+  consent?: 'elicitation'
 }
 
 // One write that reached disk, with the digest of the file it reached it in, so a caller can see
@@ -146,7 +150,7 @@ export function executePlan(
 ): ApplyResult {
   // A document is self-addressed and `planIdOf` is public, so the grade on it is a claim: the gate is
   // computed here, from the writes about to be performed, and the stricter of the two wins.
-  const grade = planGrade(plan) === 'risky' || plan.security.grade === 'risky' ? 'risky' : 'safe'
+  const { grade, gated: flagged } = planGate(plan)
   const refusal = (outcome: ApplyOutcome, reason: string, steps = plan.manualSteps): ApplyResult => ({
     outcome,
     planId: plan.planId,
@@ -172,17 +176,17 @@ export function executePlan(
   const fault =
     containmentFault(config, adapters, plan) ?? mixedOpsFault(plan) ?? preflightFault(plan)
   if (fault !== null) return refusal('refused', fault)
-  // A write flagged executable, secret-bearing, irreversible, or an op this engine does not perform
-  // needs a human's own answer, and this face cannot ask for one. Those writes become manual steps.
-  const gated = plan.writes.filter(isGated)
-  const safe = plan.writes.filter((write) => !isGated(write))
+  // A write flagged executable, secret-bearing, or irreversible needs a human's own answer. Without
+  // one those writes become manual steps; with one (`consent: elicitation`) they land.
+  const gated = options.consent === 'elicitation' ? [] : flagged
+  const safe = options.consent === 'elicitation' ? plan.writes : plan.writes.filter((write) => !isGated(write))
   const steps = [...plan.manualSteps, ...gated.map(gatedStep)]
   // Nothing in this plan can land without an answer nobody gave, so it is refused with the steps
   // rather than reported as applied with an empty landed set.
   if (plan.writes.length > 0 && safe.length === 0) {
     return refusal(
       'refused',
-      `every write in this plan needs a human's own answer (${gated.map(addressOf).join(', ')}) and this client cannot ask for one; nothing was written and they are returned as manual steps`,
+      `every write in this plan needs a human's own answer (${gated.map(writeAddress).join(', ')}) and this client cannot ask for one; nothing was written and they are returned as manual steps`,
       steps,
     )
   }
@@ -200,7 +204,7 @@ export function executePlan(
               safe.some(
                 (write) =>
                   write.file === assertion.file &&
-                  addressOf(write) === ('pointer' in assertion ? assertion.pointer : null),
+                  writeAddress(write) === ('pointer' in assertion ? assertion.pointer : null),
               ),
             ),
           },
@@ -243,7 +247,7 @@ export function executePlan(
       planId: plan.planId,
       reason: failed === null ? null : `writing ${failed.pointer} failed; the writes before it were left in place`,
       grade,
-      consent: 'client-policy',
+      consent: options.consent ?? 'client-policy',
       landed,
       failed,
       // A run that stopped short cannot claim the target is verified, however many of its own
@@ -256,29 +260,56 @@ export function executePlan(
   }
 }
 
-// The risk a human has to tick, per write: the flags this face cannot obtain an answer for. A
-// conflict is gated separately, by `onConflict`. File ops are performed here and graded risky, so a
-// client that can ask a human still asks; `runCommand` is the op the engine refuses.
+// The grade a document really carries, and the writes that need a human's own answer: one table, so
+// apply and the MCP face which asks the human cannot disagree about what the dialog is for.
+// A conflict is gated separately, by `onConflict`. File ops are performed here and graded risky, so
+// a client that can ask a human still asks; `runCommand` is the op the engine refuses.
+export function planGate(plan: MirrorPlan) {
+  return {
+    grade: planGrade(plan) === 'risky' || plan.security.grade === 'risky' ? 'risky' : 'safe',
+    gated: plan.writes.filter(isGated),
+  } satisfies { grade: 'safe' | 'risky'; gated: PlanWrite[] }
+}
+
 function isGated(write: PlanWrite): boolean {
   return write.executable || write.secretValues || write.irreversible
 }
 
 // What a human is handed: a pointer for an addressed write, and the file itself for a whole-file one.
-function addressOf(write: PlanWrite): string | null {
+export function writeAddress(write: PlanWrite): string | null {
   return write.op === 'writeAtPointer' ? write.pointer : null
+}
+
+// The flags a human is asked about, in the order the dialog shows them.
+export const CONSENT_FLAGS = ['executable', 'secretValues', 'irreversible'] as const
+
+export type ConsentFlag = (typeof CONSENT_FLAGS)[number]
+
+// Why this write needs a human's own answer.
+export function writeFlags(write: PlanWrite): ConsentFlag[] {
+  return CONSENT_FLAGS.filter((flag) => write[flag])
 }
 
 // A gated write is handed to the human as an address, never as its value: a withheld one is a marker,
 // and the rest is what they asked the engine to do in the first place.
+const RISK_FLAG_WORDS = {
+  executable: 'runs a command at harness runtime',
+  secretValues: 'carries a credential value',
+  irreversible: 'cannot be undone',
+  copyFile: 'copies a file',
+  symlink: 'creates a link',
+  runCommand: 'runs a command',
+  newTargetFile: 'creates its target file',
+  conflict: 'overwrites a value',
+  elevation: 'needs elevation',
+} satisfies Record<RiskCondition, string>
+
 function gatedStep(write: PlanWrite): PlanManualStep {
-  const flags = [
-    write.executable ? 'runs a command at harness runtime' : null,
-    write.secretValues ? 'carries a credential value' : null,
-    write.irreversible ? 'cannot be undone' : null,
-  ].filter((flag) => flag !== null)
   return {
     step: `write ${write.op === 'writeAtPointer' ? write.pointer : write.file} in place by hand`,
-    why: `this write ${flags.join(' and ')}: it needs a human's own answer, and nothing was written`,
+    why: `this write ${writeFlags(write)
+      .map((flag) => RISK_FLAG_WORDS[flag])
+      .join(' and ')}: it needs a human's own answer, and nothing was written`,
   }
 }
 

@@ -6,9 +6,13 @@ import type { Category, ScopeBucket, Writability } from './adapters/types.ts'
 import {
   containmentFault,
   executePlan,
+  planGate,
   verifyPlan,
+  writeAddress,
+  writeFlags,
   type ApplyOptions,
   type ApplyResult,
+  type ConsentFlag,
   type VerifyResult,
 } from './apply.ts'
 import type { EngineConfig } from './config.ts'
@@ -16,6 +20,7 @@ import {
   buildPlan,
   validatePlan,
   type MirrorPlan,
+  type PlanManualStep,
   type PlanResult,
   type PlanSource,
 } from './plan.ts'
@@ -143,6 +148,102 @@ function newestScan(tierHealth: TierHealthRow[]): string | null {
     (latest, row) => (latest === null || row.at > latest ? row.at : latest),
     null,
   )
+}
+
+// A plan is a JSON document: normalising here is what makes one built in process and one parsed
+// from a file hash the same way.
+function asDocument(rawPlan: Json | MirrorPlan): Json {
+  return JSON.parse(JSON.stringify(rawPlan))
+}
+
+// Applying takes the document a caller was given and executes it; nothing is re-derived, so a plan
+// that no longer matches its targets is reported stale instead of being quietly re-planned.
+export function applyPlan(
+  config: EngineConfig,
+  rawPlan: Json | MirrorPlan,
+  options: ApplyOptions = {},
+): ApplyResult {
+  const validated = validatePlan(asDocument(rawPlan))
+  if (validated.kind === 'refused') {
+    return {
+      outcome: 'refused',
+      planId: null,
+      reason: validated.reason,
+      grade: null,
+      consent: null,
+      landed: [],
+      failed: null,
+      verification: null,
+      manualSteps: [],
+    }
+  }
+  const adapters = createAdapters(config)
+  const plan = validated.plan
+  const result = executePlan(config, adapters, plan, options)
+  const grade = result.grade
+  if (grade !== null && (result.outcome === 'applied' || result.outcome === 'partial')) {
+    recordMirror(config, adapters, plan, result, grade)
+  }
+  return result
+}
+
+export type { ConsentFlag }
+
+export type ConsentAnswer = 'accept' | 'decline'
+
+// What a client needs to render its own dialog: the risk flags it must ask about, per write, and
+// never a value — a withheld one is a marker, and the address is what the human is agreeing to.
+export interface ConsentRequest {
+  planId: string
+  target: string
+  writes: { address: string | null; flags: ConsentFlag[] }[]
+}
+
+// The gate only a client can answer. Without an `ask`, the plan applies exactly as the CLI applies
+// it: flagged writes come back as manual steps. The engine never sends `elicitation/create` itself;
+// only a client that declared the capability is handed an `ask`, and a no writes nothing.
+export async function applyPlanAsking(
+  config: EngineConfig,
+  rawPlan: Json | MirrorPlan,
+  options: ApplyOptions = {},
+  ask?: (request: ConsentRequest) => Promise<ConsentAnswer>,
+): Promise<ApplyResult> {
+  const askable = ask === undefined ? null : consentRequest(rawPlan)
+  if (ask === undefined || askable === null) return applyPlan(config, rawPlan, options)
+  if ((await ask(askable.request)) !== 'accept') {
+    return {
+      outcome: 'declined',
+      planId: askable.request.planId,
+      reason: `the human declined the answer ${askable.request.planId} needs; nothing was written`,
+      grade: askable.grade,
+      consent: null,
+      landed: [],
+      failed: null,
+      verification: null,
+      manualSteps: askable.manualSteps,
+    }
+  }
+  return applyPlan(config, rawPlan, { ...options, consent: 'elicitation' })
+}
+
+// Null when there is nothing to ask about, and for a document apply would refuse anyway: the refusal
+// is apply's to report, with its own reason.
+function consentRequest(
+  rawPlan: Json | MirrorPlan,
+): { request: ConsentRequest; grade: 'safe' | 'risky'; manualSteps: PlanManualStep[] } | null {
+  const validated = validatePlan(asDocument(rawPlan))
+  if (validated.kind === 'refused') return null
+  const { grade, gated } = planGate(validated.plan)
+  if (gated.length === 0) return null
+  return {
+    grade,
+    manualSteps: validated.plan.manualSteps,
+    request: {
+      planId: validated.plan.planId,
+      target: validated.plan.target.nativeLocation,
+      writes: gated.map((write) => ({ address: writeAddress(write), flags: writeFlags(write) })),
+    },
+  }
 }
 
 export interface Inspection {
@@ -281,47 +382,9 @@ export function planMirror(
   })
 }
 
-// A plan is a JSON document: normalising here is what makes one built in process and one parsed
-// from a file hash the same way.
-function asDocument(rawPlan: Json | MirrorPlan): Json {
-  return JSON.parse(JSON.stringify(rawPlan))
-}
-
-// Applying takes the document a caller was given and executes it; nothing is re-derived, so a plan
-// that no longer matches its targets is reported stale instead of being quietly re-planned.
-export function applyPlan(
-  config: EngineConfig,
-  rawPlan: Json | MirrorPlan,
-  options: ApplyOptions = {},
-): ApplyResult {
-  const validated = validatePlan(asDocument(rawPlan))
-  if (validated.kind === 'refused') {
-    return {
-      outcome: 'refused',
-      planId: null,
-      reason: validated.reason,
-      grade: null,
-      consent: null,
-      landed: [],
-      failed: null,
-      verification: null,
-      manualSteps: [],
-    }
-  }
-  const adapters = createAdapters(config)
-  const plan = validated.plan
-  const result = executePlan(config, adapters, plan, options)
-  const grade = result.grade
-  if (grade !== null && (result.outcome === 'applied' || result.outcome === 'partial')) {
-    recordMirror(config, adapters, plan, result, grade)
-  }
-  return result
-}
-
 export type VerifyDocumentResult =
   | { kind: 'refused'; reason: string }
   | { kind: 'ok'; verification: VerifyResult }
-
 // Verification of a document nobody has applied yet is the same face as apply: validate the
 // document, run the same containment over the files it names, then re-read them. A plan is a
 // caller-supplied document, so its assertions are not a licence to read any path it likes.

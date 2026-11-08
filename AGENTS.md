@@ -70,8 +70,10 @@ settled decisions.
   (home, project root, store path, `CODEX_HOME`) arrive as an injected `EngineConfig`, never read
   from the working directory; `ACM_HOME` / `ACM_PROJECT_ROOT` / `ACM_STORE` are the boundary
   overrides a test uses to point the engine at a fixture. `src/cli/main.ts` is the `acm` bin
-  (`bun run acm -- list`, or `acm list` once linked), and it is a face over `service.ts`, exactly
-  as the MCP server will be. Nothing under `src/routes/` or `src/components/` imports it.
+  (`bun run acm -- list`, or `acm list` once linked), and `src/mcp/router.ts` registers the five MCP
+  tools over the same service functions while `src/mcp/server.ts` puts them on a stdio transport
+  behind `acm mcp serve` — two faces over one library, and neither imports `repo`, `plan`, or an
+  adapter. Nothing under `src/routes/` or `src/components/` imports either.
 - **The Claude dashboard is the previous product, kept working unchanged.** It reads the same store;
   its rendering, rescan, settings, scanner, and container notes are in
   [docs/dashboard.md](docs/dashboard.md). Read that before touching `src/routes/`,

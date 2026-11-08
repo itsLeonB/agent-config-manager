@@ -35,10 +35,11 @@ and the operation row records the grade apply computed.
   file) but it needs no tick, and the engine seeds an empty document of the right format, so the
   first mirror into a fresh config works. The grade still reaches the client's own permission layer,
   which is what gates on it.
-- **`consent: elicitation` is declared and unproduced.** Only a client can render the dialog, and the
-  engine must not send `elicitation/create` unless the client declared the capability, so the human's
-  answer arrives with the MCP surface. Until then every apply records `client-policy` and every
-  flagged write is a manual step.
+- **`consent: elicitation` is produced by the MCP face only.** It arrives with `acm mcp serve`: the router
+  asks through the low-level `elicitInput` when — and only when — the client declared the capability
+  at initialise, a yes un-gates the flagged writes and is recorded as that basis, and a no writes
+  nothing and answers `declined`. A client without the capability, and the CLI, still get the graded
+  split: the risky writes as manual steps, the safe remainder applied `client-policy`.
 - **The cost is stated:** a `safe` write can still break a config file if the classifier is wrong
   about "safe". The mitigation is structural — preconditions, `preserved[]`, pointer-level merge —
   not consent. The engine can bound *what it will do without an answer*; it cannot promise the answer
