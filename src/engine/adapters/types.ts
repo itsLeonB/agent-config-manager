@@ -20,6 +20,9 @@ export type TierHealthStatus = 'ok' | 'unreadable'
 export interface CategoryPaths {
   reads: readonly string[]
   target: string
+  // What a write may reach: the target path itself, or — for a target that is a directory a mirror
+  // writes beneath, like a generated plugin module — anything under it. Absent means the file itself.
+  targetKind?: 'file' | 'directory'
 }
 
 // A tier is the harness's own configuration layer. `id` is prefixed with the harness so a row in
@@ -85,9 +88,12 @@ function under(declared: readonly string[], file: string): boolean {
 export function declaresWritePath(tier: Tier, category: Category, file: string): boolean {
   const declared = writePaths(tier, category)
   // A skill is a directory and OpenCode's plugin directory holds generated hook modules, so those
-  // two targets are roots and a mirror lands beneath them. Every other category names the file
-  // itself, so nothing below it can be a write.
-  if (category === 'skills' || category === 'hooks') return under(declared, file)
+  // two targets are roots and a mirror lands beneath them. Every other target names the file itself,
+  // so a descendant of it is not a write.
+  if (category === 'skills') return under(declared, file)
+  if (category === 'hooks' && tier.categoryPaths?.hooks?.targetKind === 'directory') {
+    return under(declared, file)
+  }
   return declared.includes(file)
 }
 

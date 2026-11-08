@@ -390,10 +390,13 @@ function targetLocation(plan: MirrorPlan, adapters: readonly Adapter[]): NativeA
   if (write === undefined) return null
   if (write.op !== 'writeAtPointer') return { file: write.file, pointer: '' }
   const segments = pointerSegments(write.pointer)
-  // A hook is addressed by the event it lands under, which is the same depth for every hook target:
-  // `hooks.<event>`.
+  // A hook row is one entry in that event's list, so the address the next scan reports is the first
+  // one this plan appends: `hooks.<event>.<index>`, where the index is the list's own length before
+  // the write.
   if (plan.category === 'hooks') {
-    return { file: write.file, pointer: segments.slice(0, 2).map(pointerSegment).join('.') }
+    const prior = Array.isArray(write.priorValue) ? write.priorValue.length : 0
+    const event = segments.slice(0, 2).map(pointerSegment).join('.')
+    return { file: write.file, pointer: `${event}.${prior}` }
   }
   const surface = adapters.find((adapter) => adapter.harness === plan.target.harness)?.mcpWrite
   if (surface === undefined) return null

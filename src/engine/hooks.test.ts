@@ -221,7 +221,10 @@ test('a Codex hook targeting OpenCode lands as generated plugin code, executable
   assert.equal(planned.writes.length, 1)
   const [write] = planned.writes
   assert.ok(write !== undefined && write.op === 'writeFile')
-  assert.equal(write.file, path.join(config.projectRoot, '.opencode', 'plugins', 'acm-codex-pre-tool-use.ts'))
+  // The module is named for the source's own address, so a second hook on this event cannot land on
+  // top of this one.
+  assert.equal(path.dirname(write.file), path.join(config.projectRoot, '.opencode', 'plugins'))
+  assert.match(path.basename(write.file), /^acm-codex-pre-tool-use-[0-9a-f]{8}\.ts$/)
   // The event became a plugin hook, and the command it runs is in the generated module.
   assert.match(write.content, /await ctx\.tool\.hook\("execute\.before"/)
   assert.match(write.content, /serena-hooks remind --client=codex/)
@@ -251,14 +254,19 @@ test('a generated module registers the callback OpenCode documents for that hook
   const tool = hookPlan(config, source, 'oc:project', 'hooks.PreToolUse.0')
   const [toolWrite] = tool.writes
   assert.ok(toolWrite !== undefined && toolWrite.op === 'writeFile')
-  assert.match(toolWrite.content, /ctx\.tool\.hook\("execute\.before", \(\) => \{/)
+  assert.match(toolWrite.content, /await ctx\.tool\.hook\("execute\.before", async \(event\) => \{/)
+  // Every command runs asynchronously, with the source's own default when it names no timeout, and
+  // receives the event as JSON on stdin.
+  assert.match(toolWrite.content, /const DEFAULT_TIMEOUT = 600_000/)
+  assert.match(toolWrite.content, /timeout \?\? DEFAULT_TIMEOUT/)
+  assert.match(toolWrite.content, /child\.stdin\?\.end\(JSON\.stringify\(event\)\)/)
 
   // The context hook owns the request's own parts, so the command's output becomes one of them.
   const context = hookPlan(config, source, 'oc:project', 'hooks.PreModelRequest.0')
   const [contextWrite] = context.writes
   assert.ok(contextWrite !== undefined && contextWrite.op === 'writeFile')
-  assert.match(contextWrite.content, /ctx\.session\.hook\("context", \(event\) => \{/)
-  assert.match(contextWrite.content, /event\.system\.push\(\{ type: 'text', text: execSync\(command, \{ timeout, encoding: 'utf8' \}\) \}\)/)
+  assert.match(contextWrite.content, /await ctx\.session\.hook\("context", async \(event\) => \{/)
+  assert.match(contextWrite.content, /event\.system\.push\(\{ type: 'text', text: output \}\)/)
 })
 
 test('event names are mapped per target, and an unmapped event is a gap with no write', () => {
@@ -356,4 +364,182 @@ test('a hook whose command carries a credential is a gap, and nothing is written
     { field: 'handlers.0.command', reason: 'credential', replacement: 'dropped' },
   ])
   assert.deepEqual(planned.security.secrets, [{ pointer: 'handlers.0.command', verdict: 'secret' }])
+})
+
+test('a Codex target keeps a matcher it can express, and two hooks on one event stay two modules', () => {
+  const config = fixture()
+  const source = writeCodexHooks(config, [
+    { event: 'PreToolUse', matcher: 'Bash', command: 'serena-hooks remind' },
+    { event: 'PreToolUse', command: 'serena-hooks plan-guard' },
+    { event: 'PreToolUse', command: 'serena-hooks reset' },
+  ])
+  discover(config)
+
+  // Codex is the one target with a matcher, so nothing is dropped and nothing is widened.
+  const planned = hookPlan(config, source, 'codex:project', 'hooks.PreToolUse.0')
+  const [write] = planned.writes
+  assert.ok(write !== undefined && write.op === 'writeAtPointer')
+  assert.deepEqual(write.value, [
+    { matcher: 'Bash', hooks: [{ type: 'command', command: 'serena-hooks remind' }] },
+  ])
+  assert.deepEqual(planned.equivalence.gaps, [])
+  assert.ok(planned.equivalence.carried.includes('matcher'))
+
+  // Two installations on one event get two modules, so the second cannot overwrite the first.
+  const first = hookPlan(config, source, 'oc:project', 'hooks.PreToolUse.1')
+  const second = hookPlan(config, source, 'oc:project', 'hooks.PreToolUse.2')
+  const files = [first.writes[0], second.writes[0]].map((entry) =>
+    entry !== undefined && entry.op === 'writeFile' ? entry.file : '',
+  )
+  assert.notEqual(files[0], files[1])
+  assert.match(path.basename(files[0] ?? ''), /^acm-codex-pre-tool-use-[0-9a-f]{8}\.ts$/)
+})
+
+test('an entry the target already holds is not appended twice', () => {
+  const config = fixture()
+  // One Codex group holding two handlers, and a Pi target that already holds the first of them.
+  const source = hooksFile(config, 'codex-user')
+  fs.writeFileSync(
+    source,
+    JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          {
+            hooks: [
+              { type: 'command', command: 'serena-hooks remind', timeout: 5 },
+              { type: 'command', command: 'serena-hooks plan-guard', timeout: 5 },
+            ],
+          },
+        ],
+      },
+    }),
+  )
+  const target = hooksFile(config, 'pi-project')
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(
+    target,
+    JSON.stringify({ hooks: { tool_call: [{ command: 'serena-hooks remind', timeout: 5000 }] } }),
+  )
+  discover(config)
+
+  // A group whose handlers partially overlap appends only what is missing.
+  const planned = hookPlan(config, source, 'pi:project')
+  const [write] = planned.writes
+  assert.ok(write !== undefined && write.op === 'writeAtPointer')
+  assert.deepEqual(write.value, [
+    { command: 'serena-hooks remind', timeout: 5000 },
+    { command: 'serena-hooks plan-guard', timeout: 5000 },
+  ])
+
+  // A second plan for the same installation finds everything in place and writes nothing.
+  fs.writeFileSync(target, JSON.stringify({ hooks: { tool_call: write.value } }))
+  discover(config)
+  const again = hookPlan(config, source, 'pi:project')
+  assert.equal(again.disposition.kind, 'alreadyPresent')
+  assert.deepEqual(again.writes, [])
+})
+
+test('a hook ancestor that is a literal refuses the plan instead of writing beneath it', () => {
+  const config = fixture()
+  writeCodexHooks(config, [{ event: 'PreToolUse', command: 'serena-hooks remind' }])
+  const target = hooksFile(config, 'codex-project')
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, JSON.stringify({ hooks: 'not-an-object' }))
+  discover(config)
+
+  const result = planMirror(
+    config,
+    listInstallations(config, { category: 'hooks' }).installations[0]?.id ?? '',
+    'codex:project',
+  )
+  assert.equal(result.kind, 'refused')
+  assert.match(result.kind === 'refused' ? result.reason : '', /is a literal/)
+})
+
+test('a status message or an inline assignment the scan will not call clean never reaches a plan', () => {
+  const config = fixture()
+  const file = hooksFile(config, 'codex-user')
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          {
+            hooks: [
+              { type: 'command', command: 'serena-hooks remind' },
+              { type: 'command', command: 'deploy --api_key=ghp_012345678901234567890123456789012345' },
+            ],
+          },
+        ],
+        SessionStart: [
+          {
+            hooks: [
+              { type: 'command', command: 'serena-hooks activate', statusMessage: 'ghp_012345678901234567890123456789012345' },
+            ],
+          },
+        ],
+      },
+    }),
+  )
+  discover(config)
+
+  const stored = listInstallations(config, { category: 'hooks' }).installations.map(
+    (row) => row.knownFieldsJson,
+  )
+  // Neither the assignment's value nor the status message reached the store.
+  assert.ok(stored.every((json) => !json.includes('ghp_')))
+  assert.ok(stored.some((json) => json.includes('[withheld: secret]')))
+
+  // The clean handler still lands; the assignment-bearing one is a gap, and the plan holds no value
+  // from it.
+  const planned = hookPlan(config, file, 'pi:user', 'hooks.PreToolUse.0')
+  const [write] = planned.writes
+  assert.ok(write !== undefined && write.op === 'writeAtPointer')
+  assert.deepEqual(write.value, [{ command: 'serena-hooks remind' }])
+  const gaps = planned.equivalence.gaps.map((gap) => gap.field)
+  assert.deepEqual(gaps, ['handlers.1.command'])
+
+  const withMessage = hookPlan(config, file, 'pi:user', 'hooks.SessionStart.0')
+  assert.ok(withMessage.equivalence.gaps.some((gap) => gap.reason === 'credential'))
+})
+
+test('a hooked handler keeps async where the target has it and reports it as a gap where it does not', () => {
+  const config = fixture()
+  const file = hooksFile(config, 'codex-user')
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          { hooks: [{ type: 'command', command: 'serena-hooks remind', async: true }] },
+        ],
+      },
+    }),
+  )
+  discover(config)
+
+  const kept = hookPlan(config, file, 'codex:project')
+  const [write] = kept.writes
+  assert.ok(write !== undefined && write.op === 'writeAtPointer')
+  assert.deepEqual(write.value, [
+    { hooks: [{ type: 'command', command: 'serena-hooks remind', async: true }] },
+  ])
+
+  const dropped = hookPlan(config, file, 'pi:user')
+  assert.deepEqual(dropped.equivalence.gaps, [
+    { field: 'handlers.0.async', reason: 'fieldAbsent', replacement: 'dropped' },
+  ])
+})
+
+test('an executable write alone is enough to keep a plan unverified', () => {
+  const config = fixture()
+  const source = writeCodexHooks(config, [{ event: 'PreToolUse', command: 'serena-hooks remind' }])
+  discover(config)
+
+  const planned = hookPlan(config, source, 'pi:user')
+  land(planned)
+  // No manual step left to explain the outcome: the executable flag alone decides it.
+  const verification = verifyPlan({ ...planned, manualSteps: [] })
+  assert.ok(verification.asserts.every((assertion) => assertion.holds))
+  assert.equal(verification.outcome, 'unverified')
 })

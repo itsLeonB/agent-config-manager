@@ -73,6 +73,34 @@ Choices worth knowing beyond the ticket:
   re-read at apply the way a copied tree is), so a hooks file edited since the scan refuses the plan
   rather than landing a command no classifier saw.
 
+### Review follow-up (inline comments)
+
+- **A generated module is named for its source installation** — `acm-<harness>-<event>-<hash of the
+  source's file and pointer>` — so two hooks on one event are two modules instead of the second
+  overwriting the first.
+- **The generated callback is async and carries a default.** Each command runs through `exec` with a
+  timeout (the source harness's own 600 s default when the handler names none), and the hook's event
+  is written to the command's stdin as JSON, because that is how a harness hook command is called. The
+  payload is OpenCode's event, not the source harness's, so the plan says that in a manual step rather
+  than pretending the two are the same document.
+- **Containment follows what the target is.** A hooks target is the file itself: `hooks.json` accepts
+  no descendant. OpenCode's plugin directory is a root a module lands beneath, declared as
+  `targetKind: 'directory'` rather than inferred from the category.
+- **A matcher is carried where the target has one.** This corrects the first landing's blanket gap:
+  Codex into Codex keeps `matcher`, and only Pi and OpenCode report it.
+- **The scan classifies a status message as well as a command**, and reads `NAME=value` assignments
+  inside a command by the name, so `export GH_TOKEN=…` is withheld exactly as a bare token is. The
+  planner reports a withheld status message as a credential gap and never writes a marker.
+- **`async` is retained.** A Codex handler's `async` is carried into a Codex target and reported as a
+  gap on the two that cannot express it, instead of being written synchronously under an async name.
+- **The append is reconciled, contained, and honest about comments.** Only entries the target does not
+  already hold are appended (a partially overlapping group cannot duplicate entries), an ancestor that
+  is not an object refuses the plan, and a rewrite of a non-empty event list names the comment inside
+  that list as lost — the same statement the OpenCode block rewrite makes.
+- **A landed hook plan records its first new entry's address** (`hooks.<event>.<index>`, the list's
+  length before the write), which is the row the next scan reports, so provenance and verification
+  reach the installation the apply created.
+
 Limits, stated rather than hidden:
 
 - **No client writes a hook today.** Every hook write is `executable`, and ticket 22's gate hands an

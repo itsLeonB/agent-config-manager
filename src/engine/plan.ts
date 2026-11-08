@@ -930,16 +930,17 @@ function buildHookPlan(input: PlanInput): PlanResult {
     mapped.push({ transform: 'rename', fields: ['event'], targetField: targetEvent })
   }
 
-  // A wildcard matcher is carried as it stands; anything narrower is this target's own gap, because
-  // writing the hook without it would fire where the source did not.
+  // A wildcard matcher is carried as it stands. A narrower one is carried only where the target can
+  // narrow a hook at all; on the other two it is their own gap, because writing the hook without it
+  // would fire where the source did not.
   const wildcard = facts.matcher === undefined || facts.matcher === '' || facts.matcher === '*'
-  if (wildcard) {
-    if (facts.matcher !== undefined) carried.push('matcher')
-  } else {
+  const keepsMatcher = wildcard || surface.holdsMatcher
+  if (facts.matcher !== undefined && keepsMatcher) carried.push('matcher')
+  if (!keepsMatcher) {
     gaps.push({ field: 'matcher', reason: 'fieldAbsent', replacement: 'dropped' })
     manualSteps.push({
       step: `narrow the mirrored hook in ${target.harness} to ${JSON.stringify(facts.matcher)} by hand`,
-      why: 'neither of the other targets has a matcher on a hook, so a write here would fire it wherever a tool runs rather than only on this one',
+      why: `${target.harness} has no matcher on a hook, so writing it here would fire it wherever a tool runs rather than only where the source narrowed it`,
     })
   }
 
@@ -967,8 +968,20 @@ function buildHookPlan(input: PlanInput): PlanResult {
       }
       return
     }
+    // A status message is free text the scan already classified: a value it would not call clean
+    // reached this row as its marker, and a marker is never written anywhere.
+    if (handler.statusMessage !== undefined) {
+      const message = storedVerdict(handler.statusMessage)
+      if (message !== 'clean') {
+        gaps.push({ field: `handlers.${index}.statusMessage`, reason: 'credential', replacement: 'dropped' })
+        secrets.push({ pointer: `handlers.${index}.statusMessage`, verdict: message })
+        if (gapDisposition('credential') === 'manualStep') {
+          manualSteps.push(credentialStep(target.harness, 'the hook'))
+        }
+      }
+    }
     // A handler field this target has no place for is a gap, never a silent drop.
-    for (const field of ['statusMessage', 'print'] as const) {
+    for (const field of ['statusMessage', 'print', 'async'] as const) {
       if (handler[field] !== undefined && !surface.holds.includes(field)) {
         gaps.push({ field: `handlers.${index}.${field}`, reason: 'fieldAbsent', replacement: 'dropped' })
       }
@@ -990,7 +1003,7 @@ function buildHookPlan(input: PlanInput): PlanResult {
   let targetNativeLocation = root
   // Nothing is written when the event has no counterpart, the matcher would have to be widened, or
   // every handler was a gap: the plan states that instead of writing a hook that behaves differently.
-  if (targetEvent !== undefined && wildcard && handlers.length > 0) {
+  if (targetEvent !== undefined && keepsMatcher && handlers.length > 0) {
     if (surface.kind === 'pointer') {
       const file = root
       const existing = readTargetFile(file)
@@ -1002,7 +1015,14 @@ function buildHookPlan(input: PlanInput): PlanResult {
       }
       const pointer = `hooks.${targetEvent}`
       targetNativeLocation = `${file}#${pointer}`
-      const current = existing.kind === 'parsed' ? resolvePointer(existing.document, pointer) : undefined
+      const document = existing.kind === 'parsed' ? existing.document : null
+      // An ancestor that is a literal or a list is not something an entry can be written into, and
+      // `hooks` is the one this category always needs.
+      const blocked = ancestorBlocker(document, pointer)
+      if (blocked !== null) {
+        return { kind: 'refused', reason: blocked }
+      }
+      const current = document === null ? undefined : resolvePointer(document, pointer)
       const list = z.array(planValueSchema).safeParse(current ?? [])
       if (!list.success) {
         return {
@@ -1019,14 +1039,23 @@ function buildHookPlan(input: PlanInput): PlanResult {
           reason: `${unclean} in ${file} holds a credential-shaped value, and appending to that list would carry it into the plan; move that command to the harness's own indirection by hand first`,
         }
       }
-      const added = surface.entries(handlers, facts.matcher)
+      // Only what is missing is appended: a group that overlaps the target's list partially would
+      // otherwise duplicate the entries that are already there.
+      const added = surface
+        .entries(handlers, facts.matcher)
+        .filter((entry) => !list.data.some((item) => JSON.stringify(item) === JSON.stringify(entry)))
       const value: PlanValue = [...list.data, ...added]
-      const already = added.every((entry) =>
-        list.data.some((item) => JSON.stringify(item) === JSON.stringify(entry)),
-      )
-      if (already) {
+      if (added.length === 0) {
         disposition = { kind: 'alreadyPresent', reason: `${file} already holds this hook at ${pointer}` }
       } else {
+        // The append is a rewrite of that event's list, so a comment written inside the list is not
+        // part of what the plan carries. Said out loud rather than discovered after the fact.
+        if (list.data.length > 0) {
+          manualSteps.push({
+            step: `review ${pointer} in ${file} once it has been written`,
+            why: 'the entry is added by rewriting that event\'s list, so a comment inside the list does not survive it; keep notes above the list or in a sibling key',
+          })
+        }
         writes.push({
           op: 'writeAtPointer',
           file,
@@ -1046,7 +1075,13 @@ function buildHookPlan(input: PlanInput): PlanResult {
       }
     } else {
       const plugin = surface.plugin(
-        { harness: source.harness, event: facts.event },
+        // The module is named for the source's own address, so two hooks on one event stay two
+        // modules instead of the second overwriting the first.
+        {
+          harness: source.harness,
+          event: facts.event,
+          location: `${source.nativeFile}#${source.nativePointer}`,
+        },
         targetEvent,
         handlers,
       )
@@ -1135,10 +1170,15 @@ function credentialStep(target: HarnessId, where: string): PlanManualStep {
 function carriedHandler(handler: HookHandler, holds: readonly HookHandlerField[]): HookCarried {
   const carried: HookCarried = { command: handler.command ?? '' }
   if (handler.timeout !== undefined) carried.timeoutMs = handler.timeout * 1000
-  if (handler.statusMessage !== undefined && holds.includes('statusMessage')) {
+  if (
+    handler.statusMessage !== undefined &&
+    holds.includes('statusMessage') &&
+    storedVerdict(handler.statusMessage) === 'clean'
+  ) {
     carried.statusMessage = handler.statusMessage
   }
   if (handler.print !== undefined && holds.includes('print')) carried.print = handler.print
+  if (handler.async !== undefined && holds.includes('async')) carried.async = handler.async
   return carried
 }
 
@@ -1174,6 +1214,10 @@ function hookSteps(harness: HarnessId): PlanManualStep[] {
     {
       step: 'review the generated plugin module, then restart OpenCode',
       why: 'OpenCode has no hook config: this module is executable code that runs the hook command, and plugins load at startup',
+    },
+    {
+      step: 'check that each mirrored command reads the payload it expects',
+      why: "a hook command receives its event as JSON on stdin, and what this module passes is OpenCode's own event rather than the source harness's, so a command that parses specific fields has to be checked",
     },
   ]
 }

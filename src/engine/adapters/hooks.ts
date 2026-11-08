@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { z } from 'zod'
-import { digestOfPath } from '../digest.ts'
-import { classify, withheldMarker } from '../secret.ts'
+import { digestOfBytes } from '../digest.ts'
+import { classify, withheldMarker, type Verdict } from '../secret.ts'
 import { stripJsonc } from './opencode/read.ts'
 import { declaredPaths, type DiscoveredInstallation, type Tier, type TierRead } from './types.ts'
 
@@ -20,6 +20,9 @@ const handlerSchema = z.object({
   timeout: z.number().optional(),
   statusMessage: z.string().optional(),
   print: z.boolean().optional(),
+  // Codex lets a handler run without holding the session; a target that cannot do that reports it
+  // as a gap rather than writing a synchronous hook under an async one's name.
+  async: z.boolean().optional(),
 })
 export type HookHandler = z.infer<typeof handlerSchema>
 
@@ -31,18 +34,43 @@ export const hookFactsSchema = z.object({
 export type HookFacts = z.infer<typeof hookFactsSchema>
 
 // A command is text like any other, and a literal token inside one would otherwise sit in the store
-// for `acm inspect` to print. Each is classified here, before it can reach known fields, exactly as
-// an instruction body is; a value that is not clean is persisted as its marker, and the planner then
-// reports the marker's verdict instead of writing the command anywhere.
+// for `acm inspect` to print. Each string is classified here, before it can reach known fields,
+// exactly as an instruction body is; a value that is not clean is persisted as its marker, and the
+// planner then reports the marker's verdict instead of writing the text anywhere.
 function cleanFacts(facts: HookFacts): HookFacts {
   return {
     ...facts,
     handlers: facts.handlers.map((handler, index) => {
-      if (handler.command === undefined) return handler
-      const { verdict } = classify(`handlers.${index}.command`, handler.command, [])
-      return verdict === 'clean' ? handler : { ...handler, command: withheldMarker(verdict) }
+      const clean: HookHandler = { ...handler }
+      if (handler.statusMessage !== undefined) {
+        const verdict = classify(`handlers.${index}.statusMessage`, handler.statusMessage, [])
+        if (verdict.verdict !== 'clean') clean.statusMessage = withheldMarker(verdict.verdict)
+      }
+      if (handler.command !== undefined) {
+        const verdict = commandVerdict(`handlers.${index}.command`, handler.command)
+        if (verdict !== 'clean') clean.command = withheldMarker(verdict)
+      }
+      return clean
     }),
   }
+}
+
+// A command carries a credential two ways: the text itself may be one (`curl -H "Authorization: …"`),
+// or it may assign one inline (`export GH_TOKEN=…`). The assignment name is what the classifier judges
+// the value by, so both are read before the command can be stored or written.
+const ASSIGNMENT = /([A-Za-z_][\w]*)\s*=\s*["']?([^\s"']+)/g
+
+function commandVerdict(pointer: string, command: string): Verdict {
+  const whole = classify(pointer, command, []).verdict
+  if (whole !== 'clean') return whole
+  let verdict: Verdict = 'clean'
+  for (const match of command.matchAll(ASSIGNMENT)) {
+    const [, name, value] = match
+    const assigned = classify(`${pointer}.${name ?? ''}`, value ?? '', []).verdict
+    if (assigned === 'secret') return 'secret'
+    if (assigned === 'suspect') verdict = 'suspect'
+  }
+  return verdict
 }
 
 // Which harness's hooks file this is: Codex's three-level `event → matcher group → handlers`, or the
@@ -53,19 +81,19 @@ export function readHookTier(tier: Tier, source: HookSource): TierRead {
   const installations: DiscoveredInstallation[] = []
   for (const file of declaredPaths(tier, 'hooks')) {
     if (!existsSync(file)) continue
-    let text: string
+    let bytes: Buffer
     try {
-      text = readFileSync(file, 'utf8')
+      bytes = readFileSync(file)
     } catch {
       return { health: 'unreadable', detail: `${file} could not be read`, installations: [] }
     }
-    const parsed = hookDocument(text, source)
+    const parsed = hookDocument(bytes.toString('utf8'), source)
     if (parsed.kind === 'invalid') {
       return { health: 'unreadable', detail: `${file}: ${parsed.detail}`, installations: [] }
     }
-    // The whole file is the source of every hook in it, so a file edited after the scan makes each
-    // of its plans stale — which is what stops a command the scan never classified from landing.
-    const digest = digestOfPath(file) ?? ''
+    // One read answers both questions — the text that is parsed and the bytes the digest names — so
+    // the digest can never describe a different read than the values it stands for.
+    const digest = digestOfBytes(bytes)
     for (const entry of parsed.entries) {
       installations.push({
         category: 'hooks',
