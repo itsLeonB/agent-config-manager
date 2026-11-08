@@ -17,6 +17,14 @@ function sources(dir: string): string[] {
   })
 }
 
+// Matched by path segment, not by suffix: `../engine/adapters/registry.ts` and the `#/…` alias are
+// the same breach as `../engine/plan.ts`.
+function forbidden(specifier: string): boolean {
+  return specifier
+    .split('/')
+    .some((segment) => FORBIDDEN.includes(segment))
+}
+
 function importedFrom(file: string): string[] {
   const text = fs.readFileSync(file, 'utf8')
   return [...text.matchAll(/(?:from|require\()\s*'([^']+)'/g)].flatMap((match) =>
@@ -29,8 +37,6 @@ test('the CLI and MCP faces import the service and never the engine internals', 
   const offenders = faces
     .flatMap(sources)
     .flatMap((file) => importedFrom(file).map((specifier) => ({ file, specifier })))
-    .filter(({ specifier }) =>
-      FORBIDDEN.some((name) => specifier === name || specifier.endsWith(`/${name}`)),
-    )
+    .filter(({ specifier }) => forbidden(specifier))
   assert.deepEqual(offenders, [])
 })
