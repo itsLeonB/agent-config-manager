@@ -48,13 +48,14 @@ Choices worth knowing beyond the ticket:
   both readers hand the vocabulary seconds and the surfaces convert once. A target reading
   milliseconds is a `unit` mapping on the plan; a target reading seconds carries the field, because
   no translation happened.
-- **A command is a plain string, so a credential in one stops the write.** Each handler command goes
-  through the classifier before it can reach the plan: a provider token or private-key block is a
-  `credential` gap with its own manual step and no write, and the generated module is put through the
-  whole-file classifier for the same reason. This is ticket 13's rule table applied to a category it
-  did not name, and the spec's invariant that no credential value leaves the engine is what asks for
-  it — not a hook-table decision. A command already sitting at the target's own pointer refuses the
-  plan, because appending would carry it into `priorValue`, which is shown verbatim.
+- **A command is a plain string, so a credential in one stops it at the scan.** Each handler command
+  is classified in the reader, before it can reach known fields: a value that is not clean is stored
+  as its marker and never as the text, exactly as an instruction body is. The planner then reports
+  the marker's verdict as a `credential` gap with its own manual step and no write, and the generated
+  module is put through the whole-file classifier for the same reason. This is ticket 13's rule table
+  applied to a category it did not name; the spec's invariant that no credential leaves the engine is
+  what asks for it. A command already sitting at the target's own pointer refuses the plan, because
+  appending would carry it into `priorValue`, which is shown verbatim.
 - **A handler field a target has no place for is a gap, not a silent drop.** `statusMessage` is
   Codex's, `print` is the bridge's, `mcp_tool` handlers are neither target's — each is named by
   pointer in `gaps[]`. The carried handler only holds what its target's `holds` list says.

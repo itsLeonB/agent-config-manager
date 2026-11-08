@@ -956,17 +956,14 @@ function buildHookPlan(input: PlanInput): PlanResult {
       gaps.push({ field: `handlers.${index}.command`, reason: 'fieldAbsent', replacement: 'dropped' })
       return
     }
-    // A command is the one hook value the classifier can read as a credential, and a literal token
-    // in it would travel to every harness the hook lands in.
-    const verdict = classify(`handlers.${index}.command`, handler.command, [])
-    if (verdict.verdict !== 'clean') {
+    // The scan stored a command it would not call clean as its marker, so what this reads is the
+    // verdict the classifier reached there — the value itself never reached the store.
+    const verdict = storedVerdict(handler.command)
+    if (verdict !== 'clean') {
       gaps.push({ field: `handlers.${index}.command`, reason: 'credential', replacement: 'dropped' })
-      secrets.push({ pointer: `handlers.${index}.command`, verdict: verdict.verdict })
+      secrets.push({ pointer: `handlers.${index}.command`, verdict })
       if (gapDisposition('credential') === 'manualStep') {
-        manualSteps.push({
-          step: `read the value this hook command needs through ${target.harness}'s own indirection, and keep it out of the hook`,
-          why: 'the command carries a credential-shaped value, and a mirror never writes one',
-        })
+        manualSteps.push(credentialStep(target.harness, 'the hook'))
       }
       return
     }
@@ -1061,10 +1058,7 @@ function buildHookPlan(input: PlanInput): PlanResult {
         gaps.push({ field: 'plugin', reason: 'credential', replacement: 'dropped' })
         secrets.push({ pointer: 'plugin', verdict })
         if (gapDisposition('credential') === 'manualStep') {
-          manualSteps.push({
-            step: `read the value this hook command needs through ${target.harness}'s own indirection, and keep it out of the generated module`,
-            why: 'the command carries a credential-shaped value, and a mirror never writes one',
-          })
+          manualSteps.push(credentialStep(target.harness, 'the generated module'))
         }
       } else {
         const existing = digestOfPath(file)
@@ -1124,6 +1118,15 @@ function buildHookPlan(input: PlanInput): PlanResult {
     targetNativeLocation,
     alsoReadBy: alsoReadBy(input.adapters, target.harness, targetNativeLocation.split('#')[0] ?? ''),
   })
+}
+
+// One manual step for every withheld hook value, whichever write it stopped: the human routes the
+// credential through the target harness's own indirection instead of the mirrored hook.
+function credentialStep(target: HarnessId, where: string): PlanManualStep {
+  return {
+    step: `read the value this hook command needs through ${target}'s own indirection, and keep it out of ${where}`,
+    why: 'the command carries a credential-shaped value, and a mirror never writes one',
+  }
 }
 
 // One source handler as the target will hold it: its command, the timeout in milliseconds whichever

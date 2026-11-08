@@ -345,6 +345,12 @@ test('a hook whose command carries a credential is a gap, and nothing is written
 
   const planned = hookPlan(config, source, 'pi:user')
 
+  // The command never reached the store: the scan persisted the verdict, not the value.
+  const [stored] = listInstallations(config, { category: 'hooks' }).installations
+  assert.ok(stored)
+  assert.doesNotMatch(stored.knownFieldsJson, /ghp_/)
+  assert.match(stored.knownFieldsJson, /\[withheld: secret\]/)
+
   assert.deepEqual(planned.writes, [])
   assert.deepEqual(planned.equivalence.gaps, [
     { field: 'handlers.0.command', reason: 'credential', replacement: 'dropped' },

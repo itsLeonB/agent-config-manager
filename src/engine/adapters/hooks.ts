@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { digestOfPath } from '../digest.ts'
+import { classify, withheldMarker } from '../secret.ts'
 import { stripJsonc } from './opencode/read.ts'
 import { declaredPaths, type DiscoveredInstallation, type Tier, type TierRead } from './types.ts'
 
@@ -28,6 +29,21 @@ export const hookFactsSchema = z.object({
   handlers: z.array(handlerSchema),
 })
 export type HookFacts = z.infer<typeof hookFactsSchema>
+
+// A command is text like any other, and a literal token inside one would otherwise sit in the store
+// for `acm inspect` to print. Each is classified here, before it can reach known fields, exactly as
+// an instruction body is; a value that is not clean is persisted as its marker, and the planner then
+// reports the marker's verdict instead of writing the command anywhere.
+function cleanFacts(facts: HookFacts): HookFacts {
+  return {
+    ...facts,
+    handlers: facts.handlers.map((handler, index) => {
+      if (handler.command === undefined) return handler
+      const { verdict } = classify(`handlers.${index}.command`, handler.command, [])
+      return verdict === 'clean' ? handler : { ...handler, command: withheldMarker(verdict) }
+    }),
+  }
+}
 
 // Which harness's hooks file this is: Codex's three-level `event → matcher group → handlers`, or the
 // flatter `hooks.<event>[]` of the Pi bridge, where one entry is one command.
@@ -58,7 +74,7 @@ export function readHookTier(tier: Tier, source: HookSource): TierRead {
         tierId: tier.id,
         nativeFile: file,
         nativePointer: entry.pointer,
-        knownFieldsJson: JSON.stringify(entry.facts),
+        knownFieldsJson: JSON.stringify(cleanFacts(entry.facts)),
         contentDigest: digest,
       })
     }

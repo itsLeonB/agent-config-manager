@@ -53,7 +53,8 @@ settled decisions.
   `discover()`, `listInstallations()`, `inspectInstallation()`, `planMirror()`, and
   `applyPlan()` / `verifyPlan()`; `src/engine/repo.ts` is the only module that calls `store.cjs`;
   `src/engine/plan.ts` builds the mirror plan document from a stored row and the target file alone
-  — plus, for a skill, the source tree it digests and scans — and writes nothing; `src/engine/apply.ts` executes exactly that document — one lock per store,
+  — plus whatever source its bytes would have to come from: the tree a skill copy digests, or the
+  file behind a body or a command the plan carries as a value — and writes nothing; `src/engine/apply.ts` executes exactly that document — one lock per store,
   every precondition read before the first byte, one file at a time, `partial` with no rollback
   when a write fails — and re-reads the target to verify it; `src/engine/edit.ts` is the
   pointer-level native editor, so a write lands only on the addresses the plan named and comments
