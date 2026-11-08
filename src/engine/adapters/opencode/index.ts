@@ -1,5 +1,6 @@
 import path from 'node:path'
 import type { EngineConfig } from '../../config.ts'
+import { HOOK_WRITE_SURFACES } from '../hook-write.ts'
 import { mcpInstallation } from '../mcp-facts.ts'
 import { MCP_WRITE_SURFACES } from '../mcp-write.ts'
 import { readInstructionTier } from '../instructions.ts'
@@ -23,6 +24,11 @@ export function openCodeTiers(config: EngineConfig): Tier[] {
   const projectSkills = path.join(projectRoot, '.agents', 'skills')
   const userAgentsMd = path.join(userConfigDir, 'AGENTS.md')
   const projectAgentsMd = path.join(projectRoot, 'AGENTS.md')
+  // Hooks here are plugin modules, so the location is a directory a mirror generates a module into.
+  // It is a write target only: a hook inside an existing plugin is code this engine cannot parse,
+  // which is why OpenCode claims no hooks reader at all.
+  const userPlugins = path.join(userConfigDir, 'plugins')
+  const projectPlugins = path.join(projectConfigDir, 'plugins')
   return [
     {
       id: 'oc:project',
@@ -43,6 +49,7 @@ export function openCodeTiers(config: EngineConfig): Tier[] {
           target: projectSkills,
         },
         instructions: { reads: [projectAgentsMd], target: projectAgentsMd },
+        hooks: { reads: [], target: projectPlugins },
       },
       writability: 'writable',
     },
@@ -61,6 +68,7 @@ export function openCodeTiers(config: EngineConfig): Tier[] {
           target: userSkills,
         },
         instructions: { reads: [userAgentsMd], target: userAgentsMd },
+        hooks: { reads: [], target: userPlugins },
       },
       writability: 'writable',
     },
@@ -86,6 +94,7 @@ export function createOpenCodeAdapter(config: EngineConfig): Adapter {
       instructions: { read: readInstructionTier },
     },
     mcpWrite: MCP_WRITE_SURFACES.opencode,
+    hookWrite: HOOK_WRITE_SURFACES.opencode,
   }
 }
 

@@ -122,6 +122,14 @@ that slice.
   source shares its scope bucket, `writeFile` across buckets — with a tier declaring what it reads per
   category and where its mirror lands, and `verify.asserts[]` gaining a digest form for what has no
   address inside it. Ticket 22's unperformable-op gate now names `runCommand` alone.
+- [Hooks across three different methods](issues/24-hooks.md): one hook reader per declarative source
+  (Codex's `event → matcher group → handlers`, the Pi bridge's flat `hooks.<event>[]`) and one event
+  table that groups an event under all three harnesses' names, so a rename is looked up by any
+  spelling instead of copied. A target takes a pointer write into its own hooks file, or — OpenCode,
+  which has no hook config — generated `Plugin.define` code asserted by digest. Timeouts normalise to
+  seconds at the reader; a target reading milliseconds is the one `unit` mapping. An unmapped event
+  or a widened matcher is a gap that writes nothing; every command-carrying write is `executable`, so
+  no non-eliciting client writes a hook and nothing generated can ever verify.
 - [Minimal MCP tool surface and a worked mirror example](issues/09-mcp-tool-surface.md): **five tools** —
   `list_installations(category?, harness?, scope?, fresh?)` (folds BRIEF's discovery + inventory
   groups; harness rows ride along because a target must be a writable existing tier),

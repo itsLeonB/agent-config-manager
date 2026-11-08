@@ -1,4 +1,5 @@
 import path from 'node:path'
+import type { HookWriteSurface } from './hook-write.ts'
 import type { McpWriteSurface } from './mcp-write.ts'
 
 export const CATEGORIES = ['mcp', 'skills', 'instructions', 'hooks'] as const
@@ -11,9 +12,11 @@ export type Writability = (typeof WRITABILITIES)[number]
 export type TierHealthStatus = 'ok' | 'unreadable'
 
 // A category whose surface is not one parsed config file: a skill is a directory tree, an
-// instruction file is markdown. `reads` is every location the harness loads, so one declaration
-// answers both "where may a plan write" and "who else reads this"; `target` is where a mirror into
-// this tier lands, and is always one of the reads.
+// instruction file is markdown, and a hook is config of its own. `reads` is every location the
+// harness loads, so one declaration answers both "where may a plan write" and "who else reads
+// this"; `target` is where a mirror into this tier lands. It is one of the reads, except for a hook
+// target that is code: OpenCode reads hooks as plugin modules it cannot parse, so that one declares
+// a write location and no read.
 export interface CategoryPaths {
   reads: readonly string[]
   target: string
@@ -28,7 +31,7 @@ export interface Tier {
   rank: number
   scopeBucket: ScopeBucket
   configPaths: readonly string[]
-  categoryPaths?: Partial<Record<'skills' | 'instructions', CategoryPaths>>
+  categoryPaths?: Partial<Record<'skills' | 'instructions' | 'hooks', CategoryPaths>>
   writability: Writability
 }
 
@@ -44,7 +47,7 @@ export function declaredPaths(tier: Tier, category: Category): readonly string[]
     case 'instructions':
       return tier.categoryPaths?.instructions?.reads ?? []
     case 'hooks':
-      return []
+      return tier.categoryPaths?.hooks?.reads ?? []
   }
 }
 
@@ -60,14 +63,17 @@ export function writePaths(tier: Tier, category: Category): readonly string[] {
       const target = tier.categoryPaths?.[category]?.target
       return target === undefined ? [] : [target]
     }
-    case 'hooks':
-      return []
+    case 'hooks': {
+      const target = tier.categoryPaths?.hooks?.target
+      return target === undefined ? [] : [target]
+    }
   }
 }
 
 // A write may reach a declared path itself or anything beneath it: a mirrored skill is
-// `<root>/<name>`, and the root is what the tier declares. Both sides are resolved before the
-// comparison, so a `..` segment cannot walk out of a declared root on paper.
+// `<root>/<name>` and a generated hook module is `<root>/<name>.ts`, and the root is what the tier
+// declares. Both sides are resolved before the comparison, so a `..` segment cannot walk out of a
+// declared root on paper.
 function under(declared: readonly string[], file: string): boolean {
   const lexical = path.resolve(file)
   return declared.some((entry) => {
@@ -78,9 +84,10 @@ function under(declared: readonly string[], file: string): boolean {
 
 export function declaresWritePath(tier: Tier, category: Category, file: string): boolean {
   const declared = writePaths(tier, category)
-  // A skill is a directory, so its target is a root and a mirror lands beneath it. Every other
-  // category names the file itself, so nothing below it can be a write.
-  if (category === 'skills') return under(declared, file)
+  // A skill is a directory and OpenCode's plugin directory holds generated hook modules, so those
+  // two targets are roots and a mirror lands beneath them. Every other category names the file
+  // itself, so nothing below it can be a write.
+  if (category === 'skills' || category === 'hooks') return under(declared, file)
   return declared.includes(file)
 }
 
@@ -90,7 +97,7 @@ export function declaresReadPath(tier: Tier, file: string): boolean {
 
 export function mirrorTarget(
   tier: Tier,
-  category: 'skills' | 'instructions',
+  category: 'skills' | 'instructions' | 'hooks',
 ): string | undefined {
   return tier.categoryPaths?.[category]?.target
 }
@@ -126,4 +133,7 @@ export interface Adapter {
   // What this harness can write for a category a planner covers. A category with no surface is
   // read-only here, and a mirror into it is refused as caller input rather than planned.
   mcpWrite?: McpWriteSurface
+  // Hooks are three different methods: two harnesses take a pointer write into their own hooks
+  // file, and OpenCode takes generated plugin code. A target with no surface is not a hook target.
+  hookWrite?: HookWriteSurface
 }

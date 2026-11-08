@@ -460,8 +460,9 @@ written by a mirror.
 
 Event names are renamed, not copied, and any event with no counterpart is a `fieldAbsent` gap. Codex's
 three-level `event → matcher group → handlers` shape has no equivalent on either target, so a
-non-`*` matcher is always its own gap. Every write carrying a command is `executable`, needs its own
-tick, and can never land `verified`. OpenCode is a hook target but never a hook source (a hook inside
+non-`*` matcher is always its own gap. A hook whose event has no counterpart, or whose matcher would
+have to be widened, is a gap with no write at all — a plan never broadens a hook to make it land.
+Every write carrying a command is `executable`, needs its own tick, and can never land `verified`. OpenCode is a hook target but never a hook source (a hook inside
 an existing plugin is code we cannot parse): its `read` verdict is `manual` while `write` is
 supported — per-verb verdicts.
 
