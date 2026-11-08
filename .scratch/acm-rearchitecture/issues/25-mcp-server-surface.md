@@ -57,8 +57,9 @@ Choices worth knowing beyond the ticket:
   so the behaviour is assertable at Seam A, where `engine.test.ts` now pins the store-first default and
   the re-scan.
 - **The import rule is a test.** `src/mcp/imports.test.ts` walks `src/cli` and `src/mcp` and fails when
-  either imports `repo.ts`, `plan.ts`, or anything under `adapters/`, which is spec §11's "one
-  enforceable import rule" rather than prose.
+  either imports `repo.ts`, `plan.ts`, or anything under `adapters/` — by path segment, and through
+  every spelling (`from`, a re-export, `require`, and the dynamic `import()` the CLI uses) — which is
+  spec §11's "one enforceable import rule" rather than prose.
 - **The smoke test is Seam C only.** `src/mcp/server.test.ts` spawns `process.execPath` plus the path
   `package.json`'s `bin.acm` names — the bin a harness pins, not a source file the test picked — with
   `["mcp","serve"]`, a working directory that is neither the home nor the project, and

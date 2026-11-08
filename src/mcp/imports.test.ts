@@ -27,7 +27,9 @@ function forbidden(specifier: string): boolean {
 
 function importedFrom(file: string): string[] {
   const text = fs.readFileSync(file, 'utf8')
-  return [...text.matchAll(/(?:from|require\()\s*'([^']+)'/g)].flatMap((match) =>
+  // Every spelling a face can reach a module by: a static import, a re-export, a `require`, and the
+  // dynamic `import()` the CLI uses to load the MCP face.
+  return [...text.matchAll(/(?:from|import\(|require\()\s*'([^']+)'/g)].flatMap((match) =>
     match[1] === undefined ? [] : [match[1]],
   )
 }
