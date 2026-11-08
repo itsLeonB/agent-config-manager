@@ -101,6 +101,17 @@ function piServers(config: EngineConfig, servers: Record<string, PiServerFixture
   )
 }
 
+// The bin the package declares is what a harness pins, so the smoke test spawns that path rather
+// than a source file of its own choosing.
+// shortcut: the bin is the TypeScript entry until a build lands; when a bundle exists this follows
+// the bin field to it.
+function binPath(): string {
+  const manifest = z
+    .object({ bin: z.object({ acm: z.string() }) })
+    .parse(JSON.parse(fs.readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')))
+  return fileURLToPath(new URL(`../../${manifest.bin.acm}`, import.meta.url))
+}
+
 function piSourceFile(config: EngineConfig): string {
   return path.join(config.home, '.pi', 'agent', 'mcp.json')
 }
@@ -134,7 +145,7 @@ async function connect(
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-mcp-cwd-'))
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [fileURLToPath(new URL('../cli/main.ts', import.meta.url)), 'mcp', 'serve'],
+    args: [binPath(), 'mcp', 'serve'],
     cwd,
     env: childEnv(config),
     stderr: 'pipe',
@@ -199,6 +210,11 @@ test('a client that initialises and lists tools sees exactly the five settled to
     assert.deepEqual(propertiesOf('list_installations'), ['category', 'fresh', 'harness', 'scope'])
     assert.deepEqual(propertiesOf('inspect_installation'), ['installationId'])
     assert.deepEqual(propertiesOf('plan_mirror'), ['installationId', 'target'])
+    // The target is the settled pair, not a joined string a second tool would have to re-split.
+    const target = z
+      .object({ properties: z.object({ target: z.object({ properties: z.record(z.string(), z.json()) }) }) })
+      .parse(byName.get('plan_mirror')?.inputSchema)
+    assert.deepEqual(Object.keys(target.properties.target.properties).sort(), ['harness', 'tierId'])
     assert.deepEqual(propertiesOf('apply_plan'), ['onConflict', 'plan'])
     assert.deepEqual(propertiesOf('verify_plan'), ['plan'])
   } finally {
@@ -228,8 +244,23 @@ test('a plan document round-trips from plan to apply to verify, and the target c
     assert.equal(inspected.inspection.installation.name, 'serena')
     assert.ok(inspected.inspection.leaves.some((leaf) => leaf.pointer === 'command' && leaf.value === 'serena'))
 
-    const planned = await call(client, 'plan_mirror', { installationId: id, target: 'codex:user' }, mirrorAnswerSchema)
+    const planned = await call(
+      client,
+      'plan_mirror',
+      { installationId: id, target: { harness: 'codex', tierId: 'codex:user' } },
+      mirrorAnswerSchema,
+    )
     assert.equal(planned.kind, 'plan', String(planned.reason ?? ''))
+    // A pair whose halves disagree names no tier, and the refusal reads like the planner's own.
+    const mismatched = await call(
+      client,
+      'plan_mirror',
+      { installationId: id, target: { harness: 'opencode', tierId: 'codex:user' } },
+      mirrorAnswerSchema,
+    )
+    assert.equal(mismatched.kind, 'refused')
+    assert.match(String(mismatched.reason), /is not a tier of opencode/)
+
     const plan = planDocument.parse(planned.plan)
     assert.equal(planFields.parse(plan).security.grade, 'safe')
 
@@ -261,7 +292,12 @@ async function riskyPlan(
   config: EngineConfig,
 ): Promise<z.infer<typeof planDocument>> {
   const id = sourceId(await call(client, 'list_installations', { fresh: true }, listingSchema), config)
-  const answer = await call(client, 'plan_mirror', { installationId: id, target: 'pi:project' }, mirrorAnswerSchema)
+  const answer = await call(
+    client,
+    'plan_mirror',
+    { installationId: id, target: { harness: 'pi', tierId: 'pi:project' } },
+    mirrorAnswerSchema,
+  )
   assert.equal(answer.kind, 'plan', String(answer.reason ?? ''))
   const plan = planDocument.parse(answer.plan)
   assert.equal(planFields.parse(plan).security.grade, 'risky')
@@ -334,5 +370,23 @@ test('a client that declared elicitation is asked once, and its answer decides t
     assert.equal(fs.existsSync(path.join(declined.projectRoot, '.pi', 'mcp.json')), false)
   } finally {
     await declining.close()
+  }
+
+  // An accept that carries no form content has ticked nothing: the dialog is per flag, so it is a no.
+  const empty = fixture()
+  piServers(empty, commandRetrieval)
+  const silent = await connect(empty, () => ({ action: 'accept' }))
+  try {
+    const applied = await call(
+      silent.client,
+      'apply_plan',
+      { plan: await riskyPlan(silent.client, empty) },
+      applySchema,
+    )
+    assert.equal(applied.outcome, 'declined', String(applied.reason ?? ''))
+    assert.deepEqual(applied.landed, [])
+    assert.equal(fs.existsSync(path.join(empty.projectRoot, '.pi', 'mcp.json')), false)
+  } finally {
+    await silent.close()
   }
 })

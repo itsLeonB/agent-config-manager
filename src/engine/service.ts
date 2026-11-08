@@ -92,6 +92,9 @@ export interface ListFilter {
   harness?: string
   scope?: string
   includeRemoved?: boolean
+  // A re-scan before answering. Staleness can never reach a write, so this is the caller's choice
+  // and the default is the stored snapshot.
+  fresh?: boolean
 }
 
 export interface Inventory {
@@ -117,6 +120,7 @@ export interface HarnessSummary {
 }
 
 export function listInstallations(config: EngineConfig, filter: ListFilter): Inventory {
+  if (filter.fresh === true) discover(config)
   const inventory = readInventory(config.storePath, filter)
   return {
     // The scan time comes from tier health, not from the rows being listed: a filter that matches

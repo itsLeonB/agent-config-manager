@@ -3,7 +3,6 @@ import { z } from 'zod'
 import type { EngineConfig } from '../engine/config.ts'
 import {
   applyPlanAsking,
-  discover,
   inspectInstallation,
   listInstallations,
   planMirror,
@@ -59,11 +58,10 @@ async function askHuman(server: McpServer, request: ConsentRequest): Promise<Con
   })
   const ticked = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]))
   const accepted = ticked.safeParse(result.content ?? {})
-  return result.action === 'accept' &&
-    accepted.success &&
-    Object.values(accepted.data).every((value) => value === true)
-    ? 'accept'
-    : 'decline'
+  // Every flag is asked for by name, so an accept carrying no form content has ticked nothing.
+  const tickedAll =
+    accepted.success && Object.keys(ticks).every((flag) => accepted.data[flag] === true)
+  return result.action === 'accept' && tickedAll ? 'accept' : 'decline'
 }
 
 // The five tools of the settled surface, each one a thin call into the service. `elicitInput` is
@@ -84,11 +82,8 @@ export function createRouter(config: EngineConfig): McpServer {
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ category, harness, scope, fresh }) => {
-      // A stale listing can never reach a write, so a re-scan is the caller's choice.
-      if (fresh === true) discover(config)
-      return answer(JSON.stringify(listInstallations(config, { category, harness, scope }), null, 2))
-    },
+    async ({ category, harness, scope, fresh }) =>
+      answer(JSON.stringify(listInstallations(config, { category, harness, scope, fresh }), null, 2)),
   )
 
   server.registerTool(
@@ -106,10 +101,30 @@ export function createRouter(config: EngineConfig): McpServer {
     {
       description:
         'Build the plan document for moving one installation into a target tier. Writes nothing: carry the document back to apply_plan. Read-only.',
-      inputSchema: { installationId: z.string().min(1), target: z.string().min(1).describe('<harness:tier>, such as codex:user') },
+      inputSchema: {
+        installationId: z.string().min(1),
+        target: z.object({ harness: z.string().min(1), tierId: z.string().min(1) }),
+      },
       annotations: { readOnlyHint: true },
     },
-    async ({ installationId, target }) => answer(JSON.stringify(planMirror(config, installationId, target), null, 2)),
+    async ({ installationId, target }) => {
+      // A tier's own id already carries its harness, so the pair is checked against the tiers that
+      // harness declares rather than joined back into a reference: a pair that disagrees names no
+      // tier, and a refusal is the same document shape as the planner's own.
+      const tiers = listInstallations(config, { harness: target.harness }).harnesses.flatMap(
+        (summary) => summary.tiers,
+      )
+      if (!tiers.some((tier) => tier.id === target.tierId)) {
+        return answer(
+          JSON.stringify(
+            { kind: 'refused', reason: `${target.tierId} is not a tier of ${target.harness}` },
+            null,
+            2,
+          ),
+        )
+      }
+      return answer(JSON.stringify(planMirror(config, installationId, target.tierId), null, 2))
+    },
   )
 
   server.registerTool(
