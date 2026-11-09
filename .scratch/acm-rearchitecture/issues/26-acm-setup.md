@@ -26,12 +26,19 @@ executed by the same `applyPlan`, so there is no second write path and no setup-
 Choices worth knowing beyond the ticket:
 
 - **The source is the tool itself, and it is a canonical MCP entry.** `selfSource()` hands the
-  planner `{transport: 'stdio', command: <bin>, args: ['mcp', 'serve']}` with an empty
-  `installationId`, empty `harness`/`tierId`, and `nativeFile` the bin path: no scan has to have run
-  first, and the id cannot collide with a store row (`sha256:<digest>`). `transport` is stated
-  because OpenCode's local entries require `type: "local"`; the other two infer it and write nothing
-  for it. Nothing writes `cwd`, which is what "no working directory" means in the document rather
-  than in a comment.
+  planner `{transport: 'stdio', command: <bin>, args: ['mcp', 'serve'], enabled: true}` with an
+  empty `installationId`, empty `harness`/`tierId`, and `nativeFile` the bin path: no scan has to
+  have run first, and the id cannot collide with a store row (`sha256:<digest>`). `transport` is
+  stated because OpenCode's local entries require `type: "local"`; the other two infer it and write
+  nothing for it. `enabled` states the intent of an install, so an entry somebody disabled is not
+  reported as already present while the harness never starts it — it comes back as a conflict naming
+  `enabled`, and `--on-conflict replace` repairs it. Nothing writes `cwd`, which is what "no working
+  directory" means in the document rather than in a comment.
+- **A bin a harness could not spawn is refused, not recorded.** `acm setup` records
+  `realpathSync(process.argv[1])` — what this process was started as — and only after `X_OK`
+  confirms a harness could execute it. `src/cli/main.ts` is unexecutable in a checkout, so
+  `bun run acm -- setup` refuses and says to install `acm` and run that; the alternative is a
+  harness entry that fails with `EACCES` while setup reports success.
 - **An empty source id is recorded as `null`, not invented.** `stampMirror` sets
   `mirrored_from_id`, which is a foreign key to `installations`; a provenance edge to a row that
   does not exist fails the write. `MirrorRecord.sourceInstallationId` is now `string | null`, and
@@ -47,7 +54,10 @@ Choices worth knowing beyond the ticket:
   nothing; the CLI prints `already present` from the disposition.
 - **A read-only target is refused by apply's existing preflight**, per harness. Each harness's plan
   is applied on its own, so one refusal leaves the other two installed and reported on their own
-  lines; the exit code is non-zero because a harness did not settle.
+  lines; the exit code is non-zero because a harness did not settle. A harness whose writes landed
+  but whose verification failed is printed as `verification failed` and also exits non-zero; a
+  recording failure is caught per harness, so its landed writes stay where they are and the other
+  two still install.
 - **Pointer writes now create their directory.** `editPointers` in `apply.ts` did not `mkdir` where
   `writeWhole` did, so a first install into a machine that has never run OpenCode
   (`~/.config/opencode` absent) failed after preflight had approved it. One `mkdirSync` fixes the
@@ -58,4 +68,6 @@ Choices worth knowing beyond the ticket:
 
 Tests are `src/engine/setup.test.ts`: the three entries' bytes, the harmless second run, the
 inventory rows afterwards, a read-only target refused beside two landed ones, a missing config
-directory, and the CLI's `argv[1]`-as-bin path.
+directory, a bin that cannot be spawned, and — with the checkout's bin made executable for the
+duration — the entry the CLI wrote, spawned from the Pi config's own `command`/`args` and answered
+over MCP with the five tools.

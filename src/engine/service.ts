@@ -317,7 +317,26 @@ function setupHarness(
   }
   // The same document a `mirror` would hand a caller, applied through the same executor: every
   // precondition, containment check and verification is the one every other write gets.
-  return { harness, tierId: tier.id, plan: planned.plan, applied: applyPlan(config, planned.plan, options), refused: null }
+  try {
+    return {
+      harness,
+      tierId: tier.id,
+      plan: planned.plan,
+      applied: applyPlan(config, planned.plan, options),
+      refused: null,
+    }
+  } catch (caught) {
+    // Recording throws after the writes landed, and one harness's failed audit row must not keep the
+    // other two from installing: what landed is left where it is and the message says as much.
+    const detail = caught instanceof Error ? caught.message : 'unknown error'
+    return {
+      harness,
+      tierId: tier.id,
+      plan: planned.plan,
+      applied: null,
+      refused: `the writes may have landed but this harness could not be recorded: ${detail}`,
+    }
+  }
 }
 
 function selfSource(bin: string, scope: ScopeBucket): PlanSource {
@@ -333,8 +352,15 @@ function selfSource(bin: string, scope: ScopeBucket): PlanSource {
     nativeFile: bin,
     nativePointer: '',
     // `transport` is stated so OpenCode gets the `type: "local"` its local entries require; the
-    // other two infer it from `command` and write nothing for it.
-    knownFieldsJson: JSON.stringify({ transport: 'stdio', command: bin, args: ACM_SERVER_ARGS }),
+    // other two infer it from `command` and write nothing for it. `enabled` states the intent of an
+    // install, so an entry somebody disabled is repaired instead of reported as already present
+    // while the harness never starts it.
+    knownFieldsJson: JSON.stringify({
+      transport: 'stdio',
+      command: bin,
+      args: ACM_SERVER_ARGS,
+      enabled: true,
+    }),
     contentDigest: '',
     origin: 'declared by `acm setup`, not read from a scan',
   }

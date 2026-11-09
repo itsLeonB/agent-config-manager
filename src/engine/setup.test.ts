@@ -5,6 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { parse as parseToml } from 'smol-toml'
 import type { EngineConfig } from './config.ts'
 import { stripJsonc } from './adapters/opencode/read.ts'
@@ -45,7 +47,30 @@ function readJson(file: string): { mcpServers?: Record<string, Entry>; mcp?: { s
   return JSON.parse(stripJsonc(fs.readFileSync(file, 'utf8')))
 }
 
-type Entry = { command: string | string[]; args?: string[]; type?: string }
+type Entry = { command: string | string[]; args?: string[]; type?: string; enabled?: boolean; disabled?: boolean }
+
+// The CLI's own environment: every root is the fixture's, so nothing reaches the real home, and
+// `CODEX_HOME` is stated for the same reason — an ambient one would point Codex elsewhere.
+function cliEnv(config: EngineConfig) {
+  return {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    ),
+    ACM_HOME: config.home,
+    ACM_PROJECT_ROOT: config.projectRoot,
+    ACM_STORE: config.storePath,
+    CODEX_HOME: path.join(config.home, '.codex'),
+  }
+}
+
+// The bin sees itself as `argv[1]`, which is what setup records and what a harness would spawn, so
+// the entry is run as the script rather than an import.
+function runCli(cli: string, config: EngineConfig, args: string[]) {
+  return spawnSync(process.execPath, [cli, 'setup', ...args], {
+    encoding: 'utf8',
+    env: cliEnv(config),
+  })
+}
 
 test('setup writes the absolute bin path and the server arguments into all three harnesses', () => {
   const config = fixture()
@@ -63,13 +88,13 @@ test('setup writes the absolute bin path and the server arguments into all three
   // One entry per harness, exactly as the spec settles it: the absolute bin plus the server
   // arguments, and no working directory for a harness to spawn it from.
   assert.deepEqual(readJson(piFile(config)).mcpServers, {
-    acm: { command: BIN, args: ['mcp', 'serve'] },
+    acm: { command: BIN, args: ['mcp', 'serve'], enabled: true },
   })
   assert.deepEqual(parseToml(fs.readFileSync(codexFile(config), 'utf8')), {
-    mcp_servers: { acm: { command: BIN, args: ['mcp', 'serve'] } },
+    mcp_servers: { acm: { command: BIN, args: ['mcp', 'serve'], enabled: true } },
   })
   assert.deepEqual(readJson(openCodeFile(config)).mcp, {
-    servers: { acm: { type: 'local', command: [BIN, 'mcp', 'serve'] } },
+    servers: { acm: { type: 'local', command: [BIN, 'mcp', 'serve'], disabled: false } },
   })
 })
 
@@ -118,7 +143,7 @@ test('ACM is an ordinary MCP installation in the inventory afterwards', () => {
         'mcp',
         'user',
         file,
-        JSON.stringify({ transport: 'stdio', command: BIN, args: ['mcp', 'serve'] }),
+        JSON.stringify({ transport: 'stdio', command: BIN, args: ['mcp', 'serve'], enabled: true }),
       ])
       .sort(),
   )
@@ -153,40 +178,69 @@ test('setup installs into a config directory that does not exist yet', () => {
   setupSelf(config, BIN)
 
   assert.deepEqual(readJson(openCodeFile(config)).mcp, {
-    servers: { acm: { type: 'local', command: [BIN, 'mcp', 'serve'] } },
+    servers: { acm: { type: 'local', command: [BIN, 'mcp', 'serve'], disabled: false } },
   })
 })
 
-test('the CLI installs the absolute path of the bin it was run as', () => {
+test('the CLI installs the absolute path of the bin it was run as, and that entry speaks MCP', async () => {
   const config = fixture()
   const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
-  const run = () =>
-    spawnSync(process.execPath, [cli, 'setup', '--json'], {
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        ACM_HOME: config.home,
-        ACM_PROJECT_ROOT: config.projectRoot,
-        ACM_STORE: config.storePath,
-      },
+  // A harness spawns the entry itself, so the entry has to be able to start: the bin in this
+  // checkout is the TypeScript file, which git keeps unexecutable.
+  fs.chmodSync(cli, 0o755)
+  try {
+    const first = runCli(cli, config, [])
+    assert.equal(first.status, 0, first.stderr)
+    const entry = readJson(piFile(config)).mcpServers?.acm
+    assert.deepEqual(entry, { command: fs.realpathSync(cli), args: ['mcp', 'serve'], enabled: true })
+
+    // The launch the config names is the launch that is tried: nothing here knows the bin path.
+    const transport = new StdioClientTransport({
+      command: fs.realpathSync(cli),
+      args: ['mcp', 'serve'],
+      env: cliEnv(config),
+      stderr: 'pipe',
     })
+    const client = new Client({ name: 'acm-setup-test', version: '0.0.0' })
+    await client.connect(transport)
+    try {
+      const tools = await client.listTools()
+      assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
+        'apply_plan',
+        'inspect_installation',
+        'list_installations',
+        'plan_mirror',
+        'verify_plan',
+      ])
+    } finally {
+      await client.close()
+    }
 
-  const first = run()
+    const second = runCli(cli, config, ['--json'])
+    assert.equal(second.status, 0, second.stderr)
+    const report: SetupReport = JSON.parse(second.stdout)
+    assert.deepEqual(
+      report.harnesses.map((harness) => [harness.plan?.disposition.kind, harness.applied?.landed.length]),
+      [
+        ['alreadyPresent', 0],
+        ['alreadyPresent', 0],
+        ['alreadyPresent', 0],
+      ],
+    )
+  } finally {
+    fs.chmodSync(cli, 0o644)
+  }
+})
 
-  assert.equal(first.status, 0, first.stderr)
-  assert.deepEqual(readJson(piFile(config)).mcpServers?.acm, {
-    command: fs.realpathSync(cli),
-    args: ['mcp', 'serve'],
-  })
-  const second = run()
-  assert.equal(second.status, 0, second.stderr)
-  const report: SetupReport = JSON.parse(second.stdout)
-  assert.deepEqual(
-    report.harnesses.map((harness) => [harness.plan?.disposition.kind, harness.applied?.landed.length]),
-    [
-      ['alreadyPresent', 0],
-      ['alreadyPresent', 0],
-      ['alreadyPresent', 0],
-    ],
-  )
+test('the CLI refuses a bin that a harness could not spawn, and writes nothing', () => {
+  const config = fixture()
+  const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
+  fs.chmodSync(cli, 0o644)
+
+  const run = runCli(cli, config, [])
+
+  assert.notEqual(run.status, 0)
+  assert.match(run.stderr, /not executable/)
+  assert.equal(fs.existsSync(piFile(config)), false)
+  assert.equal(fs.existsSync(codexFile(config)), false)
 })

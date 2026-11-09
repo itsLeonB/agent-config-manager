@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util'
-import { readFileSync, realpathSync } from 'node:fs'
+import { accessSync, constants, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import {
@@ -12,7 +12,7 @@ import {
   setupSelf,
   verifyPlanDocument,
 } from '../engine/service.ts'
-import type { Inspection, SetupReport } from '../engine/service.ts'
+import type { Inspection, SetupHarness, SetupReport } from '../engine/service.ts'
 import type { InstallationRow } from '../server/store.cjs'
 import type { Json } from '../types/dashboard'
 
@@ -280,14 +280,37 @@ function setup(argv: string[]): number {
     return 1
   }
   // A harness spawns what this process was started as, never what `PATH` resolves later, so the
-  // entry records the absolute path of this bin.
+  // entry records the absolute path of this bin — and only when that path can be launched at all.
   const bin = realpathSync(path.resolve(process.argv[1]))
+  try {
+    accessSync(bin, constants.X_OK)
+  } catch {
+    process.stderr.write(
+      `refused: ${printable(bin)} is not executable, so a harness could not spawn it; install acm and run its \`setup\` instead\n`,
+    )
+    return 1
+  }
   const report = setupSelf(resolveDefaultConfig(), bin, { onConflict })
   process.stdout.write(json ? `${JSON.stringify(report, null, 2)}\n` : formatSetup(report))
+  // A landed write whose verification failed is not a settled harness, and neither is one where the
+  // targets answered nothing at all.
   const settled = report.harnesses.every(
-    (harness) => harness.refused === null && harness.applied?.outcome === 'applied',
+    (harness) =>
+      harness.refused === null &&
+      harness.applied?.outcome === 'applied' &&
+      harness.applied.verification?.outcome !== 'failed',
   )
   return settled ? 0 : 1
+}
+
+// The headline word for one harness: the disposition only when the run really was a no-op, the
+// verification's own failure when the writes landed and did not hold, and apply's outcome otherwise.
+function appliedState(harness: SetupHarness): string {
+  const applied = harness.applied
+  if (applied === null) return 'planned'
+  if (applied.outcome !== 'applied') return applied.outcome
+  if (applied.verification?.outcome === 'failed') return 'verification failed'
+  return harness.plan?.disposition.kind === 'alreadyPresent' ? 'already present' : applied.outcome
 }
 
 function formatSetup(report: SetupReport): string {
@@ -299,8 +322,7 @@ function formatSetup(report: SetupReport): string {
       continue
     }
     const applied = harness.applied
-    const state =
-      harness.plan?.disposition.kind === 'alreadyPresent' ? 'already present' : (applied?.outcome ?? 'planned')
+    const state = appliedState(harness)
     lines.push(`${where}  ${state}  ${applied?.landed.length ?? 0} write(s)  ${shortDigest(harness.plan?.planId ?? null)}`)
     // Only a run that landed shows the writes: a plan's writes are what it would have done, and
     // printing them under a refusal reads as though they reached disk.
