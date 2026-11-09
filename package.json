@@ -8,18 +8,19 @@
   "scripts": {
     "dev": "vite dev --port 3000",
     "generate-routes": "tsr generate",
-    "build": "vite build",
+    "build": "vite build && bun run build:acm",
     "preview": "vite preview",
     "lint": "oxlint",
     "typecheck": "tsc --noEmit",
-    "test": "bun test --reporter=dots",
+    "test": "bun run build:acm && bun test --reporter=dots",
     "check": "bun run lint && bun run typecheck && bun run test",
     "prepare": "git config core.hooksPath .githooks",
+    "build:acm": "bun build src/cli/main.ts --target node --format esm --outfile dist/acm.mjs",
     "acm": "node src/cli/main.ts",
     "start": "node tools/entrypoint.mjs"
   },
   "bin": {
-    "acm": "./src/cli/main.ts"
+    "acm": "./dist/acm.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

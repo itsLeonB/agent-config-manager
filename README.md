@@ -36,6 +36,14 @@ bun run dev
 Then open `http://localhost:3000`. The **Rescan now** button runs the same scan
 on demand, so the CLI is optional once the page is up.
 
+Build the `acm` engine into the single file its `bin` declares, and run it as a
+harness would — any working directory, Node ≥ 22.5, no Bun needed at runtime:
+
+```
+bun run build:acm               # emits dist/acm.mjs
+node dist/acm.mjs list          # or `acm list` once linked
+```
+
 ## Container
 
 The same repo builds a single image (`Dockerfile`) that serves the dashboard and
@@ -144,5 +152,5 @@ For `bun run dev` against the same data, use the same commands without the
 ## Tests
 
 ```
-bun run test   # node --test, no test dependency
+bun run test   # builds dist/acm.mjs, then bun test over the source and that bundle
 ```

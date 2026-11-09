@@ -69,8 +69,11 @@ settled decisions.
   `src/engine/adapters/registry.ts` fails at load when a claimed category has no handler. Roots
   (home, project root, store path, `CODEX_HOME`) arrive as an injected `EngineConfig`, never read
   from the working directory; `ACM_HOME` / `ACM_PROJECT_ROOT` / `ACM_STORE` are the boundary
-  overrides a test uses to point the engine at a fixture. `src/cli/main.ts` is the `acm` bin
-  (`bun run acm -- list`, or `acm list` once linked), and `src/mcp/router.ts` registers the five MCP
+  overrides a test uses to point the engine at a fixture. `src/cli/main.ts` is the `acm` source
+  entry (`bun run acm -- list`); `bun run build:acm` bundles it to the single ESM file
+  `dist/acm.mjs` that the package's `bin` declares, with a Node shebang, and the engine derives its
+  project root — and so its default store — from the nearest `package.json` above whichever of the
+  two it is running from. `src/mcp/router.ts` registers the five MCP
   tools over the same service functions while `src/mcp/server.ts` puts them on a stdio transport
   behind `acm mcp serve` — two faces over one library, and neither imports `repo`, `plan`, or an
   adapter. Nothing under `src/routes/` or `src/components/` imports either.
