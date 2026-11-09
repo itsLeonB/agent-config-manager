@@ -40,7 +40,8 @@ function fixture(): EngineConfig {
   ]) {
     fs.mkdirSync(path.join(...dir), { recursive: true })
   }
-  return { home, projectRoot, storePath: path.join(root, 'dashboard.db') }
+  // No harness probe: a test fixture must never spawn the real `opencode`.
+  return { home, projectRoot, storePath: path.join(root, 'dashboard.db'), opencodeProbe: false }
 }
 
 function piFixture(config: EngineConfig, servers: Record<string, PiServer>): void {

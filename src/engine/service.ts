@@ -68,8 +68,12 @@ export function discover(config: EngineConfig): DiscoverResult {
         }
         merged.installations.push(...read.installations)
         if (read.health !== 'ok') {
+          // A degraded probe is a fact about the tier as well, so a later category's failure reports
+          // both instead of replacing the reason the probe could not measure it.
+          const degraded = merged.health === 'ok' ? merged.detail : null
           merged.health = read.health
-          merged.detail = read.detail
+          merged.detail =
+            degraded === null || degraded === read.detail ? read.detail : `${read.detail}; ${degraded}`
         }
       }
     }
