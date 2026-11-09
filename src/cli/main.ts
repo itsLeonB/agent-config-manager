@@ -281,7 +281,16 @@ function setup(argv: string[]): number {
   }
   // A harness spawns what this process was started as, never what `PATH` resolves later, so the
   // entry records the absolute path of this bin — and only when that path can be launched at all.
-  const bin = realpathSync(path.resolve(process.argv[1]))
+  let bin: string
+  try {
+    bin = realpathSync(path.resolve(process.argv[1]))
+  } catch {
+    // A path that no longer resolves is not a bin: it is a refusal with a reason, not a stack trace.
+    process.stderr.write(
+      `refused: ${printable(process.argv[1])} cannot be resolved, so there is no bin to record; install acm and run its \`setup\` instead\n`,
+    )
+    return 1
+  }
   const fault = launchFault(bin)
   if (fault !== null) {
     process.stderr.write(`refused: ${printable(fault)}; install acm and run its \`setup\` instead\n`)

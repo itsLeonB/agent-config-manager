@@ -65,10 +65,10 @@ function cliEnv(config: EngineConfig) {
 
 // The bin sees itself as `argv[1]`, which is what setup records and what a harness would spawn, so
 // the entry is run as the script rather than an import.
-function runCli(bin: string, config: EngineConfig, args: string[]) {
+function runCli(bin: string, config: EngineConfig, args: string[], env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [bin, 'setup', ...args], {
     encoding: 'utf8',
-    env: cliEnv(config),
+    env: { ...cliEnv(config), ...env },
   })
 }
 
@@ -237,16 +237,18 @@ test('the entry the CLI writes is the bin it was run as, and that entry speaks M
 })
 
 test('the CLI refuses a bin that a harness could not spawn, and writes nothing', () => {
-  // The exec bit first, then the interpreter its shebang names through `env`: a bin on a PATH the
-  // harness does not have is one it cannot start either.
-  for (const refused of [
-    { mode: 0o644, shebang: '#!/usr/bin/env bun', reason: /not executable/ },
-    { mode: 0o755, shebang: '#!/usr/bin/env acm-no-such-interpreter', reason: /is not on PATH/ },
-  ]) {
+  // The exec bit first, then the interpreter its shebang names through `env`: a bin naming an
+  // interpreter that is not on the PATH it will be spawned with is one no harness can start either.
+  // `PATH` is given for both cases, so the second does not depend on what this machine has.
+  const cases = [
+    { mode: 0o644, shebang: '#!/usr/bin/env bun', path: process.env.PATH ?? '', reason: /not executable/ },
+    { mode: 0o755, shebang: '#!/usr/bin/env acm-no-such-interpreter', path: '', reason: /is not on PATH/ },
+  ]
+  for (const refused of cases) {
     const config = fixture()
     const bin = isolatedBin(config, refused.shebang, refused.mode)
 
-    const run = runCli(bin, config, [])
+    const run = runCli(bin, config, [], { PATH: refused.path })
 
     assert.notEqual(run.status, 0)
     assert.match(run.stderr, refused.reason)
