@@ -9,7 +9,9 @@ Every write goes through a plan: `mirror` prints the document, `apply` executes 
 | Requirement | Why |
 | --- | --- |
 | Bun 1.x | builds the CLI bundle |
-| Node 22.5 or newer | runs `dist/acm.mjs`, which depends on `node:sqlite` |
+| Node 22.13 or newer | runs `dist/acm.mjs`, which imports `node:sqlite` without a flag |
+
+Node 23.0 to 23.3 need `--experimental-sqlite`; every release from 22.13 and 23.4 runs the CLI as written.
 
 1. Clone the repo and enter it:
 
@@ -102,7 +104,7 @@ acm verify plan.json
 | `ACM_STORE` | `<projectRoot>/database/dashboard.db` | Store the engine opens |
 | `CODEX_HOME` | `~/.codex` | Codex config root, when relocated |
 
-The first three are also the test boundary: point them at a fixture home plus a temporary store and the engine never touches the real machine.
+Point all four at fixtures: `ACM_HOME` at a fixture home, `ACM_PROJECT_ROOT` at a fixture project, `ACM_STORE` at a temporary database, and `CODEX_HOME` at the fixture's Codex directory. `CODEX_HOME` decides where Codex tiers are read, so leaving it set reads the machine's real Codex config while the other three point at the fixture.
 
 ## State
 
