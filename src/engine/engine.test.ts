@@ -40,7 +40,48 @@ function fixture(): EngineConfig {
   ]) {
     fs.mkdirSync(path.join(...dir), { recursive: true })
   }
-  return { home, projectRoot, storePath: path.join(root, 'dashboard.db') }
+  // No harness probe in a fixture: a test must never spawn the real `opencode`.
+  return { home, projectRoot, storePath: path.join(root, 'dashboard.db'), opencodeProbe: false }
+}
+
+// A stand-in for the real binary: it prints the diagnostics a test hands it, and appends to `calls`
+// when one is given, so a test can assert the probe ran once and only when it should.
+function probeStub(
+  config: EngineConfig,
+  options: { stderr?: string[]; exitCode?: number; calls?: string; name?: string },
+): string {
+  const dir = path.join(path.dirname(config.storePath), 'bin')
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, options.name ?? 'opencode')
+  const lines = [
+    '#!/bin/sh',
+    options.calls === undefined ? '' : `echo call >> '${options.calls}'`,
+    // A quoted heredoc, so a diagnostic line reaches stderr exactly as written.
+    `cat >&2 <<'EOF'\n${(options.stderr ?? []).join('\n')}\nEOF`,
+    `exit ${options.exitCode ?? 0}`,
+  ]
+  fs.writeFileSync(file, `${lines.join('\n')}\n`)
+  fs.chmodSync(file, 0o755)
+  return file
+}
+
+// The default `opencode` resolution is PATH, so a stub on it stands in for an installed binary.
+function stubOnPath(config: EngineConfig, options: { stderr?: string[]; exitCode?: number; calls?: string }): () => void {
+  probeStub(config, options)
+  const prior = process.env.PATH
+  process.env.PATH = `${path.join(path.dirname(config.storePath), 'bin')}${path.delimiter}${prior ?? ''}`
+  return () => {
+    process.env.PATH = prior
+  }
+}
+
+function probeCalls(file: string): number {
+  if (!fs.existsSync(file)) return 0
+  return fs.readFileSync(file, 'utf8').trim().split('\n').filter((line) => line !== '').length
+}
+
+function diagnostic(source: string, pointer: string): string {
+  return `level=WARN message="configuration normalization diagnostic" source=${source} path=${pointer} kind=invalid action="skipped malformed recognized value"`
 }
 
 function userMcpFile(config: EngineConfig): string {
@@ -410,6 +451,116 @@ test('a malformed OpenCode config is an unreadable tier that tombstones nothing,
     (row) => row.name === 'a',
   )
   assert.ok(tombstoned?.removedAt)
+})
+
+test('a config that parses locally but the probe rejects is unreadable and tombstones nothing', () => {
+  // The default binary name, resolved through PATH: a stub on it stands in for an installed one.
+  const config = { ...fixture(), opencodeProbe: undefined }
+  const file = opencodeConfigFile(config, 'user')
+  const calls = path.join(path.dirname(config.storePath), 'probe-calls')
+  fs.writeFileSync(file, '{"mcp":{"servers":{"a":{"command":["x"]}}}}')
+
+  let restore = stubOnPath(config, { calls })
+  try {
+    discover(config)
+  } finally {
+    restore()
+  }
+  assert.ok(rowsByName(config).get('a'))
+  assert.equal(probeCalls(calls), 1)
+
+  // The document still parses and still lists a server, and OpenCode now drops it: the tier says
+  // nothing, so the row it no longer lists survives instead of being tombstoned.
+  fs.writeFileSync(file, '{"mcp":{"servers":{"b":{"command":["y"]}}}}')
+  restore = stubOnPath(config, { stderr: [diagnostic(file, '$.mcp.servers.b')] })
+  let scan: ReturnType<typeof discover>
+  try {
+    scan = discover(config)
+  } finally {
+    restore()
+  }
+
+  const health = scan.tierHealth.find((row) => row.tierId === 'oc:user')
+  assert.equal(health?.status, 'unreadable')
+  assert.ok(health?.detail?.includes(file), health?.detail ?? '')
+  assert.ok(health?.detail?.includes('$.mcp.servers.b'), health?.detail ?? '')
+  assert.ok(health?.detail?.includes('skipped malformed recognized value'), health?.detail ?? '')
+  assert.equal(rowsByName(config).get('a')?.removedAt, null)
+  assert.equal(rowsByName(config).has('b'), false)
+})
+
+test('a config that does not parse locally is unreadable with no probe spawned', () => {
+  const config = { ...fixture(), opencodeProbe: undefined }
+  const calls = path.join(path.dirname(config.storePath), 'probe-calls')
+  fs.writeFileSync(opencodeConfigFile(config, 'user'), '{ "mcp": { "servers": ')
+
+  const restore = stubOnPath(config, { calls })
+  let scan: ReturnType<typeof discover>
+  try {
+    scan = discover(config)
+  } finally {
+    restore()
+  }
+
+  assert.equal(scan.tierHealth.find((row) => row.tierId === 'oc:user')?.status, 'unreadable')
+  assert.equal(probeCalls(calls), 0)
+})
+
+test('the probe runs once per discovery pass, and its diagnostics map to the tier they name', () => {
+  const config = { ...fixture(), opencodeProbe: undefined }
+  const userFile = opencodeConfigFile(config, 'user')
+  const projectFile = opencodeConfigFile(config, 'project')
+  fs.writeFileSync(userFile, '{"mcp":{"servers":{"a":{"command":["x"]}}}}')
+  fs.writeFileSync(projectFile, '{"mcp":{"servers":{"p":{"command":["p"]}}}}')
+  const calls = path.join(path.dirname(config.storePath), 'probe-calls')
+
+  // One spawn answers both tiers: the diagnostic names the project file, so only that tier is
+  // unreadable even though the same verdict covers the user tier's file too.
+  const restore = stubOnPath(config, { stderr: [diagnostic(projectFile, '$.mcp.servers.p')], calls })
+  let scan: ReturnType<typeof discover>
+  try {
+    scan = discover(config)
+  } finally {
+    restore()
+  }
+
+  assert.equal(probeCalls(calls), 1)
+  assert.equal(scan.tierHealth.find((row) => row.tierId === 'oc:project')?.status, 'unreadable')
+  assert.equal(scan.tierHealth.find((row) => row.tierId === 'oc:user')?.status, 'ok')
+  assert.ok(rowsByName(config).get('a'))
+  assert.equal(rowsByName(config).has('p'), false)
+})
+
+test('a probe that cannot run degrades to the local parse verdict and says so in the detail', () => {
+  const missing = { ...fixture(), opencodeProbe: path.join(os.tmpdir(), 'acm-no-such-opencode') }
+  fs.writeFileSync(
+    opencodeConfigFile(missing, 'user'),
+    '{"mcp":{"servers":{"a":{"command":["x"]}}}}',
+  )
+  const missingScan = discover(missing)
+  const missingHealth = missingScan.tierHealth.find((row) => row.tierId === 'oc:user')
+  assert.equal(missingHealth?.status, 'ok')
+  assert.ok(missingHealth?.detail?.includes('probe unavailable'), missingHealth?.detail ?? '')
+  assert.ok(rowsByName(missing).get('a'))
+
+  const failing = fixture()
+  fs.writeFileSync(
+    opencodeConfigFile(failing, 'user'),
+    '{"mcp":{"servers":{"a":{"command":["x"]}}}}',
+  )
+  const failingScan = discover({
+    ...failing,
+    opencodeProbe: probeStub(failing, { exitCode: 3 }),
+  })
+  const failingHealth = failingScan.tierHealth.find((row) => row.tierId === 'oc:user')
+  assert.equal(failingHealth?.status, 'ok')
+  assert.ok(failingHealth?.detail?.includes('exited 3'), failingHealth?.detail ?? '')
+  assert.ok(rowsByName(failing).get('a'))
+
+  // The degradation is stored, not only returned.
+  const stored = listInstallations(failing, {}).tierHealth.find((row) => row.tierId === 'oc:user')
+  assert.equal(stored?.detail, failingHealth?.detail)
+  assert.equal(stored?.status, 'ok')
 })
 
 test('an existing dashboard database gains the canonical tables without losing its rows', () => {

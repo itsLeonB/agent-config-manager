@@ -12,6 +12,10 @@ export interface EngineConfig {
   // A harness may relocate its own config root (`CODEX_HOME`). It is resolved here, at the
   // boundary, so no adapter reads the environment.
   codexHome?: string
+  // A harness probe is a subprocess, so its binary is a boundary fact like `codexHome`: a test
+  // points it at a stub and never runs the real tool. `false` disables probing, which leaves health
+  // as the local parse's verdict.
+  opencodeProbe?: string | false
 }
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))

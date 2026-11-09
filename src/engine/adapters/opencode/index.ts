@@ -5,17 +5,17 @@ import { mcpInstallation } from '../mcp-facts.ts'
 import { MCP_WRITE_SURFACES } from '../mcp-write.ts'
 import { readInstructionTier } from '../instructions.ts'
 import { readSkillTier } from '../skills.ts'
-import { readTier } from '../tier.ts'
+import { readTier, type TierProbe } from '../tier.ts'
 import type { Adapter, Tier, TierRead } from '../types.ts'
+import { openCodeProbe } from './probe.ts'
 import { readOpenCodeMcpJsonc } from './read.ts'
 
 // OpenCode merges every ancestor's config, and a root-managed `/etc/opencode` outranks the project,
 // so it is a real tier that ACM must never write: declared, `elevationRequired`, never read. Ranks
 // are precedence order. `~/.opencode` is left out of the tier table until its precedence against
 // `~/.config/opencode` is verified (spec, Further Notes 2).
-// shortcut: health comes from parsing the file here, not from the `opencode debug config` probe
-// spec §9 describes, because this slice runs no commands. A config that parses but that OpenCode
-// still rejects will read as `ok`; upgrade when the probe is allowed.
+// Health is measured, not assumed: the local parse is the cheap gate, and one probe per discovery
+// pass asks OpenCode which of these files it actually accepted (spec §9).
 export function openCodeTiers(config: EngineConfig): Tier[] {
   const projectRoot = config.projectRoot
   const userConfigDir = path.join(config.home, '.config', 'opencode')
@@ -84,12 +84,14 @@ export function openCodeTiers(config: EngineConfig): Tier[] {
 }
 
 export function createOpenCodeAdapter(config: EngineConfig): Adapter {
+  // Built once per pass, so the probe runs once however many tiers or categories ask for it.
+  const probe = openCodeProbe(config)
   return {
     harness: 'opencode',
     tiers: openCodeTiers(config),
     claimedCategories: ['mcp', 'skills', 'instructions'],
     handlers: {
-      mcp: { read: readMcpTier },
+      mcp: { read: (tier) => readMcpTier(tier, probe) },
       skills: { read: readSkillTier },
       instructions: { read: readInstructionTier },
     },
@@ -98,8 +100,11 @@ export function createOpenCodeAdapter(config: EngineConfig): Adapter {
   }
 }
 
-function readMcpTier(tier: Tier): TierRead {
-  return readTier(tier, readOpenCodeMcpJsonc, (server, file) =>
-    mcpInstallation(tier, file, server),
+function readMcpTier(tier: Tier, probe: TierProbe | undefined): TierRead {
+  return readTier(
+    tier,
+    readOpenCodeMcpJsonc,
+    (server, file) => mcpInstallation(tier, file, server),
+    probe,
   )
 }

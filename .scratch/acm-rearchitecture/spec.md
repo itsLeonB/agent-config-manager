@@ -516,7 +516,10 @@ probe per discovery pass —
 `OPENCODE_CONFIG=<file> opencode debug config --standalone --print-logs --log-level warn` — whose
 stderr line per problem carries `kind=invalid` and `source=<file>`, mapping diagnostics back to
 tiers. Gate order cheapest first: local parse fails ⇒ `unreadable` with no spawn; parse succeeds ⇒
-probe; any `kind=invalid` naming that source ⇒ `unreadable`; spawn failure ⇒ `unreadable`.
+probe; any `kind=invalid` naming that source ⇒ `unreadable`. A probe that cannot run at all — no
+binary on `PATH`, a spawn error, a timeout, a non-zero exit — is not a verdict about the config, so
+the tier keeps the local parse's health and its stored detail names the degradation (ticket 28: a
+machine without OpenCode installed must not report every OpenCode tier unreadable).
 
 ### 10. MCP tool surface
 
