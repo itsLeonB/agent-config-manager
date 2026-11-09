@@ -270,8 +270,10 @@ type Adapter = {
   extension and parses JSON with comments tolerated, which is what OpenCode's `.jsonc` needs; there is
   no descriptor-level `match` table and no `markdown-frontmatter` or `directory` format — a skill's
   tree and an instruction file's body are read by their own category readers.
-- **Health is an adapter method, not a descriptor field.** `health()` reports `ok | unreadable` per
-  tier; the OpenCode probe that measures it is internal to that adapter (see §9).
+- **Health is an adapter method, not a descriptor field.** The verdict is the tier read's
+  (`ok | unreadable`, with the detail that explains an `unreadable` or a degraded probe); the probe
+  that measures OpenCode's is internal to that adapter (see §9), and the binary it spawns is a
+  boundary field on `EngineConfig` like `codexHome`, so no test runs a real harness tool.
 - `Gap = { field, reason, replacement? }` with `reason` a closed five (`fieldAbsent`, `shapeOnly`,
   `credential`, `executable`, `categoryAbsent`) and `replacement` `renamed | inverted | dropped`.
   A credential gap's replacement is always `dropped`; the migrate-out instruction lives in its
@@ -512,14 +514,17 @@ every target for its preconditions.
 
 Tier health is measured. OpenCode cannot be made to fail on invalid config (probed: every subcommand
 exits 0 with empty stderr, and no env var or log level changes that), so its health comes from one
-probe per discovery pass —
-`OPENCODE_CONFIG=<file> opencode debug config --standalone --print-logs --log-level warn` — whose
-stderr line per problem carries `kind=invalid` and `source=<file>`, mapping diagnostics back to
-tiers. Gate order cheapest first: local parse fails ⇒ `unreadable` with no spawn; parse succeeds ⇒
-probe; any `kind=invalid` naming that source ⇒ `unreadable`. A probe that cannot run at all — no
-binary on `PATH`, a spawn error, a timeout, a non-zero exit — is not a verdict about the config, so
-the tier keeps the local parse's health and its stored detail names the degradation (ticket 28: a
-machine without OpenCode installed must not report every OpenCode tier unreadable).
+probe per discovery pass — `opencode debug config --standalone --print-logs --log-level warn`, run in
+the project root with `HOME` set to the engine's home and OpenCode's redirecting variables
+(`OPENCODE_CONFIG*`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`) dropped, so it judges the files the tiers
+declare rather than one the caller's shell pointed it at. No `OPENCODE_CONFIG` is passed: the
+diagnostics name their own files, so one run reports every tier at once (ticket 10). Each stderr line
+carries `kind=invalid` and `source=<file>`, mapping diagnostics back to tiers. Gate order cheapest
+first: local parse fails ⇒ `unreadable` with no spawn; parse succeeds ⇒ probe; any `kind=invalid`
+naming that source ⇒ `unreadable`. A probe that cannot run at all — no binary on `PATH`, a spawn
+error, a timeout, a non-zero exit — is not a verdict about the config, so the tier keeps the local
+parse's health and its stored detail names the degradation (ticket 28: a machine without OpenCode
+installed must not report every OpenCode tier unreadable).
 
 ### 10. MCP tool surface
 

@@ -202,8 +202,10 @@ Without `--standalone --print-logs` nothing reaches stderr (the diagnostics come
 server's log), which is why the bare `debug config` looks clean.
 
 Gate order, cheapest first: local JSONC parse fails ⇒ tier `unreadable`, no spawn; parse succeeds ⇒
-probe; any `kind=invalid` naming that source ⇒ `unreadable`; spawn failure ⇒ `unreadable`. An
-`unreadable` tier tombstones nothing. Probe cost is one short-lived process per discovery pass, and
+probe; any `kind=invalid` naming that source ⇒ `unreadable`. A spawn failure is **not** `unreadable`:
+ticket 28 shipped it as a degradation to the parse verdict with the reason in the tier's stored
+detail, so a machine without OpenCode installed still reads the configs it can. An `unreadable` tier
+tombstones nothing. Probe cost is one short-lived process per discovery pass, and
 it is read-only, so ticket 07's "verification never probes the harness" rule (about write
 verification) is untouched.
 

@@ -48,7 +48,14 @@ function fixture(): EngineConfig {
 // when one is given, so a test can assert the probe ran once and only when it should.
 function probeStub(
   config: EngineConfig,
-  options: { stderr?: string[]; exitCode?: number; calls?: string; name?: string },
+  options: {
+    stderr?: string[]
+    exitCode?: number
+    calls?: string
+    name?: string
+    // A file the stub records the environment it was handed into.
+    env?: string
+  },
 ): string {
   const dir = path.join(path.dirname(config.storePath), 'bin')
   fs.mkdirSync(dir, { recursive: true })
@@ -56,6 +63,7 @@ function probeStub(
   const lines = [
     '#!/bin/sh',
     options.calls === undefined ? '' : `echo call >> '${options.calls}'`,
+    options.env === undefined ? '' : `echo "$HOME|$OPENCODE_CONFIG|$XDG_CONFIG_HOME" > '${options.env}'`,
     // A quoted heredoc, so a diagnostic line reaches stderr exactly as written.
     `cat >&2 <<'EOF'\n${(options.stderr ?? []).join('\n')}\nEOF`,
     `exit ${options.exitCode ?? 0}`,
@@ -561,6 +569,31 @@ test('a probe that cannot run degrades to the local parse verdict and says so in
   const stored = listInstallations(failing, {}).tierHealth.find((row) => row.tierId === 'oc:user')
   assert.equal(stored?.detail, failingHealth?.detail)
   assert.equal(stored?.status, 'ok')
+})
+
+test('the probe judges the declared configs, not one the environment redirects it to', () => {
+  const config = fixture()
+  fs.writeFileSync(
+    opencodeConfigFile(config, 'user'),
+    '{"mcp":{"servers":{"a":{"command":["x"]}}}}',
+  )
+  const dump = path.join(path.dirname(config.storePath), 'probe-env')
+  const redirect = process.env.OPENCODE_CONFIG
+  const xdg = process.env.XDG_CONFIG_HOME
+  // A shell with either of these set would send the probe to somebody else's file, whose
+  // diagnostics name no declared path — so every tier would read clean however broken it is.
+  process.env.OPENCODE_CONFIG = '/elsewhere/opencode.json'
+  process.env.XDG_CONFIG_HOME = '/elsewhere/config'
+  try {
+    discover({ ...config, opencodeProbe: probeStub(config, { env: dump }) })
+  } finally {
+    if (redirect === undefined) delete process.env.OPENCODE_CONFIG
+    else process.env.OPENCODE_CONFIG = redirect
+    if (xdg === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = xdg
+  }
+
+  assert.equal(fs.readFileSync(dump, 'utf8').trim(), `${config.home}||`)
 })
 
 test('an existing dashboard database gains the canonical tables without losing its rows', () => {

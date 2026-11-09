@@ -45,5 +45,16 @@ Choices worth knowing beyond the ticket:
   it on every `discover()` in the suite and the real binary's verdicts would decide test outcomes.
 - Diagnostics that name a file no tier declares are ignored rather than escalated: OpenCode merges
   ancestor configs, so a parent directory's problem is not this project's tier.
+- The probe's environment is narrowed, not inherited: `HOME` is the injected home and OpenCode's
+  redirecting variables (`OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG_DIR`,
+  `OPENCODE_CONFIG_PROJECT_DISABLE`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`) are dropped. Inheriting them
+  would let a dev shell point the probe at another file, whose diagnostics name no declared path, and
+  every tier would read `ok` however broken it is. The trade-off is that a user who deliberately
+  moves `XDG_CONFIG_HOME` gets a probe that disagrees with their shell — the tier table already
+  assumes `$HOME/.config`, so the two now fail together instead of silently disagreeing.
+- The parse gate is per tier, not per pass: if one OpenCode tier parses and another does not, the
+  pass spawns once for the parseable tier before the broken one reports. No config that fails the
+  parse causes a spawn, and the probe is read-only, so this is a cost limit rather than a correctness
+  one.
 - Health is still reported per tier through the `mcp` handler, which owns `configPaths`; the merge in
   `discover` already lets one category's `unreadable` speak for the tier.
