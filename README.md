@@ -40,7 +40,7 @@ Build the `acm` engine into the single file its `bin` declares, and run it as a
 harness would — any working directory, Node ≥ 22.5, no Bun needed at runtime:
 
 ```
-bun run build:acm               # emits dist/acm.mjs
+bun run build:acm               # emits dist/acm.mjs (re-run after `bun run build`, which empties dist/)
 node dist/acm.mjs list          # or `acm list` once linked
 ```
 

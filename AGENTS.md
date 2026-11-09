@@ -84,10 +84,13 @@ settled decisions.
 
 ## Gotchas
 
-- `bun run check` runs lint, typecheck, and the test suite under `bun test`; `.githooks/pre-commit`
-  runs it, `bun install` points `core.hooksPath` there, and `.github/workflows/check.yml` runs the
-  same command on pushes and pull requests to `main`. A manual `git commit --no-verify` skips the
-  local hook, so a green `bun run check` is still the thing to report.
+- `bun run check` runs lint, typecheck, and the test suite under `bun test`, which `bun run test`
+  wraps with `bun run build:acm`: the MCP smoke test spawns the built bundle the package `bin`
+  declares, so a bare `bun test` in a clean checkout fails until that file exists.
+  `.githooks/pre-commit` runs `check`, `bun install` points `core.hooksPath` there, and
+  `.github/workflows/check.yml` runs the same command on pushes and pull requests to `main`. A
+  manual `git commit --no-verify` skips the local hook, so a green `bun run check` is still the
+  thing to report.
 
 - `database/` is gitignored and holds `dashboard.db` — the only store. Deleting it drops the
   engine's inventory too, which `acm list` rebuilds from the native configs on its next run.

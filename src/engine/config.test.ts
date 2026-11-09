@@ -5,11 +5,19 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { z } from 'zod'
 import { deriveProjectRoot, resolveDefaultConfig } from './config.ts'
 
 const repoRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..')
 const sourceEntry = path.join(repoRoot, 'src', 'cli', 'main.ts')
-const builtEntry = path.join(repoRoot, 'dist', 'acm.mjs')
+// The bundle is wherever the package says its bin is: a hard-coded `dist/` would let the manifest
+// and the test drift apart.
+const builtEntry = path.join(
+  repoRoot,
+  z
+    .object({ bin: z.object({ acm: z.string() }) })
+    .parse(JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))).bin.acm,
+)
 
 // Everything the engine derives is overridable, so a test clears the overrides and hands back only
 // what it wants: an inherited `ACM_*` from a surrounding shell would otherwise answer the question.
@@ -25,8 +33,13 @@ function derivedEnv(extra: Record<string, string>) {
   return { ...Object.fromEntries(inherited), ...extra }
 }
 
-function run(entry: string, cwd: string, env: Record<string, string>): { status: number | null; stdout: string; stderr: string } {
-  return spawnSync(process.execPath, [entry, 'list', '--json'], { cwd, encoding: 'utf8', env })
+function run(
+  runtime: string,
+  entry: string,
+  cwd: string,
+  env: Record<string, string>,
+): { status: number | null; stdout: string; stderr: string } {
+  return spawnSync(runtime, [entry, 'list', '--json'], { cwd, encoding: 'utf8', env })
 }
 
 // A fixture layout a build could plausibly be installed into: a package root owning the bundle one
@@ -50,6 +63,9 @@ test('both entry forms derive the project root, and the default store path, from
   // The built form: a single file in `dist`, which the old two-directories-up rule would place on
   // the repository's parent — and whose store would then read a file nobody wrote.
   assert.equal(deriveProjectRoot(path.join(repoRoot, 'dist')), repoRoot)
+  // A bundle copied somewhere with no package above it owns no root, so its own directory is it.
+  const loose = somewhere()
+  assert.equal(deriveProjectRoot(loose), loose)
 
   const saved = { ...process.env }
   for (const key of ['ACM_PROJECT_ROOT', 'ACM_STORE', 'ACM_HOME', 'CODEX_HOME']) delete process.env[key]
@@ -65,7 +81,8 @@ test('both entry forms derive the project root, and the default store path, from
 test('the built bundle run from a foreign directory writes its store under its own package root', () => {
   const { root, entry } = installedBundle()
   const home = somewhere()
-  const result = run(entry, somewhere(), derivedEnv({ ACM_HOME: home }))
+  // Node, not this process: a harness runs the bundle on Node with no Bun present.
+  const result = run('node', entry, somewhere(), derivedEnv({ ACM_HOME: home }))
 
   assert.equal(result.status, 0, result.stderr)
   assert.equal(fs.existsSync(path.join(root, 'database', 'dashboard.db')), true)
@@ -85,7 +102,12 @@ test('ACM_HOME, ACM_PROJECT_ROOT, and ACM_STORE override the derived values in b
       JSON.stringify({ mcpServers: { serena: { command: 'serena' } } }),
     )
 
-    const result = run(entry, somewhere(), derivedEnv({ ACM_HOME: home, ACM_PROJECT_ROOT: projectRoot, ACM_STORE: storePath }))
+    const result = run(
+      process.execPath,
+      entry,
+      somewhere(),
+      derivedEnv({ ACM_HOME: home, ACM_PROJECT_ROOT: projectRoot, ACM_STORE: storePath }),
+    )
 
     assert.equal(result.status, 0, result.stderr)
     assert.match(result.stdout, /serena/, entry)

@@ -147,7 +147,9 @@ async function connect(
 ): Promise<Connection> {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-mcp-cwd-'))
   const transport = new StdioClientTransport({
-    command: process.execPath,
+    // A harness starts the built file on Node, so the smoke test does too: passing under Bun alone
+    // would not say the bundle is a Node program.
+    command: 'node',
     args: [binPath(), 'mcp', 'serve'],
     cwd,
     env: childEnv(config),
