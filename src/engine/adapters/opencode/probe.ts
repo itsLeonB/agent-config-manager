@@ -41,14 +41,18 @@ function run(bin: string, config: EngineConfig): ProbeResult {
     encoding: 'utf8',
     timeout: TIMEOUT_MS,
   })
-  if (probed.error !== undefined) return { kind: 'unavailable', detail: probed.error.message }
-  if (probed.status !== 0) {
-    return { kind: 'unavailable', detail: `exited ${probed.status ?? `on ${probed.signal}`}` }
-  }
   const diagnostics: ProbeDiagnostic[] = []
   for (const line of (probed.stderr ?? '').split('\n')) {
     const diagnostic = parseDiagnostic(line)
     if (diagnostic !== null) diagnostics.push(diagnostic)
+  }
+  // Whatever output arrived is still a verdict about a named file, and `spawnSync` reports an error
+  // when it kills the process at its buffer limit — a diagnostic past that point would otherwise
+  // turn a rejected config into a clean tier.
+  if (diagnostics.length > 0) return { kind: 'diagnostics', diagnostics }
+  if (probed.error !== undefined) return { kind: 'unavailable', detail: probed.error.message }
+  if (probed.status !== 0) {
+    return { kind: 'unavailable', detail: `exited ${probed.status ?? `on ${probed.signal}`}` }
   }
   return { kind: 'diagnostics', diagnostics }
 }

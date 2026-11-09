@@ -56,5 +56,10 @@ Choices worth knowing beyond the ticket:
   pass spawns once for the parseable tier before the broken one reports. No config that fails the
   parse causes a spawn, and the probe is read-only, so this is a cost limit rather than a correctness
   one.
+- Declared files and diagnostic sources are compared by filesystem identity, not by their resolved
+  strings: a symlinked `~/.config` or a dotfiles checkout makes OpenCode report the physical path, and
+  a string comparison would read that tier as clean. Overflowing the probe's output buffer keeps the
+  diagnostics that did arrive instead of degrading, and a probe degradation survives a later
+  category's read failure so the tier detail carries both reasons.
 - Health is still reported per tier through the `mcp` handler, which owns `configPaths`; the merge in
   `discover` already lets one category's `unreadable` speak for the tier.

@@ -55,6 +55,8 @@ function probeStub(
     name?: string
     // A file the stub records the environment it was handed into.
     env?: string
+    // Enough noise after the diagnostics to overflow `spawnSync`'s default buffer.
+    overflow?: boolean
   },
 ): string {
   const dir = path.join(path.dirname(config.storePath), 'bin')
@@ -66,6 +68,9 @@ function probeStub(
     options.env === undefined ? '' : `echo "$HOME|$OPENCODE_CONFIG|$XDG_CONFIG_HOME" > '${options.env}'`,
     // A quoted heredoc, so a diagnostic line reaches stderr exactly as written.
     `cat >&2 <<'EOF'\n${(options.stderr ?? []).join('\n')}\nEOF`,
+    options.overflow === true
+      ? `yes 'level=INFO pad' 2>/dev/null | head -c 1400000 >&2 || true`
+      : '',
     `exit ${options.exitCode ?? 0}`,
   ]
   fs.writeFileSync(file, `${lines.join('\n')}\n`)
@@ -594,6 +599,62 @@ test('the probe judges the declared configs, not one the environment redirects i
   }
 
   assert.equal(fs.readFileSync(dump, 'utf8').trim(), `${config.home}||`)
+})
+
+test('a probe whose output overflows its buffer keeps the diagnostics it did print', () => {
+  const config = fixture()
+  const file = opencodeConfigFile(config, 'user')
+  fs.writeFileSync(file, '{"mcp":{"servers":{"a":{"command":["x"]}}}}')
+
+  // `spawnSync` kills the binary at its buffer limit and reports an error for it, but the rejection
+  // it printed first is still the verdict: degrading here would call a rejected config clean.
+  const scan = discover({
+    ...config,
+    opencodeProbe: probeStub(config, {
+      stderr: [diagnostic(file, '$.mcp.servers.a')],
+      overflow: true,
+    }),
+  })
+
+  const health = scan.tierHealth.find((row) => row.tierId === 'oc:user')
+  assert.equal(health?.status, 'unreadable')
+  assert.ok(health?.detail?.includes('$.mcp.servers.a'), health?.detail ?? '')
+})
+
+test('a diagnostic naming the physical file matches a tier that declares a symlinked one', () => {
+  const config = fixture()
+  const physical = path.join(config.home, 'real-opencode')
+  fs.mkdirSync(physical, { recursive: true })
+  // A dotfiles-style setup: the tier's declared path is the link, OpenCode reads the real file.
+  fs.rmSync(path.join(config.home, '.config', 'opencode'), { recursive: true, force: true })
+  fs.symlinkSync(physical, path.join(config.home, '.config', 'opencode'))
+  const file = path.join(physical, 'opencode.jsonc')
+  fs.writeFileSync(file, '{"mcp":{"servers":{"a":{"command":["x"]}}}}')
+
+  const scan = discover({
+    ...config,
+    opencodeProbe: probeStub(config, { stderr: [diagnostic(file, '$.mcp.servers.a')] }),
+  })
+
+  assert.equal(scan.tierHealth.find((row) => row.tierId === 'oc:user')?.status, 'unreadable')
+})
+
+test('a degraded probe and a failing read both reach the tier detail', () => {
+  const config = { ...fixture(), opencodeProbe: path.join(os.tmpdir(), 'acm-no-such-opencode') }
+  fs.writeFileSync(
+    opencodeConfigFile(config, 'user'),
+    '{"mcp":{"servers":{"a":{"command":["x"]}}}}',
+  )
+  // A skills root that cannot be listed makes that category unreadable after the probe degraded.
+  const skillsRoot = path.join(config.home, '.agents', 'skills')
+  fs.mkdirSync(path.dirname(skillsRoot), { recursive: true })
+  fs.writeFileSync(skillsRoot, 'not a directory')
+
+  const health = discover(config).tierHealth.find((row) => row.tierId === 'oc:user')
+
+  assert.equal(health?.status, 'unreadable')
+  assert.ok(health?.detail?.includes('could not be read'), health?.detail ?? '')
+  assert.ok(health?.detail?.includes('probe unavailable'), health?.detail ?? '')
 })
 
 test('an existing dashboard database gains the canonical tables without losing its rows', () => {

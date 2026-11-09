@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import type { DiscoveredInstallation, Tier, TierRead } from './types.ts'
 
@@ -63,10 +63,21 @@ export function readTier<Entry>(
       installations,
     }
   }
-  const declared = new Set(read.map((file) => path.resolve(file)))
-  const fault = probed.diagnostics.find((diagnostic) => declared.has(path.resolve(diagnostic.source)))
+  const declared = new Set(read.map(fileIdentity))
+  const fault = probed.diagnostics.find((diagnostic) => declared.has(fileIdentity(diagnostic.source)))
   if (fault === undefined) return { health: 'ok', detail: null, installations }
   // The harness rejected the file, so what this tier reports cannot be trusted: it says nothing
   // about the tier and tombstones nothing, exactly as a file that failed the local parse does.
   return { health: 'unreadable', detail: `${fault.source}: ${fault.detail}`, installations: [] }
+}
+
+// A diagnostic names the file OpenCode actually read, which is the physical path: a symlinked
+// `~/.config` or a dotfiles checkout would otherwise match nothing and read as clean. A path that
+// cannot be resolved falls back to its lexical form, which is the best identity left.
+function fileIdentity(file: string): string {
+  try {
+    return realpathSync(file)
+  } catch {
+    return path.resolve(file)
+  }
 }
