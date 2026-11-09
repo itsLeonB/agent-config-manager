@@ -1,156 +1,120 @@
 # agent-config-manager
 
-Dashboard that inventories your Claude Code setup across:
+`acm` reads the native configuration of Pi, Codex, and OpenCode, stores what it finds, and mirrors one harness's entry into another: MCP servers, skills, instructions, and hooks. It runs as a CLI or as an MCP server, so an agent can do the same work.
 
-1. User-scope plugins/MCP servers/skills (this machine)
-2. Skills installed globally via the `npx skills` tool (vercel-labs/skills)
-3. Project-scope plugins/MCP servers/skills, scanned across `~/Projects`
-4. Standalone environment tools (RTK, Serena, i-have-adhd always-on) that
-   need manual setup in every environment
+Every write goes through a plan: `mirror` prints the document, `apply` executes it, `verify` re-reads the target and reports each assertion.
 
-The repo also hosts the `acm` engine: it reads Pi, Codex, and OpenCode config natively so one
-harness's configuration can be mirrored into another. See [AGENTS.md](AGENTS.md).
+## Install
 
-Configuration on claude.ai is deliberately out of scope — see
-[docs/adr/0002](docs/adr/0002-no-cloud-config-management.md).
-
-## Usage
-
-All state lives in one SQLite file, `database/dashboard.db`: scan snapshots, the
-settings from the `/settings` page. Nothing else is written there.
-
-Scan local state (items 1, 2, 3) into that file:
-
-```
-node scan.cjs [projectsRoot]   # defaults to the stored projectsRoot, else ~/Projects
-```
-
-Run the dashboard (TanStack Start server reads the newest snapshots through a
-server function — see [AGENTS.md](AGENTS.md)):
-
-```
-bun install
-bun run dev
-```
-
-Then open `http://localhost:3000`. The **Rescan now** button runs the same scan
-on demand, so the CLI is optional once the page is up.
-
-Build the `acm` engine into the single file its `bin` declares, and run it as a
-harness would — any working directory, Node ≥ 22.5, no Bun needed at runtime:
-
-```
-bun run build:acm               # emits dist/acm.mjs (re-run after `bun run build`, which empties dist/)
-node dist/acm.mjs list          # or `acm list` once linked
-```
-
-## Container
-
-The same repo builds a single image (`Dockerfile`) that serves the dashboard and
-rescans by itself: one scan at start, then every interval. Bun builds,
-`node:22-slim` runs (`bun run build`, then `node tools/entrypoint.mjs`). The
-mechanism and mounts are in [docs/dashboard.md](docs/dashboard.md); hosting is
-undecided while the engine rearchitecture lands.
-
-```
-docker build -t agent-config-manager .
-docker run -d --name acm \
-  -p 127.0.0.1:3000:3000 \
-  -e HOST_HOME=/home/you \
-  -v /home/you:/home/you:ro \
-  -v "$PWD/database:/app/database" \
-  agent-config-manager
-```
-
-The container runs as uid/gid `1000`, so the data directory it writes to must be
-owned by that uid (`sudo chown -R 1000:1000 database` if yours is not). The two
-mounts are all it needs. `HOST_HOME` is the only host-specific value:
-it is the home directory mounted at its own absolute path inside the container
-(so absolute skip paths keep meaning) and it becomes the container's `HOME`.
-The data directory stays the host's `database/`, so `dashboard.db` remains
-visible and droppable from the host.
-
-## Data: back up, restore, reset
-
-`database/` is the whole of the app's state. One file to copy, one file to
-delete.
-
-| Task | Command |
+| Requirement | Why |
 | --- | --- |
-| Back up | `docker stop acm && node -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('database/dashboard.db');d.exec('PRAGMA wal_checkpoint(TRUNCATE)');d.close()" && cp database/dashboard.db ~/dashboard-backup.db` |
-| Restore | `docker stop acm && rm -f database/dashboard.db-wal database/dashboard.db-shm && cp ~/dashboard-backup.db database/dashboard.db && docker start acm` |
-| Reset | `docker stop acm && rm -f database/dashboard.db database/dashboard.db-wal database/dashboard.db-shm && docker start acm` |
+| Bun 1.x | builds the CLI bundle |
+| Node 22.13 or newer | runs `dist/acm.mjs`, which imports `node:sqlite` without a flag |
 
-Stop the container first. The store runs in WAL mode, so committed rows can still live in
-`dashboard.db-wal` rather than the main file; the checkpoint folds them in before the copy. If
-you skip the checkpoint, copy `dashboard.db-wal` as well, and restore both. A leftover `-wal`
-beside a replaced `dashboard.db` belongs to the old file, which is why restore and reset delete
-the sidecars rather than let SQLite replay them. A reset leaves an empty store; the scanner's
-first run recreates the snapshot and the dashboard shows the "no scan stored yet" message until
-then, with settings back on their defaults.
+Node 23.0 to 23.3 need `--experimental-sqlite`; every release from 22.13 and 23.4 runs the CLI as written.
 
-Upgrading from a pre-SQLite install: delete `database/local.json`,
-`database/scan-config.json` and `database/env-tools.json`. Nothing reads them
-any more — `dashboard.db` is the whole store.
+1. Clone the repo and enter it:
 
-For `bun run dev` against the same data, use the same commands without the
-`docker` prefix.
+   ```bash
+   git clone git@github.com:itsLeonB/agent-config-manager.git
+   cd agent-config-manager
+   ```
 
-| Env | Default | Meaning |
+2. Install, build, and put `acm` on `PATH`:
+
+   ```bash
+   make install
+   ```
+
+   This runs `bun install`, writes `dist/acm.mjs`, and symlinks it to `~/.local/bin/acm`. Override the location with `make install PREFIX=/usr/local`; if `acm` is not found afterwards, add that `bin` directory to `PATH`.
+
+3. Register `acm` as an MCP server in each harness's user tier. It plans one write per harness, applies it, then re-reads the file to verify:
+
+   ```bash
+   acm setup
+   ```
+
+   Add `--on-conflict replace` to overwrite an entry a human already wrote at that address. The default is `abort`: an existing entry is left alone and reported.
+
+Re-run `make install` after pulling, since the bundle is built, not read from source. `make uninstall` removes the symlink only: entries `acm setup` wrote into harness configs stay until you delete them there.
+
+## Use acm
+
+`list`, `inspect`, and `setup` take `--json`. `mirror`, `apply`, and `verify` print JSON and nothing else.
+
+| Command | What it does | Writes |
 | --- | --- | --- |
-| `HOST_HOME` | unset (container `HOME`) | Scanned home directory, must be the container path the host home is mounted at |
-| `PROJECTS_ROOT` | `~/Projects` | Projects directory to scan; a stored `projectsRoot` wins over it |
-| `SCAN_INTERVAL_MINUTES` | `15` | Rescan cadence; a stored `scanIntervalMinutes` wins over it |
-| `PUBLIC_ORIGIN` | unset | This dashboard's public origin, e.g. `http://acm.localhost`; **required behind a proxy** — the origin guard trusts only the received URL's origin plus this value, never forwarded headers |
-| `PORT` | `3000` | Listen port inside the container (and for `tools/serve.mjs` locally) |
-| `HOST` | `0.0.0.0` | Listen hostname for `tools/serve.mjs` in the container |
+| `acm list` | Scans the native configs, then prints the stored inventory: category, name, scope, tiers, native address, digest, id prefix | Store only |
+| `acm list --category mcp --harness codex --scope user --all` | Same, filtered. Categories: `mcp`, `skills`, `instructions`, `hooks`. Harnesses: `pi`, `codex`, `opencode`. `--all` includes removed rows | Store only |
+| `acm inspect <id\|prefix>` | Prints one installation: known fields, native location, bindings, digests, each credential withheld with a verdict | Nothing |
+| `acm mirror <id\|prefix> --target <harness:tier> --plan` | Prints the plan document for that move. No scan, so nothing is persisted | Nothing |
+| `acm apply <plan.json\|->` | Executes the plan document exactly as given, one file at a time, then records what landed | Target harness config |
+| `acm verify <plan.json\|->` | Re-reads the target and asserts each of the plan's expectations | Nothing |
+| `acm setup [--on-conflict abort\|replace]` | Installs this `acm` into all three harnesses through a plan | Target harness configs |
+| `acm mcp serve` | Speaks the MCP protocol over stdin/stdout | Per tool |
 
-## Notes
+A mirror target must be a writable tier:
 
-- `database/` holds real (redacted) local config and is gitignored — its
-  `dashboard.db` is written by `scan.cjs` and the settings page.
-- Plugins are listed by marketplace, with their enabled state and version, and
-  their skills collapsed into a dropdown per plugin. Standalone skills are a
-  separate list.
-- claude.ai connectors (Figma, Notion, Google Drive, etc.) are **not**
-  scanned or scraped. They sync automatically into Claude Code's local MCP
-  server list (confirmed via `claude mcp list`, which shows them as
-  `claude.ai <Name>`) without ever being written to `~/.claude.json`. The MCP
-  servers section only lists what `scan.cjs` found in `~/.claude.json`.
-- MCP server credentials (env vars / headers matching token/key/secret/
-  password/authorization/credential/bearer) are masked to their last 4
-  characters before the snapshot is stored. This does not
-  scan for secrets embedded inline in `command`/`args` strings.
-- Project scanning treats any directory containing `.git` as a project
-  boundary and does not recurse further into it, so nested checkouts inside
-  a repo (if any) aren't scanned separately.
-- The `skip paths` and `scan interval` values live in the database `config`
-  table and are edited on the `/settings` page (skip paths are absolute paths
-  not descended into, and not written to the snapshot). Each rescan resolves
-  its interval from the stored `scanIntervalMinutes` first, then
-  `SCAN_INTERVAL_MINUTES`, then a 15-minute default, floored at one minute —
-  so saving takes effect on the next tick with no restart. An install that has
-  never been configured has no config rows and scans `~/Projects` every 15
-  minutes. An interrupted scan leaves the previous snapshot readable, because
-  a snapshot is committed in one transaction.
-- The environment tools list is also stored config, edited on `/settings`:
-  each tool has a `checkCommand` (run locally via the shell; exit code 0 means
-  installed) and an `installCommand` shown as-is in the Environment tools
-  section, for setting the tool up on a machine that lacks it. The tool id
-  follows its name.
-  npx skills is a subsection of Environment tools, not its own section —
-  each `npx skills` entry gets a per-skill install command,
-  auto-generated from `~/.agents/.skill-lock.json` (no config needed, it's
-  derived, not stored config like the env tools): `npx skills add
-  <source> --skill "<name>" -g -a claude-code -y` (per the vercel-labs/skills
-  CLI docs — `-g` installs at user/global scope, `-a claude-code` targets
-  Claude Code, `-y` skips confirmation prompts for non-interactive/CI use).
-  One "Copy install commands" button covers both: each env tool gets its own
-  `# <name>` comment, while all npx-skills commands share a single
-  `# npx skills` comment rather than one per skill.
+| Tier | Harness | Layer | Mirror target |
+| --- | --- | --- | --- |
+| `pi:user` | Pi | user | yes |
+| `pi:project` | Pi | project | yes |
+| `codex:user` | Codex | user | yes |
+| `codex:project` | Codex | project | yes |
+| `oc:user` | OpenCode | user | yes |
+| `oc:project` | OpenCode | project | yes |
+| `codex:profile` | Codex | launch profile | no, `notState` |
+| `oc:system` | OpenCode | `/etc/opencode` | no, `elevationRequired` |
 
-## Tests
+One MCP server, Pi into Codex, in five commands:
 
+```bash
+acm list --category mcp            # find the id prefix in the last column
+acm inspect 3f9c1ab2               # read it first: fields, secrets, executables
+acm mirror 3f9c1ab2 --target codex:user --plan > plan.json
+acm apply plan.json --on-conflict abort
+acm verify plan.json
 ```
-bun run test   # builds dist/acm.mjs, then bun test over the source and that bundle
+
+`apply` reports `applied`, `partial`, or `refused`. `partial` means a write failed partway and nothing was rolled back: the message names the file and the manual steps the plan carried.
+
+## MCP server
+
+`acm mcp serve` exposes five tools on stdio over the same service functions as the CLI: `list_installations`, `inspect_installation`, `plan_mirror`, `apply_plan`, and `verify_plan`. Planning tools write nothing. `apply_plan` asks the client to tick each risk flag the plan carries before it writes.
+
+```json
+{
+  "mcpServers": {
+    "acm": {
+      "command": "/home/you/.local/bin/acm",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
 ```
+
+`acm setup` writes this entry for you, with the absolute path of the binary it was started with.
+
+## Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACM_HOME` | `os.homedir()` | Home directory the engine reads harness tiers from |
+| `ACM_PROJECT_ROOT` | nearest `package.json` above the entry | Project root the engine reads project tiers from. The default store follows it |
+| `ACM_STORE` | `<projectRoot>/database/dashboard.db` | Store the engine opens |
+| `CODEX_HOME` | `~/.codex` | Codex config root, when relocated |
+
+Point all four at fixtures: `ACM_HOME` at a fixture home, `ACM_PROJECT_ROOT` at a fixture project, `ACM_STORE` at a temporary database, and `CODEX_HOME` at the fixture's Codex directory. `CODEX_HOME` decides where Codex tiers are read, so leaving it set reads the machine's real Codex config while the other three point at the fixture.
+
+## State
+
+One SQLite file holds the inventory and the record of what each apply landed: `database/dashboard.db` beside the repo, or `ACM_STORE`. Delete it and `acm list` rebuilds the inventory from the native configs. Migration runs on open, so an older file upgrades in place.
+
+## Checks
+
+```bash
+make check    # lint, typecheck, then build the bundle and run the suite
+make test     # build the bundle, then run the suite alone
+```
+
+The MCP smoke test spawns the built bundle, so a bare `bun test` in a clean checkout fails until `dist/acm.mjs` exists.
