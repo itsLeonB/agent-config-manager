@@ -80,7 +80,9 @@ export interface MirrorRecord {
   grade: string
   outcome: string
   toolVersion: string
-  sourceInstallationId: string
+  // Null when the plan's source is not a stored installation — `acm setup` mirrors the tool itself,
+  // and a provenance edge to a row that does not exist is not one to invent.
+  sourceInstallationId: string | null
   targetInstallationId: string | null
   landed: unknown[]
   binding: { installationId: string; harness: string; tierId: string; status: VerificationStatus } | null

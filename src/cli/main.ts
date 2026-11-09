@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util'
-import { readFileSync } from 'node:fs'
+import { accessSync, constants, readFileSync, realpathSync } from 'node:fs'
+import path from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import {
   applyPlan,
@@ -8,9 +9,10 @@ import {
   inspectInstallation,
   listInstallations,
   planMirror,
+  setupSelf,
   verifyPlanDocument,
 } from '../engine/service.ts'
-import type { Inspection } from '../engine/service.ts'
+import type { Inspection, SetupHarness, SetupReport } from '../engine/service.ts'
 import type { InstallationRow } from '../server/store.cjs'
 import type { Json } from '../types/dashboard'
 
@@ -26,6 +28,8 @@ const USAGE = `usage: acm <command>
            <plan.json|-> [--on-conflict abort|replace]
   verify   re-read the target and report each of the plan's assertions
            <plan.json|->
+  setup    install this acm into all three harnesses through a plan, then apply it
+           [--on-conflict abort|replace] [--json]
   mcp serve  speak the MCP protocol over stdin/stdout, exposing the five tools
 `
 
@@ -47,6 +51,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'mirror') return mirror(rest)
   if (command === 'apply') return apply(rest)
   if (command === 'verify') return verify(rest)
+  if (command === 'setup') return setup(rest)
   process.stderr.write(USAGE)
   return 1
 }
@@ -250,6 +255,128 @@ function parseInspectOptions(argv: string[]): InspectOptions {
   } catch {
     return { json: false }
   }
+}
+
+// ACM's own install is a mirror like any other: planned against each harness's user tier, shown,
+// then applied by the same executor. A harness that refuses is reported on its own line, so one
+// unwritable target never hides the two that landed.
+function setup(argv: string[]): number {
+  let onConflict: 'abort' | 'replace' = 'abort'
+  let json = false
+  try {
+    const { values } = parseArgs({
+      args: argv,
+      options: { 'on-conflict': { type: 'string' }, json: { type: 'boolean' } },
+    })
+    const wanted = values['on-conflict']
+    if (wanted !== undefined && wanted !== 'abort' && wanted !== 'replace') {
+      process.stderr.write(`--on-conflict takes abort or replace, not ${printable(wanted)}\n`)
+      return 1
+    }
+    onConflict = wanted === 'replace' ? 'replace' : 'abort'
+    json = values.json === true
+  } catch {
+    process.stderr.write(USAGE)
+    return 1
+  }
+  // A harness spawns what this process was started as, never what `PATH` resolves later, so the
+  // entry records the absolute path of this bin — and only when that path can be launched at all.
+  let bin: string
+  try {
+    bin = realpathSync(path.resolve(process.argv[1]))
+  } catch {
+    // A path that no longer resolves is not a bin: it is a refusal with a reason, not a stack trace.
+    process.stderr.write(
+      `refused: ${printable(process.argv[1])} cannot be resolved, so there is no bin to record; install acm and run its \`setup\` instead\n`,
+    )
+    return 1
+  }
+  const fault = launchFault(bin)
+  if (fault !== null) {
+    process.stderr.write(`refused: ${printable(fault)}; install acm and run its \`setup\` instead\n`)
+    return 1
+  }
+  const report = setupSelf(resolveDefaultConfig(), bin, { onConflict })
+  process.stdout.write(json ? `${JSON.stringify(report, null, 2)}\n` : formatSetup(report))
+  // A landed write whose verification failed is not a settled harness, and neither is one where the
+  // targets answered nothing at all.
+  const settled = report.harnesses.every(
+    (harness) =>
+      harness.refused === null &&
+      harness.applied?.outcome === 'applied' &&
+      harness.applied.verification?.outcome !== 'failed',
+  )
+  return settled ? 0 : 1
+}
+
+// The headline word for one harness: the disposition only when the run really was a no-op, the
+// verification's own failure when the writes landed and did not hold, and apply's outcome otherwise.
+function appliedState(harness: SetupHarness): string {
+  const applied = harness.applied
+  if (applied === null) return 'planned'
+  if (applied.outcome !== 'applied') return applied.outcome
+  if (applied.verification?.outcome === 'failed') return 'verification failed'
+  return harness.plan?.disposition.kind === 'alreadyPresent' ? 'already present' : applied.outcome
+}
+
+// A harness spawns the entry with its own PATH, so an entry that names its interpreter through
+// `/usr/bin/env` is only launchable where that interpreter resolves: a missing one is a bin no
+// harness could start, whatever the exec bit says.
+function launchFault(bin: string): string | null {
+  if (!executable(bin)) return `${bin} is not executable, so a harness could not spawn it`
+  let first: string
+  try {
+    first = readFileSync(bin, 'utf8').split('\n', 1)[0] ?? ''
+  } catch {
+    return `${bin} cannot be read, so what would launch it is unknown`
+  }
+  const shebang = /^#!\s*(\S+)(?:\s+(\S+))?/.exec(first)
+  if (shebang === null) return null
+  const [, interpreter = '', argument] = shebang
+  const throughEnv = path.basename(interpreter) === 'env'
+  // `env -S` and friends are not a shape this bin has, so the first argument is the interpreter.
+  const named = throughEnv ? argument : interpreter
+  if (named === undefined || named === '') return null
+  const resolves = throughEnv
+    ? (process.env.PATH ?? '')
+        .split(path.delimiter)
+        .some((dir) => dir !== '' && executable(path.join(dir, named)))
+    : executable(named)
+  return resolves
+    ? null
+    : `${bin} launches through ${named}, which is not on PATH, so a harness could not spawn it`
+}
+
+function executable(file: string): boolean {
+  try {
+    accessSync(file, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+function formatSetup(report: SetupReport): string {
+  const lines: string[] = []
+  for (const harness of report.harnesses) {
+    const where = harness.tierId ?? harness.harness
+    if (harness.refused !== null) {
+      lines.push(`${where}  refused  ${printable(harness.refused)}`)
+      continue
+    }
+    const applied = harness.applied
+    const state = appliedState(harness)
+    lines.push(`${where}  ${state}  ${applied?.landed.length ?? 0} write(s)  ${shortDigest(harness.plan?.planId ?? null)}`)
+    // Only a run that landed shows the writes: a plan's writes are what it would have done, and
+    // printing them under a refusal reads as though they reached disk.
+    for (const write of applied?.outcome === 'applied' ? (harness.plan?.writes ?? []) : []) {
+      const at = write.op === 'writeAtPointer' ? printable(write.pointer) : printable(write.file)
+      const value = write.op === 'writeAtPointer' ? JSON.stringify(write.value) : write.op
+      lines.push(`  ${at} = ${value}`)
+    }
+    if (applied?.reason !== null && applied?.reason !== undefined) lines.push(`  ${printable(applied.reason)}`)
+    for (const step of applied?.manualSteps ?? []) lines.push(`  manual  ${printable(step.step)}`)
+  }
+  return `${lines.join('\n')}\n`
 }
 
 function formatInspection(inspection: Inspection, home: string): string {

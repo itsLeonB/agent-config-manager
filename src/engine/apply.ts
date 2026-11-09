@@ -594,6 +594,9 @@ function editPointers(file: string, writes: PointerWrite[]): Landed {
   // Only what was actually addressed is written: a file whose every write failed is not touched.
   if (applied > 0) {
     try {
+      // A pointer write into a layer whose directory does not exist yet creates it, exactly as a
+      // whole-file write does.
+      mkdirSync(path.dirname(file), { recursive: true })
       writeFileSync(file, text)
     } catch (caught) {
       // Preflight said this was writable, so this is a race, not a prediction: nothing of this file
