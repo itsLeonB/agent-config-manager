@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { parseArgs } from 'node:util'
 import { accessSync, constants, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'

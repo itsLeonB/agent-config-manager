@@ -102,14 +102,17 @@ function piServers(config: EngineConfig, servers: Record<string, PiServerFixture
 }
 
 // The bin the package declares is what a harness pins, so the smoke test spawns that path rather
-// than a source file of its own choosing.
-// shortcut: the bin is the TypeScript entry until a build lands; when a bundle exists this follows
-// the bin field to it.
+// than a source file of its own choosing: the assertions below are about the built bundle.
 function binPath(): string {
   const manifest = z
     .object({ bin: z.object({ acm: z.string() }) })
     .parse(JSON.parse(fs.readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')))
-  return fileURLToPath(new URL(`../../${manifest.bin.acm}`, import.meta.url))
+  const bin = fileURLToPath(new URL(`../../${manifest.bin.acm}`, import.meta.url))
+  assert.ok(fs.existsSync(bin), `${bin} is missing: run \`bun run build:acm\` before the suite`)
+  // A harness pins an absolute path to a file it can launch: the shebang names Node, so no Bun and
+  // no interpreter flag has to be present for it to start.
+  assert.equal(fs.readFileSync(bin, 'utf8').split('\n', 1)[0], '#!/usr/bin/env node')
+  return bin
 }
 
 function piSourceFile(config: EngineConfig): string {
@@ -144,7 +147,9 @@ async function connect(
 ): Promise<Connection> {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-mcp-cwd-'))
   const transport = new StdioClientTransport({
-    command: process.execPath,
+    // A harness starts the built file on Node, so the smoke test does too: passing under Bun alone
+    // would not say the bundle is a Node program.
+    command: 'node',
     args: [binPath(), 'mcp', 'serve'],
     cwd,
     env: childEnv(config),
