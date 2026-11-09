@@ -73,11 +73,12 @@ function runCli(bin: string, config: EngineConfig, args: string[], env: Record<s
 }
 
 // An entry inside the fixture that stands in for the installed bin: same CLI, its own mode and
-// shebang, so a test never changes the permissions of a file in the working tree.
-function isolatedBin(config: EngineConfig, shebang: string, mode = 0o755): string {
+// shebang, so a test never changes the permissions of a file in the working tree. `prelude` runs
+// before the CLI is imported, which is how a bin can be gone by the time the CLI resolves itself.
+function isolatedBin(config: EngineConfig, shebang: string, mode = 0o755, prelude = ''): string {
   const bin = path.join(path.dirname(config.storePath), 'acm.mjs')
   const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
-  fs.writeFileSync(bin, `${shebang}\nawait import(${JSON.stringify(cli)})\n`)
+  fs.writeFileSync(bin, `${shebang}\n${prelude}\nawait import(${JSON.stringify(cli)})\n`)
   fs.chmodSync(bin, mode)
   return bin
 }
@@ -239,19 +240,29 @@ test('the entry the CLI writes is the bin it was run as, and that entry speaks M
 test('the CLI refuses a bin that a harness could not spawn, and writes nothing', () => {
   // The exec bit first, then the interpreter its shebang names through `env`: a bin naming an
   // interpreter that is not on the PATH it will be spawned with is one no harness can start either.
-  // `PATH` is given for both cases, so the second does not depend on what this machine has.
+  // `PATH` is given for every case, so none of them depends on what this machine has installed.
   const cases = [
-    { mode: 0o644, shebang: '#!/usr/bin/env bun', path: process.env.PATH ?? '', reason: /not executable/ },
-    { mode: 0o755, shebang: '#!/usr/bin/env acm-no-such-interpreter', path: '', reason: /is not on PATH/ },
+    { mode: 0o644, shebang: '#!/usr/bin/env bun', path: process.env.PATH ?? '', prelude: '', reason: /not executable/ },
+    { mode: 0o755, shebang: '#!/usr/bin/env acm-no-such-interpreter', path: '', prelude: '', reason: /is not on PATH/ },
+    // A bin that is gone before the CLI can resolve it is a refusal with a reason, never a stack
+    // trace escaping the command that was asked to record it.
+    {
+      mode: 0o755,
+      shebang: '#!/usr/bin/env bun',
+      path: process.env.PATH ?? '',
+      prelude: "(await import('node:fs')).rmSync(new URL(import.meta.url), { force: true })",
+      reason: /cannot be resolved/,
+    },
   ]
   for (const refused of cases) {
     const config = fixture()
-    const bin = isolatedBin(config, refused.shebang, refused.mode)
+    const bin = isolatedBin(config, refused.shebang, refused.mode, refused.prelude)
 
     const run = runCli(bin, config, [], { PATH: refused.path })
 
-    assert.notEqual(run.status, 0)
+    assert.equal(run.status, 1, run.stderr)
     assert.match(run.stderr, refused.reason)
+    assert.equal(run.stderr.includes('at '), false, run.stderr)
     assert.equal(fs.existsSync(piFile(config)), false)
     assert.equal(fs.existsSync(codexFile(config)), false)
   }
