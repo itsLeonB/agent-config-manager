@@ -102,8 +102,8 @@ acm verify plan.json
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ACM_HOME` | `os.homedir()` | Home directory the engine reads harness tiers from |
-| `ACM_PROJECT_ROOT` | nearest `package.json` above the entry | Project root the engine reads project tiers from. The default store follows it |
-| `ACM_STORE` | `<projectRoot>/database/dashboard.db` | Store the engine opens |
+| `ACM_PROJECT_ROOT` | nearest `package.json` above the entry | Project root the engine reads project tiers from. The store does not follow it: `ACM_PROJECT_ROOT` names what to read, never where to write |
+| `ACM_STORE` | `<installation>/database/dashboard.db` | Store the engine opens. If you pointed `ACM_PROJECT_ROOT` elsewhere before, your old rows are in `<that root>/database/dashboard.db` — set `ACM_STORE` to it |
 | `CODEX_HOME` | `~/.codex` | Codex config root, when relocated |
 
 Point all four at fixtures: `ACM_HOME` at a fixture home, `ACM_PROJECT_ROOT` at a fixture project, `ACM_STORE` at a temporary database, and `CODEX_HOME` at the fixture's Codex directory. `CODEX_HOME` decides where Codex tiers are read, so leaving it set reads the machine's real Codex config while the other three point at the fixture.

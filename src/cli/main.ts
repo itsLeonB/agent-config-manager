@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util'
-import { accessSync, constants, readFileSync, realpathSync } from 'node:fs'
+import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import {
@@ -52,14 +52,22 @@ function withoutProjectRoot(argv: string[]): string[] | null {
   const arg = argv[at]
   const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[at + 1]
   if (value === undefined || value === '' || value.startsWith('--')) return null
-  process.env.ACM_PROJECT_ROOT = path.resolve(value)
+  // A path that is not a directory would scan nothing and report an empty project, which reads like
+  // "this project has no config" rather than "the flag was wrong".
+  const root = path.resolve(value)
+  try {
+    if (!statSync(root).isDirectory()) return null
+  } catch {
+    return null
+  }
+  process.env.ACM_PROJECT_ROOT = root
   return arg.includes('=') ? [...argv.slice(0, at), ...argv.slice(at + 1)] : [...argv.slice(0, at), ...argv.slice(at + 2)]
 }
 
 function main(input: string[]): number | Promise<number> {
   const stripped = withoutProjectRoot(input)
   if (stripped === null) {
-    process.stderr.write('--project-root needs a directory\n')
+    process.stderr.write('--project-root needs an existing directory\n')
     return 1
   }
   // The boundary overrides are read from the environment by the engine, so the flag lands there

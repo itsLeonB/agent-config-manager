@@ -137,7 +137,18 @@ test('--project-root reads another project and leaves the store where acm is ins
   ])
 
   assert.equal(result.status, 0, result.stderr)
-  assert.equal(result.stdout.includes(project), true, result.stdout)
+  // The row the caller asked for, not just some path: the demo skill is the fixture's only project
+  // skill, and it has to be the one that came back.
+  const rows = z
+    .object({ installations: z.array(z.object({ category: z.string(), nativeFile: z.string() })) })
+    .parse(JSON.parse(result.stdout)).installations
+  assert.equal(
+    rows.some(
+      (row) => row.category === 'skills' && row.nativeFile === path.join(project, '.agents', 'skills', 'demo'),
+    ),
+    true,
+    result.stdout,
+  )
   assert.equal(result.stdout.includes(repoRoot), false, result.stdout)
   assert.equal(fs.existsSync(path.join(project, 'database')), false)
   assert.equal(fs.existsSync(path.join(root, 'database', 'dashboard.db')), true)
