@@ -77,7 +77,12 @@ that slice.
   (`notTranslatable` | `manual` | `translatable` with `knownFields`, `unexpressible[]`, `writes[]`,
   `preserved[]`) and never a severity — gap policy stays with the planner. Plans carry native
   locations plus a target excerpt/diff, never a whole-file copy. **Versioning skipped**: detection
-  recorded as a fact, nothing gates on it, latest release only.
+  recorded as a fact, nothing gates on it, latest release only. **Amended while building tickets
+  16-25**: no `CapabilityRow`, no `expressible` on a descriptor, no `translate()` on an adapter. The
+  shipped shape is `claimedCategories` + handlers + per-category write surfaces, with the MCP
+  allowlist beside its transforms and the credential pointers beside the rule table that reads them.
+  Read and write verdicts became structural — an unclaimed category, or an unwritable surface — and
+  translation stayed in the planner. See spec §3.
 - [Audit the existing codebase for reusable inventory](issues/06-audit-existing-code.md): no adapter
   reuse — discovery is eight Claude-path functions in `scan.cjs` with no registry or scope/tier
   concept, so all three adapters are greenfield; what carries is the machinery around it (redaction

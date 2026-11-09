@@ -216,63 +216,68 @@ Vocabulary lives in `CONTEXT.md` and must be used in code, tests, and tool outpu
 
 ### 3. Adapter contract
 
-Descriptor plus optional per-category handlers, checked for agreement at load (a category claimed in
-the table without a handler, or the reverse, fails at startup).
+Descriptor plus declared write surfaces, checked for agreement at load: a category claimed in the
+handler table without a read handler, or a read handler with no claim, fails at startup.
+
+**Amended while building tickets 16–25.** The contract settled in ticket 02 was one `(category, tier)`
+`CapabilityRow` carrying `read` / `write` / `verify` verdicts, `method`, an `expressible` allowlist,
+and `credentialPointers` on the descriptor. What shipped spreads that row across the modules that act
+on it, because a verdict string nothing consults is a second source of truth waiting to drift. The
+decisions the row encoded are all preserved; only their address changed.
 
 ```ts
-type CapabilityRow = {
-  category: Category
-  tierId: string
-  read:   'supported' | 'partial' | 'unsupported' | Manual
-  write:  'supported' | 'partial' | 'unsupported' | Manual
-  verify: 'supported' | Manual
-  method: { kind: 'file'; format: Format } | { kind: 'cli'; commandTemplate: string } | { kind: 'none' }
-  expressible: string[]            // canonical field allowlist; unlisted ⇒ gap (fails closed)
-}
 type Adapter = {
-  descriptor: {
-    harness: HarnessId
-    tiers: Tier[]
-    formats: { match: string; format: Format; pointerSyntax: string }[]
-    capability: (category, tierId) => CapabilityRow
-    credentialPointers: { pointer: string; kind: 'leaf' | 'file' }[]
-    writePaths: Record<'user' | 'project', string[]>     // exact files; directories only for copyFile
-    healthProbe?: { command: string; parse: ... }        // OpenCode only
-  }
-  health(): Promise<Record<string, 'ok' | 'unreadable'>>
+  harness: HarnessId
+  tiers: readonly Tier[]
+  claimedCategories: readonly Category[]     // the harness's read verdicts
   handlers: Partial<Record<Category, CategoryHandler>>
+  mcpWrite?: McpWriteSurface                 // the MCP write + verify surface
+  hookWrite?: HookWriteSurface               // hooks, which are three different methods
 }
-type Format = 'json' | 'jsonc' | 'toml' | 'markdown-frontmatter' | 'directory'
 ```
 
+- **Verdicts are structural.** A category absent from `claimedCategories` has no read surface; a
+  category with no write surface is not a mirror target and is refused as caller input before
+  planning. OpenCode's hooks are the one case where read and write disagree — a hook target with no
+  read side, because a hook inside an existing plugin is code that harness cannot parse.
+- **Translation is the planner's, not the adapter's.** An adapter reports facts: a category read
+  returns parsed native facts or a parse error keyed to the tier, pure over bytes so it can be tested
+  without a filesystem. The planner partitions those facts into `carried | mapped | gaps |
+  preserved` and emits the writes; there is no `translate()` on the adapter.
+- **A tier declares its own paths.** `Tier = { id, nativeLabel, rank, scopeBucket, configPaths,
+  categoryPaths?, writability }`, where a category's entry carries the `reads[]` the harness loads
+  and the single `target` a mirror writes, plus `targetKind` for a target that is a directory a
+  mirror writes beneath. Reads and writes are declared apart on purpose: a harness-owned skills
+  directory is a source and never a target. Containment reads the write paths; `alsoReadBy` reads
+  the reads.
+- **The `expressible` allowlist lives with the transforms that enforce it.** For MCP that is the
+  canonical field table, the seven transforms, and the per-tier allowlists in
+  [docs/mcp-field-tables.md](../../docs/mcp-field-tables.md), mirrored by the MCP write surface;
+  skills and instructions express `body` plus a path; a hook expresses its event and its handlers.
+  An unlisted field is a gap, so the allowlist still fails closed.
+- **`credentialPointers` live in the classifier module**, next to the ordered rule table that reads
+  them and carrying the `leaf` / `file` kind, so the pointer list and the order that consults it
+  cannot separate.
 - **No version surface.** `detectVersion()` is deleted; the adapters target the latest release only
   and nothing gates on a detected version. A mismatch surfaces as a failed write or a failed
   verification, never as an adapter refusal.
-- `method` is `file` on **every writable row**. `cli` stays in the vocabulary, unused: `codex mcp
-  add` cannot target project scope and re-serialises the whole `mcp_servers` table (killing comments
-  in untouched sibling entries), `pi mcp add` drops fields it has no flag for, and OpenCode's writer
-  emits V2 shape into V1 files. **No write in this slice runs a harness CLI.**
-- `translate()` returns facts, never severity:
-
-```ts
-translate(source, target: { harness, tierId }) →
-  | { kind: 'notTranslatable', gaps: Gap[] }                       // writes are always []
-  | { kind: 'manual', manualSteps: Step[] }                        // nothing writable at all
-  | { kind: 'translatable',
-      knownFields: Record<string, Json>,
-      gaps: Gap[],
-      writes: NativeWrite[],
-      preserved: string[],
-      manualSteps: Step[] }                                        // always present, may be empty
-```
-
+- **`method` is `file` on every writable surface.** The `cli` decision survives as an assertion
+  about writes rather than as a row value: `codex mcp add` cannot target project scope and
+  re-serialises the whole `mcp_servers` table (killing comments in untouched sibling entries), `pi
+  mcp add` drops fields it has no flag for, and OpenCode's writer emits V2 shape into V1 files. **No
+  write in this slice runs a harness CLI.**
+- **Formats are derived, not declared.** The native editor knows `json` and `toml` from the file's
+  extension and parses JSON with comments tolerated, which is what OpenCode's `.jsonc` needs; there is
+  no descriptor-level `match` table and no `markdown-frontmatter` or `directory` format — a skill's
+  tree and an instruction file's body are read by their own category readers.
+- **Health is an adapter method, not a descriptor field.** `health()` reports `ok | unreadable` per
+  tier; the OpenCode probe that measures it is internal to that adapter (see §9).
 - `Gap = { field, reason, replacement? }` with `reason` a closed five (`fieldAbsent`, `shapeOnly`,
   `credential`, `executable`, `categoryAbsent`) and `replacement` `renamed | inverted | dropped`.
   A credential gap's replacement is always `dropped`; the migrate-out instruction lives in its
-  mandatory manual step. A sixth reason is a schema change, and a test asserts every reason maps to
-  one of three dispositions.
-- `read` returns parsed native facts or a parse error keyed to the tier; it is pure over bytes so it
-  can be tested without a filesystem.
+  mandatory manual step. A sixth reason is a schema change; the disposition a reason implies is
+  closed at three (`planApplies | manualStep | notTranslatable`), and a test asserts every one of the
+  five maps to one of them.
 
 ### 4. The plan document
 
