@@ -38,8 +38,9 @@ function run(
   entry: string,
   cwd: string,
   env: Record<string, string>,
+  args: string[] = ['list', '--json'],
 ): { status: number | null; stdout: string; stderr: string } {
-  return spawnSync(runtime, [entry, 'list', '--json'], { cwd, encoding: 'utf8', env })
+  return spawnSync(runtime, [entry, ...args], { cwd, encoding: 'utf8', env })
 }
 
 // A fixture layout a build could plausibly be installed into: a package root owning the bundle one
@@ -114,4 +115,30 @@ test('ACM_HOME, ACM_PROJECT_ROOT, and ACM_STORE override the derived values in b
     assert.equal(fs.existsSync(storePath), true, entry)
     assert.equal(fs.existsSync(path.join(root, 'database')), false, entry)
   }
+})
+
+// The project an MCP client sees is the one acm is installed in, so a pass over any other project
+// has to be asked for by name — and it must not leave a second store inside that project.
+test('--project-root reads another project and leaves the store where acm is installed', () => {
+  const { root, entry } = installedBundle()
+  const home = somewhere()
+  const project = somewhere()
+  fs.writeFileSync(path.join(project, 'AGENTS.md'), '# fixture project instructions\n')
+  fs.mkdirSync(path.join(project, '.agents', 'skills', 'demo'), { recursive: true })
+  fs.writeFileSync(path.join(project, '.agents', 'skills', 'demo', 'SKILL.md'), '# demo skill\n')
+
+  const result = run('node', entry, somewhere(), derivedEnv({ ACM_HOME: home }), [
+    'list',
+    '--project-root',
+    project,
+    '--scope',
+    'project',
+    '--json',
+  ])
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout.includes(project), true, result.stdout)
+  assert.equal(result.stdout.includes(repoRoot), false, result.stdout)
+  assert.equal(fs.existsSync(path.join(project, 'database')), false)
+  assert.equal(fs.existsSync(path.join(root, 'database', 'dashboard.db')), true)
 })

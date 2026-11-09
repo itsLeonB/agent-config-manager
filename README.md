@@ -42,6 +42,8 @@ Re-run `make install` after pulling, since the bundle is built, not read from so
 
 `list`, `inspect`, and `setup` take `--json`. `mirror`, `apply`, and `verify` print JSON and nothing else.
 
+Every subcommand takes `--project-root <dir>`: the project config a pass reads defaults to the project `acm` is installed in (the `acm mcp serve` process is spawned by a harness at a working directory it does not control), and this names another one. The store stays beside `acm`, so the flag does not drop a second database into the project you name. One consequence: `--scope project` rows describe the root the last scan read — a later pass over another root retires them (`--all` still shows them).
+
 | Command | What it does | Writes |
 | --- | --- | --- |
 | `acm list` | Scans the native configs, then prints the stored inventory: category, name, scope, tiers, native address, digest, id prefix | Store only |

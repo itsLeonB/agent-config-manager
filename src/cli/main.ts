@@ -16,7 +16,10 @@ import type { Inspection, SetupHarness, SetupReport } from '../engine/service.ts
 import type { InstallationRow } from '../server/store.cjs'
 import type { Json } from '../types/dashboard'
 
-const USAGE = `usage: acm <command>
+const USAGE = `usage: acm <command> [--project-root <dir>]
+
+  --project-root <dir>  read that project's config instead of the project acm is installed in;
+                        the store stays where acm is, so both projects share one inventory
 
   list     report the inventory the store holds
            [--category <category>] [--harness <harness>] [--scope <scope>] [--all] [--json]
@@ -41,7 +44,27 @@ interface ListOptions {
   json: boolean
 }
 
-function main(argv: string[]): number | Promise<number> {
+// The project a pass reads defaults to where acm is installed, so a caller names another one here.
+// The flag is stripped before dispatch: each subcommand's own parser rejects what it does not know.
+function withoutProjectRoot(argv: string[]): string[] | null {
+  const at = argv.findIndex((arg) => arg === '--project-root' || arg.startsWith('--project-root='))
+  if (at === -1) return argv
+  const arg = argv[at]
+  const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[at + 1]
+  if (value === undefined || value === '' || value.startsWith('--')) return null
+  process.env.ACM_PROJECT_ROOT = path.resolve(value)
+  return arg.includes('=') ? [...argv.slice(0, at), ...argv.slice(at + 1)] : [...argv.slice(0, at), ...argv.slice(at + 2)]
+}
+
+function main(input: string[]): number | Promise<number> {
+  const stripped = withoutProjectRoot(input)
+  if (stripped === null) {
+    process.stderr.write('--project-root needs a directory\n')
+    return 1
+  }
+  // The boundary overrides are read from the environment by the engine, so the flag lands there
+  // before any subcommand resolves its config.
+  const argv = stripped
   const command = argv[0]
   const rest = argv.slice(1)
   // The MCP face loads the SDK only when it is asked for it: every other subcommand stays lean.

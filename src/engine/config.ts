@@ -33,11 +33,14 @@ export function deriveProjectRoot(from: string): string {
 
 export function resolveDefaultConfig(): EngineConfig {
   const home = process.env.ACM_HOME ?? os.homedir()
-  const projectRoot = process.env.ACM_PROJECT_ROOT ?? deriveProjectRoot(MODULE_DIR)
+  // The store is anchored on where acm is installed, not on the project being read: aiming a pass at
+  // another project adds its rows to the one inventory instead of forking a database into it.
+  const installRoot = deriveProjectRoot(MODULE_DIR)
+  const projectRoot = process.env.ACM_PROJECT_ROOT ?? installRoot
   return {
     home,
     projectRoot,
-    storePath: process.env.ACM_STORE ?? path.join(projectRoot, 'database', 'dashboard.db'),
+    storePath: process.env.ACM_STORE ?? path.join(installRoot, 'database', 'dashboard.db'),
     codexHome: process.env.CODEX_HOME ?? path.join(home, '.codex'),
   }
 }

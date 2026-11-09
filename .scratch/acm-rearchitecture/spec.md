@@ -558,7 +558,10 @@ never executes the CLI.
 - A harness entry is the absolute installed bin path plus `["mcp","serve"]`, with **no `cwd`**. Bare
   `acm` on `PATH` is rejected because a harness spawns with a different `PATH`. The project root is
   derived from the module's own location, not `process.cwd()` — this amends the existing note that
-  the scanner resolves from the working directory.
+  the scanner resolves from the working directory. A caller that wants another project names it:
+  `--project-root <dir>` on any subcommand, or `ACM_PROJECT_ROOT` for an entry the client configures.
+  The store stays anchored on the module's own root either way, so aiming a pass at another project
+  adds its rows to the one inventory instead of forking a database into that project.
 - `parseArgs` + zod, no CLI framework. TypeScript, no Effect runtime (reversal condition: a
   supervised long-lived engine process, at which point only the service module changes shape).
 - Build: bin field plus shebang, bundled to a single ESM file for Node ≥ 22.5 (the version where
