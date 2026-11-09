@@ -65,11 +65,21 @@ function cliEnv(config: EngineConfig) {
 
 // The bin sees itself as `argv[1]`, which is what setup records and what a harness would spawn, so
 // the entry is run as the script rather than an import.
-function runCli(cli: string, config: EngineConfig, args: string[]) {
-  return spawnSync(process.execPath, [cli, 'setup', ...args], {
+function runCli(bin: string, config: EngineConfig, args: string[]) {
+  return spawnSync(process.execPath, [bin, 'setup', ...args], {
     encoding: 'utf8',
     env: cliEnv(config),
   })
+}
+
+// An entry inside the fixture that stands in for the installed bin: same CLI, its own mode and
+// shebang, so a test never changes the permissions of a file in the working tree.
+function isolatedBin(config: EngineConfig, shebang: string, mode = 0o755): string {
+  const bin = path.join(path.dirname(config.storePath), 'acm.mjs')
+  const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
+  fs.writeFileSync(bin, `${shebang}\nawait import(${JSON.stringify(cli)})\n`)
+  fs.chmodSync(bin, mode)
+  return bin
 }
 
 test('setup writes the absolute bin path and the server arguments into all three harnesses', () => {
@@ -182,65 +192,65 @@ test('setup installs into a config directory that does not exist yet', () => {
   })
 })
 
-test('the CLI installs the absolute path of the bin it was run as, and that entry speaks MCP', async () => {
+test('the entry the CLI writes is the bin it was run as, and that entry speaks MCP', async () => {
   const config = fixture()
-  const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
-  // A harness spawns the entry itself, so the entry has to be able to start: the bin in this
-  // checkout is the TypeScript file, which git keeps unexecutable.
-  fs.chmodSync(cli, 0o755)
+  const bin = isolatedBin(config, '#!/usr/bin/env bun')
+
+  const first = runCli(bin, config, [])
+  assert.equal(first.status, 0, first.stderr)
+  const entry = readJson(piFile(config)).mcpServers?.acm
+  assert.deepEqual(entry, { command: fs.realpathSync(bin), args: ['mcp', 'serve'], enabled: true })
+
+  // The launch the config names is the launch that is tried: nothing here knows the bin path.
+  const transport = new StdioClientTransport({
+    command: fs.realpathSync(bin),
+    args: ['mcp', 'serve'],
+    env: cliEnv(config),
+    stderr: 'pipe',
+  })
+  const client = new Client({ name: 'acm-setup-test', version: '0.0.0' })
+  await client.connect(transport)
   try {
-    const first = runCli(cli, config, [])
-    assert.equal(first.status, 0, first.stderr)
-    const entry = readJson(piFile(config)).mcpServers?.acm
-    assert.deepEqual(entry, { command: fs.realpathSync(cli), args: ['mcp', 'serve'], enabled: true })
-
-    // The launch the config names is the launch that is tried: nothing here knows the bin path.
-    const transport = new StdioClientTransport({
-      command: fs.realpathSync(cli),
-      args: ['mcp', 'serve'],
-      env: cliEnv(config),
-      stderr: 'pipe',
-    })
-    const client = new Client({ name: 'acm-setup-test', version: '0.0.0' })
-    await client.connect(transport)
-    try {
-      const tools = await client.listTools()
-      assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
-        'apply_plan',
-        'inspect_installation',
-        'list_installations',
-        'plan_mirror',
-        'verify_plan',
-      ])
-    } finally {
-      await client.close()
-    }
-
-    const second = runCli(cli, config, ['--json'])
-    assert.equal(second.status, 0, second.stderr)
-    const report: SetupReport = JSON.parse(second.stdout)
-    assert.deepEqual(
-      report.harnesses.map((harness) => [harness.plan?.disposition.kind, harness.applied?.landed.length]),
-      [
-        ['alreadyPresent', 0],
-        ['alreadyPresent', 0],
-        ['alreadyPresent', 0],
-      ],
-    )
+    const tools = await client.listTools()
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
+      'apply_plan',
+      'inspect_installation',
+      'list_installations',
+      'plan_mirror',
+      'verify_plan',
+    ])
   } finally {
-    fs.chmodSync(cli, 0o644)
+    await client.close()
   }
+
+  const second = runCli(bin, config, ['--json'])
+  assert.equal(second.status, 0, second.stderr)
+  const report: SetupReport = JSON.parse(second.stdout)
+  assert.deepEqual(
+    report.harnesses.map((harness) => [harness.plan?.disposition.kind, harness.applied?.landed.length]),
+    [
+      ['alreadyPresent', 0],
+      ['alreadyPresent', 0],
+      ['alreadyPresent', 0],
+    ],
+  )
 })
 
 test('the CLI refuses a bin that a harness could not spawn, and writes nothing', () => {
-  const config = fixture()
-  const cli = fileURLToPath(new URL('../cli/main.ts', import.meta.url))
-  fs.chmodSync(cli, 0o644)
+  // The exec bit first, then the interpreter its shebang names through `env`: a bin on a PATH the
+  // harness does not have is one it cannot start either.
+  for (const refused of [
+    { mode: 0o644, shebang: '#!/usr/bin/env bun', reason: /not executable/ },
+    { mode: 0o755, shebang: '#!/usr/bin/env acm-no-such-interpreter', reason: /is not on PATH/ },
+  ]) {
+    const config = fixture()
+    const bin = isolatedBin(config, refused.shebang, refused.mode)
 
-  const run = runCli(cli, config, [])
+    const run = runCli(bin, config, [])
 
-  assert.notEqual(run.status, 0)
-  assert.match(run.stderr, /not executable/)
-  assert.equal(fs.existsSync(piFile(config)), false)
-  assert.equal(fs.existsSync(codexFile(config)), false)
+    assert.notEqual(run.status, 0)
+    assert.match(run.stderr, refused.reason)
+    assert.equal(fs.existsSync(piFile(config)), false)
+    assert.equal(fs.existsSync(codexFile(config)), false)
+  }
 })

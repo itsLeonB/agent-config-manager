@@ -35,10 +35,12 @@ Choices worth knowing beyond the ticket:
   `enabled`, and `--on-conflict replace` repairs it. Nothing writes `cwd`, which is what "no working
   directory" means in the document rather than in a comment.
 - **A bin a harness could not spawn is refused, not recorded.** `acm setup` records
-  `realpathSync(process.argv[1])` — what this process was started as — and only after `X_OK`
-  confirms a harness could execute it. `src/cli/main.ts` is unexecutable in a checkout, so
+  `realpathSync(process.argv[1])` — what this process was started as — and only after `launchFault`
+  confirms it can be launched: the exec bit, then the interpreter its shebang names through
+  `/usr/bin/env`, resolved over `PATH`. `src/cli/main.ts` is unexecutable in a checkout, so
   `bun run acm -- setup` refuses and says to install `acm` and run that; the alternative is a
-  harness entry that fails with `EACCES` while setup reports success.
+  harness entry that fails with `EACCES` (or `ENOENT` on the interpreter) while setup reports
+  success.
 - **An empty source id is recorded as `null`, not invented.** `stampMirror` sets
   `mirrored_from_id`, which is a foreign key to `installations`; a provenance edge to a row that
   does not exist fails the write. `MirrorRecord.sourceInstallationId` is now `string | null`, and
@@ -68,6 +70,7 @@ Choices worth knowing beyond the ticket:
 
 Tests are `src/engine/setup.test.ts`: the three entries' bytes, the harmless second run, the
 inventory rows afterwards, a read-only target refused beside two landed ones, a missing config
-directory, a bin that cannot be spawned, and — with the checkout's bin made executable for the
-duration — the entry the CLI wrote, spawned from the Pi config's own `command`/`args` and answered
-over MCP with the five tools.
+directory, a bin that cannot be spawned or whose interpreter is not on `PATH`, and — with an
+isolated entry inside the fixture rather than a permission change to the working tree — the entry
+the CLI wrote, spawned from the Pi config's own `command`/`args` and answered over MCP with the five
+tools.

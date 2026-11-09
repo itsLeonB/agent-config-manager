@@ -282,12 +282,9 @@ function setup(argv: string[]): number {
   // A harness spawns what this process was started as, never what `PATH` resolves later, so the
   // entry records the absolute path of this bin — and only when that path can be launched at all.
   const bin = realpathSync(path.resolve(process.argv[1]))
-  try {
-    accessSync(bin, constants.X_OK)
-  } catch {
-    process.stderr.write(
-      `refused: ${printable(bin)} is not executable, so a harness could not spawn it; install acm and run its \`setup\` instead\n`,
-    )
+  const fault = launchFault(bin)
+  if (fault !== null) {
+    process.stderr.write(`refused: ${printable(fault)}; install acm and run its \`setup\` instead\n`)
     return 1
   }
   const report = setupSelf(resolveDefaultConfig(), bin, { onConflict })
@@ -313,6 +310,42 @@ function appliedState(harness: SetupHarness): string {
   return harness.plan?.disposition.kind === 'alreadyPresent' ? 'already present' : applied.outcome
 }
 
+// A harness spawns the entry with its own PATH, so an entry that names its interpreter through
+// `/usr/bin/env` is only launchable where that interpreter resolves: a missing one is a bin no
+// harness could start, whatever the exec bit says.
+function launchFault(bin: string): string | null {
+  if (!executable(bin)) return `${bin} is not executable, so a harness could not spawn it`
+  let first: string
+  try {
+    first = readFileSync(bin, 'utf8').split('\n', 1)[0] ?? ''
+  } catch {
+    return `${bin} cannot be read, so what would launch it is unknown`
+  }
+  const shebang = /^#!\s*(\S+)(?:\s+(\S+))?/.exec(first)
+  if (shebang === null) return null
+  const [, interpreter = '', argument] = shebang
+  const throughEnv = path.basename(interpreter) === 'env'
+  // `env -S` and friends are not a shape this bin has, so the first argument is the interpreter.
+  const named = throughEnv ? argument : interpreter
+  if (named === undefined || named === '') return null
+  const resolves = throughEnv
+    ? (process.env.PATH ?? '')
+        .split(path.delimiter)
+        .some((dir) => dir !== '' && executable(path.join(dir, named)))
+    : executable(named)
+  return resolves
+    ? null
+    : `${bin} launches through ${named}, which is not on PATH, so a harness could not spawn it`
+}
+
+function executable(file: string): boolean {
+  try {
+    accessSync(file, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
 function formatSetup(report: SetupReport): string {
   const lines: string[] = []
   for (const harness of report.harnesses) {
