@@ -1,11 +1,37 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+import { HARNESSES, readStatus, statusDocument } from '../environ/service.ts'
 
-// The MCP face registers no tool yet: the environment tools land here, one at a time, as the tickets
-// that own them arrive. Declaring the tools capability in the constructor is what makes `tools/list`
-// answer an empty list instead of "method not found", and it leaves `registerTool` free to add them.
+// The MCP face is a thin call into the environment service: it registers tools and formats their
+// answers, and holds no reading logic of its own. No tool runs a command and no tool runs a Check
+// that could, because a Check cannot spawn.
+function answer(document: string) {
+  return { content: [{ type: 'text' as const, text: document }] }
+}
+
+// The tools land here one at a time as the tickets that own them arrive; declaring the capability in
+// the constructor is what makes `tools/list` answer with whatever is registered rather than "method
+// not found".
 export function createRouter(): McpServer {
-  return new McpServer(
+  const server = new McpServer(
     { name: 'agent-config-manager', version: '0.1.0' },
     { capabilities: { tools: {} } },
   )
+
+  server.registerTool(
+    'list_provisions',
+    {
+      description:
+        'List every Provision the environment files declare, with the Presence (present, absent, or unknown) of each harness entry and a detail when a Check could not answer. Read-only.',
+      inputSchema: {
+        harness: z.enum(HARNESSES).optional().describe('only the entries declared for this harness'),
+        name: z.string().min(1).optional().describe('only the Provision with this name'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ harness, name }) =>
+      answer(JSON.stringify(statusDocument(readStatus({ harness, name })), null, 2)),
+  )
+
+  return server
 }
