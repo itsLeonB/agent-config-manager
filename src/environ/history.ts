@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { openStore } from '../server/store.cjs'
-import { installCommand } from './loader.ts'
+import { installCommand } from './command.ts'
 import type { Presence, ResolvedProvision, Run } from './types.ts'
 
 // The environment's one caller of the store, and the only place a Run is read or written. It is not

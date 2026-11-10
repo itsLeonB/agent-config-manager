@@ -241,9 +241,13 @@ test('a section check is present when the Section matches the Payload, trailing 
     presence: 'present',
     detail: null,
   })
-  // The blank lines may sit on the file's side instead.
+  // The blank lines may sit on the file's side instead — inside the Section, before the next
+  // heading, which is where a drift of only blank lines lives.
   assert.deepEqual(
-    evaluateCheck(SECTION_CHECK, over(AGENTS + '\n\n', [], { kind: 'read', bytes: INSTRUCTIONS })),
+    evaluateCheck(
+      SECTION_CHECK,
+      over(AGENTS.replace('Be terse.\n\n## Next', 'Be terse.\n\n\n\n## Next'), [], { kind: 'read', bytes: INSTRUCTIONS }),
+    ),
     { presence: 'present', detail: null },
   )
 })
@@ -283,6 +287,25 @@ test('a fenced `## ` line neither starts nor ends a Section', () => {
   // The heading fenced before the real Section is not a second Section sharing it.
   const fencedHeading = '```\n## Output style\n```\n\n' + AGENTS
   assert.equal(evaluateCheck(SECTION_CHECK, over(fencedHeading, [], { kind: 'read', bytes: INSTRUCTIONS })).presence, 'present')
+})
+
+// The Payload's heading is the first `## ` outside a fence, the same walk the file-side read makes,
+// so a fenced `## ` line is never the heading a Check looks up.
+test('a fenced `## ` in the Payload is not its heading', () => {
+  // The first unfenced `## ` heads the Section, so the answer names the Section the file has.
+  const fencedFirst = evaluateCheck(
+    SECTION_CHECK,
+    over(AGENTS, [], { kind: 'read', bytes: '```\n## Fenced heading\n```\n\n## Output style\n\nBe terse.\n' }),
+  )
+  assert.equal(fencedFirst.presence, 'absent')
+  assert.match(fencedFirst.detail ?? '', /AGENTS\.md's ## Output style Section is not the declared text/)
+  // Only fenced `## ` lines: no heading at all, which is a Check that cannot be answered.
+  const onlyFenced = evaluateCheck(
+    SECTION_CHECK,
+    over(AGENTS, [], { kind: 'read', bytes: '```\n## Fenced\n```\nno heading\n' }),
+  )
+  assert.equal(onlyFenced.presence, 'unknown')
+  assert.match(onlyFenced.detail ?? '', /has no '## ' heading/)
 })
 
 test('a Payload with no `## ` heading answers unknown, with the Payload named', () => {

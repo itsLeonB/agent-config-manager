@@ -294,7 +294,8 @@ Tier, and command, then starts the commands whose Presence is not `present` (or 
   the file when it is absent, and appends at end of file when the Section is. Nothing outside the
   Section is touched, and the comparison strips trailing blank lines from both sides.
 - A failing command is recorded and the run continues. The exit status is non-zero if any command
-  failed or any Presence is still not `present` afterwards.
+  failed or any Presence is still not `present` afterwards. A dry run runs nothing and has no
+  afterwards: it exits zero unless an environment file was refused, which leaves the answer partial.
 - No per-command timeout in this slice: a hung command holds the run until interrupted.
   `shortcut: no per-command timeout; add one when a real command hangs.`
 - `--dry-run` is the default when stdin is not a TTY. `--only` (a Provision name or a tag) and

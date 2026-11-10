@@ -5,15 +5,20 @@ import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { evaluateChecks } from './check.ts'
 import { recordRun } from './history.ts'
-import { installCommand, isPayloadInstall, isSectionInstall, loadEnvironment } from './loader.ts'
+import { installCommand } from './command.ts'
+import { isPayloadInstall, isSectionInstall, loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
 import { headingOf, rewriteSection } from './section.ts'
 import type { EnvironmentTier, FileRefusal, Presence, ResolvedProvision, SectionInstall } from './types.ts'
 
-// The run is the only place ACM executes anything. `install` is the single field that reaches a
-// shell, and the text printed is the text run: nothing is interpolated, re-quoted, or evaluated on
-// the way. A Check still only reads, so the Presence a run reports is the files' answer rather than
-// the command's own word for what it did.
+// The run is the only place ACM executes anything. `install` is the single field that acts, in one
+// of three spellings, and the preview prints what the run does. A string command is its own text —
+// nothing is interpolated or evaluated on the way — and that text is what runs. A Payload is spelled
+// `sh <payload> <args…>`, every word re-quoted the way a shell reads it back, and that spelling is
+// what runs. A Section install never reaches a shell: the preview prints the label
+// `write <file> from <section>` with no `$` prefix because there is no command text, and the write
+// is what happens. A Check still only reads, so the Presence a run reports is the files' answer
+// rather than the command's own word for what it did.
 //
 // A run is a function of the environment plus the filesystem: the preview is read and printed before
 // the first command starts, the commands go in loader order, and a Present Provision is left alone
@@ -65,7 +70,8 @@ function label(provision: ResolvedProvision): string {
   return `${printable(provision.name)} (${provision.harness})`
 }
 
-// Every Provision, harness, tier, and the exact command, all of it before anything runs. A Present
+// Every Provision, harness, tier, and what it runs — the exact command, or the label a Section write
+// prints because it has no command text — all of it before anything runs. A Present
 // Provision is still printed: what a run will not do is part of what a human reviews. The selection
 // line names the `--only` values that produced this preview, so a tag-filtered run does not read as
 // the whole environment.
@@ -84,7 +90,10 @@ function previewText(previewed: Previewed[], dryRun: boolean, only: string[]): s
     lines.push(
       `  ${printable(item.provision.name).padEnd(nameWidth)}  ${item.provision.harness.padEnd(harnessWidth)}  ${item.provision.tier.padEnd(tierWidth)}  ${action}`,
     )
-    lines.push(`    $ ${printable(installCommand(item.provision.install))}`)
+    const spelled = printable(installCommand(item.provision.install))
+    // `$ ` says the line is a command that runs; a Section write's label prints without it, because
+    // there is no command text for the prompt to mark.
+    lines.push(isSectionInstall(item.provision.install) ? `    ${spelled}` : `    $ ${spelled}`)
   }
   return `${lines.join('\n')}\n`
 }

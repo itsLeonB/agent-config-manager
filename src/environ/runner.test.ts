@@ -576,7 +576,7 @@ install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style
   )
   const resolved = path.join(f.home, 'instructions', 'output-style.md')
   // The preview and the record spell the path pair, never the bytes the Payload holds.
-  assert.match(printed, new RegExp(`^    \\$ write ${escapeRegex(agents)} from ${escapeRegex(resolved)}$`, 'm'))
+  assert.match(printed, new RegExp(`^    write ${escapeRegex(agents)} from ${escapeRegex(resolved)}$`, 'm'))
   assert.match(printed, /^  ran: i-have-adhd \(pi\) exit 0$/m)
   assert.equal(outcome.exitCode, 0)
   assert.equal(outcome.entries[0].after, 'present')
@@ -636,6 +636,32 @@ install = { file = "~/AGENTS.md", section = "style.md" }
   assert.equal(second.outcome.exitCode, 0)
 })
 
+// A Payload whose last byte is not a newline still writes a whole Section: the writer terminates the
+// Payload before the next heading, so the foreign Section is byte-identical, the Check converges,
+// and a second run writes the same bytes.
+test('a Payload without a trailing newline writes a whole Section and converges', () => {
+  const f = fixture()
+  const agents = path.join(f.home, 'AGENTS.md')
+  const foreign = '## Next\n\nForeign bytes.\n'
+  file(agents, `# AGENTS.md\n\n## Output style\n\nOld.\n\n${foreign}`)
+  file(path.join(f.home, 'style.md'), '## Output style\n\nBe terse.')
+  environment(f, `version = 1
+
+[provision.trim.pi]
+check   = { file = "~/AGENTS.md", section = "style.md" }
+install = { file = "~/AGENTS.md", section = "style.md" }
+`)
+  const first = run(f)
+  assert.equal(fs.readFileSync(agents, 'utf8'), `# AGENTS.md\n\n## Output style\n\nBe terse.\n${foreign}`)
+  assert.equal(first.outcome.entries[0].after, 'present')
+  assert.equal(first.outcome.exitCode, 0)
+  const once = fs.readFileSync(agents, 'utf8')
+  const second = run(f, { force: true })
+  assert.equal(fs.readFileSync(agents, 'utf8'), once)
+  assert.equal(second.outcome.entries[0].after, 'present')
+  assert.equal(second.outcome.exitCode, 0)
+})
+
 test('a Section install restores a hand-edited Section and leaves the rest of the edit alone', () => {
   const f = fixture()
   const agents = path.join(f.home, 'AGENTS.md')
@@ -672,7 +698,7 @@ install = "echo yes > after.marker"
   const { printed, outcome } = run(f)
   const agents = path.join(f.home, 'AGENTS.md')
   const resolved = path.join(f.home, 'gone-style.md')
-  assert.match(printed, new RegExp(`^    \\$ write ${escapeRegex(agents)} from ${escapeRegex(resolved)}$`, 'm'))
+  assert.match(printed, new RegExp(`^    write ${escapeRegex(agents)} from ${escapeRegex(resolved)}$`, 'm'))
   assert.match(printed, new RegExp(`failed: gone \\(pi\\) ${escapeRegex(resolved)} could not be read: `))
   // The next entry still ran: a missing Payload is one broken entry, not a stopped run.
   assert.equal(fs.readFileSync(path.join(f.home, 'after.marker'), 'utf8'), 'yes\n')

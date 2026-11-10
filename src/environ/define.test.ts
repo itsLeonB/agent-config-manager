@@ -234,6 +234,89 @@ test('a same-key definition replaces the Install command the entry already carri
   assert.match(written, /^install = "pi plugin install zeta"$/m)
 })
 
+// A same-key write keeps the entry's Check spelling: a singular Check replaces a `checks` list with
+// that list's one element, so the file never holds both keys, which the parser refuses.
+test('a singular Check replaces a checks list with its one element, keeping the list spelling', () => {
+  const f = fixture()
+  write(
+    localFile(f),
+    `version = 1
+
+[provision.serena.pi]
+checks = [{ file = "~/.pi/mcp.json", contains = "old" }, { file = "~/.pi/other.json" }]
+install = "old command"
+`,
+  )
+  write(path.join(f.home, '.pi', 'mcp.json'), '{ "mcpServers": {} }')
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        check: { file: '~/.pi/mcp.json', contains: 'new' },
+        install: 'new command',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.serena.pi')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.serena.pi]
+checks = [{ file = "~/.pi/mcp.json", contains = "new" }]
+install = "new command"
+`,
+  )
+  // The replacement is the definition in force: status folds the one Check that landed.
+  const rows = readStatus({}, f.config).provisions.flatMap((row) => row.harnesses)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0]?.presence, 'absent')
+  assert.match(rows[0]?.detail ?? '', /does not contain new/)
+})
+
+// The other direction: a one-element checks list replaces a singular `check` with that element,
+// keeping the singular spelling the entry already had.
+test('a one-element checks list replaces a singular check, keeping the singular spelling', () => {
+  const f = fixture()
+  write(
+    localFile(f),
+    `version = 1
+
+[provision.serena.pi]
+check = { file = "~/.pi/mcp.json", contains = "old" }
+install = "old command"
+`,
+  )
+  write(path.join(f.home, '.pi', 'mcp.json'), '{ "mcpServers": {} }')
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        checks: [{ file: '~/.pi/mcp.json', contains: 'new' }],
+        install: 'new command',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.serena.pi')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.serena.pi]
+check = { file = "~/.pi/mcp.json", contains = "new" }
+install = "new command"
+`,
+  )
+  const rows = readStatus({}, f.config).provisions.flatMap((row) => row.harnesses)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0]?.presence, 'absent')
+  assert.match(rows[0]?.detail ?? '', /does not contain new/)
+})
+
 test('an unreviewed definition lands in the gitignored file, and an explicit tier writes that file', () => {
   const f = fixture()
   const user = `version = 1\n\n[provision.rtk.pi]\ncheck = { file = "~/AGENTS.md" }\ninstall = "npx rtk init"\n`

@@ -1,14 +1,21 @@
 // One module owns where a Section starts and ends, so a Check that compares one and an install
 // that rewrites one cannot disagree about the span. A Section runs from its `## ` heading — the
 // heading the Payload's first `## ` line spells — through the line before the next `## ` heading;
-// a `## ` line inside a fenced code block neither starts nor ends one, and `### ` headings do not
-// end one.
+// a `## ` line inside a backtick-fenced code block neither starts nor ends one, and `### ` headings
+// do not end one.
 
-// The line that heads a Section: the Payload's first line starting with `## `. Null when the
-// Payload has none, which is a Check that cannot be answered and an install that cannot be written.
+// The line that heads a Section: the Payload's first line starting with `## ` outside a backtick
+// fence, the same walk `readSection` makes, so the heading a Check looks up is the heading this
+// spells. Null when the Payload has none, which is a Check that cannot be answered and an install
+// that cannot be written.
 export function headingOf(text: string): string | null {
+  let fenced = false
   for (const line of text.split('\n')) {
-    if (line.trimStart().startsWith('## ')) return line.trimEnd()
+    if (/^\s*`{3,}/.test(line)) {
+      fenced = !fenced
+      continue
+    }
+    if (!fenced && line.trimStart().startsWith('## ')) return line.trimEnd()
   }
   return null
 }
@@ -21,8 +28,9 @@ export type SectionRead =
   | { kind: 'ambiguous' }
 
 // Where the Section with this heading is, that it is not there, or that two Sections share the
-// heading. A fenced code block — a line whose first non-whitespace bytes are three backticks, the
-// fence the native instruction files use — is tracked, so a `## ` line inside one is body text.
+// heading. A backtick fence — a line whose first non-whitespace bytes are three backticks, the
+// fence the native instruction files use — is tracked, so a `## ` line inside one is body text;
+// `~~~` is not a fence this reads, so a `## ` line inside a tilde block does end a Section.
 export function readSection(text: string, heading: string): SectionRead {
   const lines = text.split('\n')
   let fenced = false
@@ -54,8 +62,8 @@ export function readSection(text: string, heading: string): SectionRead {
 }
 
 // Trailing blank lines carry no meaning, so a Section an editor padded with empty lines still
-// matches the Payload whose text ends where the words end. Only the ends are stripped: every other
-// byte has to match.
+// matches the Payload whose text ends where the words end. Only the trailing end is stripped: every
+// other byte has to match.
 export function stripTrailingBlankLines(text: string): string {
   const lines = text.split('\n')
   while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop()
@@ -75,5 +83,11 @@ export function rewriteSection(fileText: string, payloadText: string, heading: s
     const text = fileText === '' ? payloadText : fileText.endsWith('\n') ? fileText + payloadText : fileText + '\n' + payloadText
     return { ok: true, text }
   }
-  return { ok: true, text: fileText.slice(0, found.start) + payloadText + fileText.slice(found.end) }
+  const tail = fileText.slice(found.end)
+  // The comparator strips trailing blank lines on both sides, so a Payload whose last byte is not a
+  // newline is a value that has to converge. With a tail to protect — the next Section's heading —
+  // the Payload is newline-terminated so the two never fuse into one line; at end of file it lands
+  // as it is, with no trailing newline added.
+  const payload = tail === '' || payloadText.endsWith('\n') ? payloadText : `${payloadText}\n`
+  return { ok: true, text: fileText.slice(0, found.start) + payload + tail }
 }
