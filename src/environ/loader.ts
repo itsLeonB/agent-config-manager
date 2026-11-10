@@ -30,6 +30,13 @@ export function resolveDeclaredPath(declared: string, root: string, home: string
   return path.resolve(root, declared)
 }
 
+// A Check's file is declared against the tier's root and every other part of the predicate is a
+// value, so re-pointing a Check is replacing the one path it holds; `onPath` names no file at all.
+function resolveCheck(check: Check, root: string, home: string): Check {
+  if (!('file' in check)) return check
+  return { ...check, file: resolveDeclaredPath(check.file, root, home) }
+}
+
 export interface Environment {
   provisions: ResolvedProvision[]
   refusals: FileRefusal[]
@@ -58,15 +65,13 @@ export function loadEnvironment(config: EngineConfig): Environment {
     }
     for (const declaration of parsed.provisions) {
       for (const entry of declaration.entries) {
-        const file = resolveDeclaredPath(entry.check.file, location.root, config.home)
-        const check: Check = 'contains' in entry.check ? { file, contains: entry.check.contains } : { file }
         provisions.push({
           name: declaration.name,
           tags: declaration.tags,
           harness: entry.harness,
           tier: location.tier,
           source: location.file,
-          check,
+          check: resolveCheck(entry.check, location.root, config.home),
           install: entry.install,
         })
       }

@@ -112,11 +112,11 @@ test('a refused environment file is reported with line and column, and fails the
   const home = somewhere()
   write(
     path.join(home, 'agents_environ.toml'),
-    'version = 1\n\n[provision.serena.codex]\ncheck = { file = "~/.codex/config.toml", pointer = "x" }\ninstall = "true"\n',
+    'version = 1\n\n[provision.serena.codex]\ncheck = { file = "~/.codex/config.toml", patrh = "x" }\ninstall = "true"\n',
   )
   const result = run(binPath(), home, ['status'])
   assert.equal(result.status, 1)
-  assert.match(result.stderr, /agents_environ\.toml:4:42: unknown predicate 'pointer'/)
+  assert.match(result.stderr, /agents_environ\.toml:4:42: unknown predicate 'patrh'/)
   assert.match(result.stdout, /no Provisions declared/)
 })
 
