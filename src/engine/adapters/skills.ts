@@ -1,19 +1,17 @@
 import { existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { digestOfPath, relativeFiles } from '../digest.ts'
-import { declaredPaths, type DiscoveredInstallation, type Tier, type TierRead } from './types.ts'
+import { declaredPaths, type DiscoveredDeclaration, type Tier, type TierRead } from './types.ts'
 
 // A skill's canonical vocabulary is its own file listing. Everything else about it — the frontmatter,
-// the scripts, the assets — is content, so it travels by copy and an unknown key survives there
-// instead of becoming a gap.
-export const SKILL_FIELDS = ['files'] as const
-
+// the scripts, the assets — is content, so it travels by copy and a key nothing names survives there
+// instead of being reported as missing.
 interface SkillFacts {
   files: string[]
 }
 
-// A directory without a `SKILL.md` is simply not a skill; a directory the scan cannot list is a
-// different answer, because reporting it as absent would tombstone what it hides.
+// A directory without a `SKILL.md` is simply not a skill; a directory the read cannot list is a
+// different answer, because reporting it as absent would answer for a directory nobody could read.
 type SkillListing =
   | { kind: 'skill'; facts: SkillFacts }
   | { kind: 'notASkill' }
@@ -22,43 +20,42 @@ type SkillListing =
 // All three harnesses implement the Agent Skills spec, so one reader serves all three: only the
 // directories each tier declares differ (`~/.agents/skills` is shared, `~/.pi/agent/skills` is not).
 export function readSkillTier(tier: Tier): TierRead {
-  const installations: DiscoveredInstallation[] = []
+  const declarations: DiscoveredDeclaration[] = []
   for (const root of declaredPaths(tier, 'skills')) {
     if (!existsSync(root)) continue
     let names: string[]
     try {
       names = readdirSync(root)
     } catch {
-      return { health: 'unreadable', detail: `${root} could not be read`, installations: [] }
+      return { health: 'unreadable', detail: `${root} could not be read`, declarations: [] }
     }
     for (const name of names.sort()) {
       const dir = path.join(root, name)
       const listing = skillListing(dir)
       if (listing.kind === 'unreadable') {
-        return { health: 'unreadable', detail: listing.detail, installations: [] }
+        return { health: 'unreadable', detail: listing.detail, declarations: [] }
       }
       if (listing.kind === 'notASkill') continue
-      installations.push(skillInstallation(tier, dir, listing.facts))
+      declarations.push(skillDeclaration(tier, dir, listing.facts))
     }
   }
-  return { health: 'ok', detail: null, installations }
+  return { health: 'ok', detail: null, declarations }
 }
 
 // A directory is a skill when it carries a `SKILL.md`; the name is the directory's, because that is
-// both the address it is loaded under and the name a mirror reproduces in the shared location.
-function skillInstallation(
+// both the address it is loaded under and the name it is known by.
+function skillDeclaration(
   tier: Tier,
   dir: string,
   facts: SkillFacts,
-): DiscoveredInstallation {
+): DiscoveredDeclaration {
   return {
     category: 'skills',
     name: path.basename(dir),
-    scope: tier.scopeBucket,
     tierId: tier.id,
     nativeFile: dir,
     nativePointer: '',
-    knownFieldsJson: JSON.stringify(facts),
+    factsJson: JSON.stringify(facts),
     contentDigest: digestOfPath(dir) ?? '',
   }
 }

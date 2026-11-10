@@ -1,0 +1,370 @@
+import test from 'node:test'
+import assert from 'node:assert'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import type { EngineConfig } from '../engine/config.ts'
+import { installRun } from './service.ts'
+import type { InstallOptions, InstallOutcome } from './service.ts'
+
+// Seam A: one run against a fixture. A temp home, a temp project root, a hand-written environment
+// file, and shell scripts that record what happened — the order they ran in, the directory they ran
+// in, and whether they were reached at all. The assertions are the printed preview and summary, the
+// bytes a command left, and the exit status; nothing here inspects how the runner got there.
+
+interface Fixture {
+  home: string
+  projectRoot: string
+  log: string
+  config: EngineConfig
+}
+
+function fixture(): Fixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-install-'))
+  const home = path.join(root, 'home')
+  const projectRoot = path.join(root, 'project')
+  fs.mkdirSync(home, { recursive: true })
+  fs.mkdirSync(projectRoot, { recursive: true })
+  return {
+    home,
+    projectRoot,
+    log: path.join(root, 'ran.log'),
+    config: { home, projectRoot, storePath: path.join(root, 'store', 'dashboard.db') },
+  }
+}
+
+function file(target: string, text: string): void {
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, text)
+}
+
+function script(f: Fixture, name: string, body: string): string {
+  const target = path.join(f.home, name)
+  file(target, `#!/bin/sh\n${body}\n`)
+  fs.chmodSync(target, 0o755)
+  return `./${name}`
+}
+
+// One script every order-sensitive test reuses: it appends its own marker to the log and writes the
+// directory it saw. Both are files after the run, so neither is a claim made by the runner.
+function recorder(f: Fixture): string {
+  return script(f, 'record.sh', `echo "$1" >> "${f.log}"\npwd -P > "${f.log}.$1.cwd"`)
+}
+
+function environment(f: Fixture, text: string): void {
+  file(path.join(f.home, 'agents_environ.toml'), text)
+}
+
+function logLines(f: Fixture): string[] {
+  if (!fs.existsSync(f.log)) return []
+  return fs
+    .readFileSync(f.log, 'utf8')
+    .split('\n')
+    .filter((line) => line !== '')
+}
+
+function sawDirectory(f: Fixture, marker: string): string {
+  return fs.readFileSync(`${f.log}.${marker}.cwd`, 'utf8').trim()
+}
+
+interface Observation {
+  outcome: InstallOutcome
+  printed: string
+  // What the log held when the runner first wrote anything out: the preview, on a run that has not
+  // started a command yet.
+  logAtFirstWrite: string
+}
+
+function run(f: Fixture, options: InstallOptions = {}): Observation {
+  const writes: string[] = []
+  let logAtFirstWrite: string | null = null
+  const outcome = installRun(
+    (text) => {
+      logAtFirstWrite ??= fs.existsSync(f.log) ? fs.readFileSync(f.log, 'utf8') : ''
+      writes.push(text)
+    },
+    { dryRun: false, ...options },
+    f.config,
+  )
+  return { outcome, printed: writes.join(''), logAtFirstWrite: logAtFirstWrite ?? '' }
+}
+
+// A child process, so an invocation whose stdin is a pipe is the one under test and a command that
+// holds the run open can be killed instead of taking the suite with it.
+function probe(f: Fixture, options: string): string {
+  const runner = fileURLToPath(new URL('./service.ts', import.meta.url))
+  const target = path.join(f.home, 'probe.ts')
+  file(
+    target,
+    `import { installRun } from '${runner}'
+
+const outcome = installRun(
+  (text: string) => process.stdout.write(text),
+  ${options},
+  { home: '${f.home}', projectRoot: '${f.projectRoot}', storePath: '${path.join(f.home, 'store.db')}' },
+)
+process.stdout.write('EXIT ' + outcome.exitCode + '\\n')
+`,
+  )
+  return target
+}
+
+test('the preview prints every Provision, harness, tier and command before the first command starts', () => {
+  const f = fixture()
+  const command = recorder(f)
+  file(path.join(f.home, '.zshrc'), 'export ALREADY=1\n')
+  environment(f, `version = 1
+
+[provision.first.pi]
+check   = { file = "~/.pi/mcp.json" }
+install = "${command} first"
+
+[provision.second.codex]
+check   = { file = "~/.codex/config.toml" }
+install = "${command} second"
+
+[provision.third.opencode]
+check   = { file = "~/.zshrc", contains = "ALREADY" }
+install = "${command} third"
+`)
+  const { printed, logAtFirstWrite, outcome } = run(f)
+  // The exact command, not a description of it, and a Present Provision still in the preview: what a
+  // run will not do is part of what a human reviews.
+  assert.match(printed, /^preview: 3 entries, 2 to run, 1 already present$/m)
+  assert.match(printed, /^  first\s+pi\s+user\s+absent$/m)
+  assert.match(printed, /^    \$ \.\/record\.sh first$/m)
+  assert.match(printed, /^  second\s+codex\s+user\s+absent$/m)
+  assert.match(printed, /^  third\s+opencode\s+user\s+present, skipped$/m)
+  assert.equal(logAtFirstWrite, '')
+  // Loader order, and only what was not already present. Both commands started in the user tier
+  // root, which is where a relative path in the entry means.
+  assert.deepEqual(logLines(f), ['first', 'second'])
+  assert.equal(sawDirectory(f, 'first'), f.home)
+  assert.equal(sawDirectory(f, 'second'), f.home)
+  // Two Provisions are still absent, so the run is not a success even though nothing reported an
+  // error.
+  assert.equal(outcome.exitCode, 1)
+})
+
+test('a present Provision is skipped, and --force runs it anyway', () => {
+  const f = fixture()
+  const command = recorder(f)
+  file(path.join(f.home, '.zshrc'), 'export ALREADY=1\n')
+  environment(f, `version = 1
+
+[provision.already.opencode]
+check   = { file = "~/.zshrc", contains = "ALREADY" }
+install = "${command} already"
+`)
+  const skipped = run(f)
+  assert.deepEqual(logLines(f), [])
+  assert.equal(skipped.outcome.exitCode, 0)
+  assert.match(skipped.printed, /^  already\s+opencode\s+user\s+present, skipped$/m)
+  assert.match(skipped.printed, /^  already present: already \(opencode\)$/m)
+
+  const forced = run(f, { force: true })
+  assert.deepEqual(logLines(f), ['already'])
+  assert.match(forced.printed, /^  already\s+opencode\s+user\s+present, forced$/m)
+  assert.match(forced.printed, /^  ran: already \(opencode\) exit 0$/m)
+})
+
+test('a failing command is reported, the run continues, and the summary names every group', () => {
+  const f = fixture()
+  script(f, 'boom.sh', 'echo boom-stderr >&2\nexit 7')
+  environment(f, `version = 1
+
+[provision.broken.pi]
+check   = { file = "~/broken.marker" }
+install = "./boom.sh"
+
+[provision.landed.codex]
+check   = { file = "~/landed.marker" }
+install = "echo yes > landed.marker"
+`)
+  const { printed, outcome } = run(f)
+  // The second command ran even though the first failed.
+  assert.equal(fs.readFileSync(path.join(f.home, 'landed.marker'), 'utf8'), 'yes\n')
+  assert.match(printed, /^  ran: broken \(pi\) exit 7, landed \(codex\) exit 0$/m)
+  assert.match(printed, /^  failed: broken \(pi\) exit 7$/m)
+  assert.match(printed, /^  already present: none$/m)
+  assert.match(printed, /^  still absent: broken \(pi\) absent$/m)
+  assert.equal(outcome.exitCode, 1)
+})
+
+// `unknown` is not `present`: a Check that could not answer must not skip its command, and the run
+// prints the value it got rather than folding it into "not installed".
+test('a Provision whose Presence is unknown still runs', () => {
+  const f = fixture()
+  file(path.join(f.home, '.pi', 'mcp.json'), '{ "mcpServers": ')
+  const repair = script(f, 'repair.sh', `printf '{"mcpServers": {"serena": {"command": "uvx"}}}' > .pi/mcp.json`)
+  environment(f, `version = 1
+
+[provision.serena.pi]
+check   = { file = "~/.pi/mcp.json", pointer = "mcpServers.serena" }
+install = "${repair}"
+`)
+  const { printed, outcome } = run(f)
+  assert.match(printed, /^  serena\s+pi\s+user\s+unknown$/m)
+  assert.equal(fs.readFileSync(path.join(f.home, '.pi', 'mcp.json'), 'utf8'), '{"mcpServers": {"serena": {"command": "uvx"}}}')
+  assert.match(printed, /^  ran: serena \(pi\) exit 0$/m)
+  assert.equal(outcome.exitCode, 0)
+})
+
+test('the run is exit zero when every Check passes afterwards', () => {
+  const f = fixture()
+  environment(f, `version = 1
+
+[provision.one.pi]
+check   = { file = "~/one.marker" }
+install = "echo one > one.marker"
+
+[provision.two.codex]
+check   = { file = "~/two.marker" }
+install = "echo two > two.marker"
+`)
+  const { printed, outcome } = run(f)
+  assert.equal(outcome.exitCode, 0)
+  assert.match(printed, /^summary: 2 entries, 0 already present, 2 ran, 0 failed, 0 still absent$/m)
+  assert.match(printed, /^  still absent: none$/m)
+  assert.deepEqual(
+    outcome.entries.map((entry) => entry.after),
+    ['present', 'present'],
+  )
+})
+
+test('Presence is re-evaluated after the command, so a half-worked command that passes its Check is present', () => {
+  const f = fixture()
+  environment(f, `version = 1
+
+[provision.half.pi]
+check   = { file = "~/half.marker", contains = "enough" }
+install = "echo enough > half.marker; exit 1"
+`)
+  const { printed, outcome } = run(f)
+  assert.equal(outcome.entries[0].after, 'present')
+  assert.match(printed, /^  failed: half \(pi\) exit 1$/m)
+  assert.match(printed, /^  still absent: none$/m)
+  // The command failed, so the run fails: a wrapper script and the summary agree about success.
+  assert.equal(outcome.exitCode, 1)
+})
+
+test('a command starts in its Tier root and inherits the parent environment unchanged', () => {
+  const f = fixture()
+  // A variable the parent already has is what "unchanged" means; the ones ACM might invent are what
+  // "adds nothing" means.
+  process.env.ACM_RUNNER_SENTINEL = 'inherited'
+  try {
+    environment(f, `version = 1
+
+[provision.where.pi]
+check   = { file = "~/where.marker" }
+install = "env > child.env; pwd -P > child.cwd; echo yes > where.marker"
+`)
+    const { outcome } = run(f)
+    const dumped = fs.readFileSync(path.join(f.home, 'child.env'), 'utf8')
+    assert.match(dumped, /^ACM_RUNNER_SENTINEL=inherited$/m)
+    for (const invented of ['ACM_HOME=', 'ACM_PROVISION=', 'ACM_HARNESS=', 'ACM_TIER=', 'ACM_INSTALL=']) {
+      assert.doesNotMatch(dumped, new RegExp(`^${invented}`, 'm'))
+    }
+    assert.equal(fs.readFileSync(path.join(f.home, 'child.cwd'), 'utf8').trim(), f.home)
+    assert.equal(outcome.exitCode, 0)
+  } finally {
+    delete process.env.ACM_RUNNER_SENTINEL
+  }
+})
+
+test('--only restricts the run, and a name that matches no Provision refuses it', () => {
+  const f = fixture()
+  const command = recorder(f)
+  environment(f, `version = 1
+
+[provision.one.pi]
+check   = { file = "~/one.marker" }
+install = "${command} one; echo x > one.marker"
+
+[provision.two.pi]
+check   = { file = "~/two.marker" }
+install = "${command} two; echo x > two.marker"
+`)
+  const narrowed = run(f, { only: ['one'] })
+  assert.deepEqual(logLines(f), ['one'])
+  assert.match(narrowed.printed, /^preview: 1 entry, 1 to run, 0 already present$/m)
+  assert.equal(narrowed.outcome.exitCode, 0)
+
+  fs.rmSync(f.log)
+  // A typo is a typo: running the rest would look like the named fix succeeded.
+  const refused = run(f, { only: ['nope'] })
+  assert.match(refused.printed, /^no Provision named nope$/m)
+  assert.equal(fs.existsSync(f.log), false)
+  assert.equal(refused.outcome.exitCode, 1)
+})
+
+test('a run never writes an environment file', () => {
+  const f = fixture()
+  environment(f, `version = 1
+
+[provision.writer.pi]
+check   = { file = "~/writer.marker" }
+install = "echo ran > writer.marker"
+`)
+  const source = path.join(f.home, 'agents_environ.toml')
+  const before = fs.readFileSync(source)
+  const { outcome } = run(f)
+  assert.deepEqual(fs.readFileSync(source), before)
+  assert.equal(outcome.entries[0].after, 'present')
+})
+
+// The suite's own stdin is a terminal in an interactive shell, so the invocation is made in a child
+// whose stdin is a pipe: that is the scheduled or piped run the default protects.
+test('a run whose stdin is not a TTY is a dry run by default', () => {
+  const f = fixture()
+  environment(f, `version = 1
+
+[provision.never.pi]
+check   = { file = "~/never.marker" }
+install = "echo ran > never.marker"
+`)
+  const child = spawnSync(process.execPath, [probe(f, '{}')], { cwd: f.home, encoding: 'utf8' })
+  assert.equal(child.status, 0, child.stderr)
+  assert.match(child.stdout, /dry run: nothing was run/)
+  assert.match(child.stdout, /EXIT 0/)
+  assert.equal(fs.existsSync(path.join(f.home, 'never.marker')), false)
+
+  // An explicit run is still what a person at a terminal gets.
+  const printed = run(f)
+  assert.doesNotMatch(printed.printed, /dry run/)
+  assert.equal(fs.existsSync(path.join(f.home, 'never.marker')), true)
+})
+
+// stdin is an open pipe here, so a command that inherited it would block forever. The timeout is
+// the assertion's bound, and `signalCode` is what separates "exited" from "was killed".
+test('a command that reads stdin fails instead of hanging the run', async () => {
+  const f = fixture()
+  script(f, 'reads.sh', `if read line; then echo "answered:$line" >> "${f.log}"; exit 0; fi\necho eof >> "${f.log}"\nexit 3`)
+  environment(f, `version = 1
+
+[provision.asks.pi]
+check   = { file = "~/asks.marker" }
+install = "./reads.sh"
+`)
+  const child = spawn(process.execPath, [probe(f, '{ dryRun: false }')], { cwd: f.home, timeout: 3000 })
+  let out = ''
+  let err = ''
+  child.stdout.on('data', (chunk: Buffer) => {
+    out += chunk.toString()
+  })
+  child.stderr.on('data', (chunk: Buffer) => {
+    err += chunk.toString()
+  })
+  const exited = await new Promise<number | null>((resolve) => {
+    child.on('close', (status) => resolve(status))
+  })
+  assert.equal(child.signalCode, null, `the run was killed after 3s: a command held it open\n${out}${err}`)
+  assert.equal(exited, 0, `${out}${err}`)
+  assert.match(out, /EXIT 1/)
+  assert.match(out, /failed: asks \(pi\) exit 3/)
+  // The command saw end of input rather than a question it could ask.
+  assert.deepEqual(logLines(f), ['eof'])
+})

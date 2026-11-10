@@ -7,10 +7,10 @@ export function digestOfBytes(bytes: Buffer): string {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
 }
 
-// One digest for any path a plan names: a file's bytes, or a directory as its sorted relative
+// One digest for any path a read names: a file's bytes, or a directory as its sorted relative
 // listing with each file's own digest — so two copies of a skill are equal exactly when this is. A
-// path that is not there has no digest, which is how a plan says "nothing to compare yet"; an
-// unreadable one is the same answer, because a digest this process cannot compute proves nothing.
+// path that is not there has no digest; an unreadable one is the same answer, because a digest this
+// process cannot compute proves nothing.
 export function digestOfPath(file: string): string | null {
   const stats = statOf(file)
   if (stats === null) return null

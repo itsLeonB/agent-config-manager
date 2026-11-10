@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert'
-import { factsDigest, knownFieldsForStorage } from '../mcp-facts.ts'
+import { factsDigest, factsForStorage } from '../mcp-facts.ts'
 import type { McpFacts } from '../mcp-facts.ts'
 import { readPiMcpJson } from './read.ts'
 
@@ -42,14 +42,14 @@ test('credential-pointer values are withheld from what reaches the store', () =>
     }),
     'a',
   )
-  const stored = JSON.stringify(knownFieldsForStorage(facts))
+  const stored = JSON.stringify(factsForStorage(facts))
 
   assert.equal(stored.includes('realtokenvalue'), false)
   assert.equal(stored.includes('user:pass'), false)
   assert.equal(stored.includes('example.test'), true)
-  assert.equal(knownFieldsForStorage(facts).env?.GITHUB_TOKEN, '[withheld: secret]')
-  assert.equal(knownFieldsForStorage(facts).headers?.Authorization, '[withheld: secret]')
-  assert.equal(knownFieldsForStorage(facts).url, '[withheld: secret] https://example.test/mcp')
+  assert.equal(factsForStorage(facts).env?.GITHUB_TOKEN, '[withheld: secret]')
+  assert.equal(factsForStorage(facts).headers?.Authorization, '[withheld: secret]')
+  assert.equal(factsForStorage(facts).url, '[withheld: secret] https://example.test/mcp')
 })
 
 test('a token anywhere in a url is withheld, not just in its userinfo', () => {
@@ -57,7 +57,7 @@ test('a token anywhere in a url is withheld, not just in its userinfo', () => {
     '{"mcpServers":{"a":{"url":"https://example.test/mcp?api_key=ghp_AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRr"}}}',
     'a',
   )
-  assert.equal(knownFieldsForStorage(facts).url, '[withheld: secret]')
+  assert.equal(factsForStorage(facts).url, '[withheld: secret]')
 })
 
 test('a credential-shaped query parameter is withheld even when its value has no provider shape', () => {
@@ -66,19 +66,19 @@ test('a credential-shaped query parameter is withheld even when its value has no
     '{"mcpServers":{"a":{"url":"https://example.test/mcp?token=abc123def456"}}}',
     'a',
   )
-  assert.equal(knownFieldsForStorage(facts).url, '[withheld: suspect]')
+  assert.equal(factsForStorage(facts).url, '[withheld: suspect]')
   const plain = factsOf('{"mcpServers":{"a":{"url":"https://example.test/mcp?q=tools"}}}', 'a')
-  assert.equal(knownFieldsForStorage(plain).url, 'https://example.test/mcp?q=tools')
+  assert.equal(factsForStorage(plain).url, 'https://example.test/mcp?q=tools')
   // A reference at that address is still clean: the harness, not the file, supplies the value.
   const reference = factsOf('{"mcpServers":{"a":{"url":"https://example.test/mcp?token=${TOKEN}"}}}', 'a')
-  assert.equal(knownFieldsForStorage(reference).url, 'https://example.test/mcp?token=${TOKEN}')
+  assert.equal(factsForStorage(reference).url, 'https://example.test/mcp?token=${TOKEN}')
 })
 
 test('a url this process cannot parse is withheld rather than kept verbatim', () => {
   const facts = factsOf('{"mcpServers":{"a":{"url":"nonsense user:pass@host/mcp"}}}', 'a')
-  assert.equal(knownFieldsForStorage(facts).url, '[withheld: secret]')
+  assert.equal(factsForStorage(facts).url, '[withheld: secret]')
   const plain = factsOf('{"mcpServers":{"a":{"url":"nonsense-host/mcp"}}}', 'a')
-  assert.equal(knownFieldsForStorage(plain).url, 'nonsense-host/mcp')
+  assert.equal(factsForStorage(plain).url, 'nonsense-host/mcp')
 })
 
 test('a reference survives as itself, and a token in an argument is withheld by its shape', () => {
@@ -95,7 +95,7 @@ test('a reference survives as itself, and a token in an argument is withheld by 
     }),
     'a',
   )
-  const stored = knownFieldsForStorage(facts)
+  const stored = factsForStorage(facts)
   assert.equal(stored.env?.GITHUB_TOKEN, '${GITHUB_TOKEN}')
   assert.equal(stored.env?.OTHER, '!op read op://vault/x')
   assert.equal(stored.args?.[1], '[withheld: secret]')

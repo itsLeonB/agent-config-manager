@@ -4,10 +4,15 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] One function answers the native read locations for a `(harness, tier)` pair, for Pi, Codex, and OpenCode.
-- [ ] It carries no writability, no scope bucket, and no target-vs-source distinction.
-- [ ] The three harness readers obtain their paths through it.
-- [ ] A unit test pins the three harness tables, including OpenCode's JSON and JSONC candidate files.
-- [ ] `bun run check` passes and no test changed behaviour.
+- [x] One function answers the native read locations for a `(harness, tier)` pair, for Pi, Codex, and OpenCode.
+- [x] It carries no writability, no scope bucket, and no target-vs-source distinction.
+- [x] The three harness readers obtain their paths through it.
+- [x] A unit test pins the three harness tables, including OpenCode's JSON and JSONC candidate files.
+- [x] `bun run check` passes and no test changed behaviour.
+
+## Comments
+
+Implemented in `10bd7a5` on the integration branch `feat/agents-environ`; the two-axis
+code review of that branch is recorded in the merge commit for the review fixes.

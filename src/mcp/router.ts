@@ -1,166 +1,104 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { EngineConfig } from '../engine/config.ts'
 import {
-  applyPlanAsking,
-  inspectInstallation,
-  listInstallations,
-  planMirror,
-  verifyPlanDocument,
-  type ConsentAnswer,
-  type ConsentFlag,
-  type ConsentRequest,
-} from '../engine/service.ts'
+  ENVIRONMENT_TIERS,
+  HARNESSES,
+  defineProvision,
+  readNativeConfig,
+  readStatus,
+  statusDocument,
+} from '../environ/service.ts'
+import type { DefineOutcome } from '../environ/service.ts'
 
-// A plan is JSON and nothing else: the document is validated by the service, which refuses one that
-// does not hash to its own planId.
-const planDocument = z.record(z.string(), z.json()).describe('a plan document, exactly as plan_mirror returned it')
-
-// A tool answers with one JSON document, so an agent carries back what it received: a plan is a
-// document, and a refusal is a value the agent reads, not a protocol error.
+// The MCP face is a thin call into the environment service: it registers tools and formats their
+// answers, and holds no reading logic of its own. No tool runs a command and no tool runs a Check
+// that could, because a Check cannot spawn.
 function answer(document: string) {
   return { content: [{ type: 'text' as const, text: document }] }
 }
 
-// One readable tick per risk flag the plan carries, so the dialog says what is being agreed to
-// rather than "allow this?".
-const RISK_TICKS = {
-  executable: 'Run the command this component declares at harness runtime',
-  secretValues: 'Write the credential values this component carries',
-  irreversible: 'Write what cannot be undone',
-} satisfies Record<ConsentFlag, string>
-
-function messageFor(request: ConsentRequest): string {
-  const writes = request.writes
-    .map((write) => `${write.address ?? 'the whole file'} (${write.flags.join(', ')})`)
-    .join('; ')
-  return `Apply ${request.planId.slice(0, 15)} into ${request.target}? It writes ${writes}.`
+// A refused definition is a failure the caller fixes, not an answer: the reason is the parser's own,
+// so it names the fault the next read would report anyway.
+function refused(outcome: Exclude<DefineOutcome, { kind: 'defined' }>) {
+  const text =
+    outcome.kind === 'refused'
+      ? `${outcome.refusal.line}:${outcome.refusal.column}: ${outcome.refusal.reason}`
+      : outcome.reason
+  return { content: [{ type: 'text' as const, text: `not defined: ${text}` }], isError: true }
 }
 
-function ticksFor(request: ConsentRequest): Partial<Record<ConsentFlag, string>> {
-  const flags = new Set(request.writes.flatMap((write) => write.flags))
-  return Object.fromEntries([...flags].map((flag) => [flag, RISK_TICKS[flag] ?? flag]))
-}
-
-// The dialog belongs to the client, and one unticked flag is a no: the engine reads nothing but
-// the answer.
-async function askHuman(server: McpServer, request: ConsentRequest): Promise<ConsentAnswer> {
-  const ticks = ticksFor(request)
-  const result = await server.server.elicitInput({
-    message: messageFor(request),
-    requestedSchema: {
-      type: 'object',
-      properties: Object.fromEntries(
-        Object.entries(ticks).map(([flag, title]) => [flag, { type: 'boolean' as const, title }]),
-      ),
-      required: Object.keys(ticks),
-    },
-  })
-  const ticked = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]))
-  const accepted = ticked.safeParse(result.content ?? {})
-  // Every flag is asked for by name, so an accept carrying no form content has ticked nothing.
-  const tickedAll =
-    accepted.success && Object.keys(ticks).every((flag) => accepted.data[flag] === true)
-  return result.action === 'accept' && tickedAll ? 'accept' : 'decline'
-}
-
-// The five tools of the settled surface, each one a thin call into the service. `elicitInput` is
-// declared on the low-level server only, and it is sent only when the client said it can render it.
-export function createRouter(config: EngineConfig): McpServer {
-  const server = new McpServer({ name: 'agent-config-manager', version: '0.1.0' })
+// The tools land here one at a time as the tickets that own them arrive; declaring the capability in
+// the constructor is what makes `tools/list` answer with whatever is registered rather than "method
+// not found".
+export function createRouter(): McpServer {
+  const server = new McpServer(
+    { name: 'agent-config-manager', version: '0.1.0' },
+    { capabilities: { tools: {} } },
+  )
 
   server.registerTool(
-    'list_installations',
+    'list_provisions',
     {
       description:
-        'List the installations the last scan stored for the project this server was started in, with the harnesses and tiers a mirror could target. Read-only.',
+        'List every Provision the environment files declare, with the Presence (present, absent, or unknown) of each harness entry and a detail when a Check could not answer. Read-only.',
       inputSchema: {
-        category: z.string().optional(),
-        harness: z.string().optional(),
-        scope: z.string().optional(),
-        fresh: z.boolean().optional().describe('re-scan the native configs before answering'),
+        harness: z.enum(HARNESSES).optional().describe('only the entries declared for this harness'),
+        name: z.string().min(1).optional().describe('only the Provision with this name'),
+        tier: z.enum(ENVIRONMENT_TIERS).optional().describe('only the entries this tier owns'),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ category, harness, scope, fresh }) =>
-      answer(JSON.stringify(listInstallations(config, { category, harness, scope, fresh }), null, 2)),
+    async ({ harness, name, tier }) =>
+      answer(JSON.stringify(statusDocument(readStatus({ harness, name, tier })), null, 2)),
   )
 
   server.registerTool(
-    'inspect_installation',
-    {
-      description: 'Read one installation as stored: secret-free known fields, native location, digests, bindings. Read-only.',
-      inputSchema: { installationId: z.string().min(1) },
-      annotations: { readOnlyHint: true },
-    },
-    async ({ installationId }) => answer(JSON.stringify(inspectInstallation(config, installationId), null, 2)),
-  )
-
-  server.registerTool(
-    'plan_mirror',
+    'read_native_config',
     {
       description:
-        'Build the plan document for moving one installation into a target tier. Writes nothing: carry the document back to apply_plan. Read-only.',
+        'Read what one harness declares at the native paths it loads, secret-free: every declared path at the tier with whether it could be read, and each declaration with its file and the address inside it, or the file that did not parse. A credentialed value comes back as its verdict marker. Nothing is stored. Read-only.',
       inputSchema: {
-        installationId: z.string().min(1),
-        target: z.object({ harness: z.string().min(1), tierId: z.string().min(1) }),
+        harness: z.enum(HARNESSES).describe('the harness whose native configuration to read'),
+        tier: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('one declared tier id, such as codex:user; every tier the harness declares when omitted'),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ installationId, target }) => {
-      // A tier's own id already carries its harness, so the pair is checked against the tiers that
-      // harness declares rather than joined back into a reference: a pair that disagrees names no
-      // tier, and a refusal is the same document shape as the planner's own.
-      const tiers = listInstallations(config, { harness: target.harness }).harnesses.flatMap(
-        (summary) => summary.tiers,
-      )
-      if (!tiers.some((tier) => tier.id === target.tierId)) {
-        return answer(
-          JSON.stringify(
-            { kind: 'refused', reason: `${target.tierId} is not a tier of ${target.harness}` },
-            null,
-            2,
-          ),
-        )
-      }
-      return answer(JSON.stringify(planMirror(config, installationId, target.tierId), null, 2))
-    },
+    async ({ harness, tier }) => answer(JSON.stringify(readNativeConfig(harness, tier), null, 2)),
   )
 
   server.registerTool(
-    'apply_plan',
+    'define_provision',
     {
       description:
-        'Execute a plan document exactly as given and record what landed. Writes the target harness config.',
-      inputSchema: { plan: planDocument, onConflict: z.enum(['abort', 'replace']).optional() },
-      annotations: { readOnlyHint: false, destructiveHint: true },
+        'Define one Provision\'s Check and Install command for one harness, written as [provision.<name>.<harness>] in the environment file of the chosen tier. Comments and sibling Provisions survive; a same-key write replaces only that entry\'s check and install. The default tier is project-local, which git ignores. Never runs the Install command and never evaluates the Check: the only effect is the file. Answers the pointer written and the file\'s digest, or the reason the loader would refuse the result.',
+      inputSchema: {
+        name: z.string().min(1).describe('the Provision name, such as serena'),
+        // Deliberately not an enum: the file's own validator names an unknown harness, and that is
+        // the reason the caller should read.
+        harness: z.string().min(1).describe('the harness the entry is for: pi, codex, or opencode'),
+        tier: z
+          .enum(ENVIRONMENT_TIERS)
+          .optional()
+          .describe('which environment file to write: user, project, or project-local (the default)'),
+        check: z
+          .record(z.string(), z.json())
+          .describe('the Check as the file spells it, for example { file, contains }'),
+        install: z
+          .string()
+          .min(1)
+          .describe('the idempotent Install command for this harness at this tier; an entry carries both fields'),
+        tags: z.array(z.string()).optional().describe('tags for the Provision, written when it has none'),
+      },
+      annotations: { readOnlyHint: false },
     },
-    async ({ plan, onConflict }) => {
-      const askable = server.server.getClientCapabilities()?.elicitation !== undefined
-      return answer(
-        JSON.stringify(
-          await applyPlanAsking(
-            config,
-            plan,
-            { onConflict },
-            askable ? (request) => askHuman(server, request) : undefined,
-          ),
-          null,
-          2,
-        ),
-      )
+    async (request) => {
+      const outcome = defineProvision(request)
+      return outcome.kind === 'defined' ? answer(JSON.stringify(outcome, null, 2)) : refused(outcome)
     },
-  )
-
-  server.registerTool(
-    'verify_plan',
-    {
-      description: "Re-read the target and assert a plan's expectations, after apply or after a manual step. Read-only.",
-      inputSchema: { plan: planDocument },
-      annotations: { readOnlyHint: true },
-    },
-    // SAFETY: likewise, a document that is not a plan is refused before a file is read.
-    async ({ plan }) => answer(JSON.stringify(verifyPlanDocument(config, plan), null, 2)),
   )
 
   return server

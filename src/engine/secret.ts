@@ -1,6 +1,6 @@
 // The engine's one ordered rule table for credential detection. It runs over source bytes before a
-// value reaches known fields, a plan, a tool result, an elicitation form, or a log line, so a human
-// or an agent reading an inspection can trust that no token arrived with it.
+// value reaches known fields, a tool result, or a log line, so a human or an agent reading the
+// answer can trust that no token arrived with it.
 //
 // Entropy is split by alphabet on purpose: hex caps at 4.0 bits per character and a base64 key
 // sits at 4.33-4.75, so one threshold either flags every hash or misses every hex key.

@@ -4,10 +4,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// The two faces reach the engine through `service.ts` and nothing deeper: a plan, a store row, or an
-// adapter is an implementation detail of the library, and a face that imported one would be free to
-// re-derive a plan, write a file, or read the store behind the service's back.
-const FORBIDDEN = ['repo.ts', 'plan.ts', 'adapters']
+// The two faces reach the engine through the environment service and nothing deeper: an adapter or
+// a harness reader is an implementation detail of the library, and a face that imported one would
+// be free to re-derive an answer or read a file behind the service's back.
+const FORBIDDEN = ['adapters']
 
 function sources(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -18,7 +18,7 @@ function sources(dir: string): string[] {
 }
 
 // Matched by path segment, not by suffix: `../engine/adapters/registry.ts` and the `#/…` alias are
-// the same breach as `../engine/plan.ts`.
+// the same breach as a direct path to one of them.
 function forbidden(specifier: string): boolean {
   return specifier
     .split('/')
