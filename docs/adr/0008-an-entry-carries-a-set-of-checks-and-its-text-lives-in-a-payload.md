@@ -49,9 +49,9 @@ there, and taking the title from the Payload means one place spells it.
   that ran rather than the bytes it held at the time.
 - `contains` stays whole-file and remains the answer for a file that holds one thing. It is the only
   predicate that cannot be scoped, which is why a stale entry in a mixed file matched it.
-- Two Tiers that resolve to one file are one environment file: the nearer Tier wins and the farther
-  contributes nothing. A Project root that is `$HOME` therefore labels `~/agents_environ.toml` once,
-  and `status` prints the file each entry came from.
+- A file is read once: when two Tiers resolve to one path, the `user` Tier keeps it, because a
+  Project root inside `$HOME` must not relabel the home file as a project declaration. `status` prints
+  the file each entry came from, and `--tier` names where it looked when a filter matches nothing.
 - Nothing is declared absent and nothing is removed. A Provision says what should be present, an
   entry's Section is the only text ACM may overwrite, and retiring a Provision is an edit to the file.
   A remove command, a `--prune` mode, and a delete tool stay out of scope until a machine has to be

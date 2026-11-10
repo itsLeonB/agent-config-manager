@@ -181,6 +181,25 @@ unstored input for authoring). Everything else in the mirror engine is deleted, 
 59. As a maintainer, I want the mirror, plan, apply, verify, and setup paths deleted rather than left
     dormant, so that the deleted vocabulary cannot creep back into code.
 
+### The file's shape after one real environment
+
+60. As a human, I want an entry to declare more than one Check, so that "the plugin is installed and
+    its hooks are trusted" is one row rather than two that can disagree.
+61. As a human, I want a Check to address an element of an array, so that a list of plugins or hook
+    entries is answerable by address instead of by a regex over the whole file.
+62. As a human, I want a Check to compare one Section of a native instruction file against the text I
+    declared, so that an edited or stale block reads `absent` rather than merely present.
+63. As a human, I want that Section's heading to come from the text I wrote, so that one place spells
+    the title and it cannot disagree with the entry.
+64. As a human, I want one Payload to serve every harness entry that names it, so that fixing an
+    instruction text once fixes all three.
+65. As a human, I want an Install command too long to read inline to live in a file, so that the
+    environment file stays reviewable and lintable.
+66. As a human, I want a Payload to take arguments, so that three entries that differ by one name
+    share one command.
+67. As a human, I want `acm status` to name the file each row came from, so that running it in my home
+    directory does not quietly relabel my home file as a project file.
+
 ## Implementation Decisions
 
 ### Vocabulary and entities
@@ -193,8 +212,8 @@ Grade, Scope bucket) must not appear in code, tool output, or docs.
 ### The Environment file
 
 One TOML document per tier. `version = 1` at the root is required; an unknown version refuses to load.
-Provisions are `[provision.<name>.<harness>]` tables, each with a `check` and an `install`. A
-Provision may carry `tags`. This shape is the decision, not a sketch:
+Provisions are `[provision.<name>.<harness>]` tables, each with `checks` (one or more) and an
+`install`. A Provision may carry `tags`. This shape is the decision, not a sketch:
 
 ```toml
 version = 1
@@ -203,28 +222,37 @@ version = 1
 tags = ["mcp"]
 
 [provision.serena.codex]
-check   = { file = "~/.codex/config.toml", pointer = "mcp_servers.serena" }
-install = "python3 scripts/merge-codex-mcp.py serena"
+checks  = [{ file = "~/.codex/config.toml", pointer = "mcp_servers.serena" }]
+install = { payload = "install/codex-mcp.sh", args = ["serena"] }
 
 [provision.i-have-adhd.pi]
-check   = { file = "~/.config/opencode/AGENTS.md", contains = "^## Output style" }
-install = "./scripts/append-block.sh --file AGENTS.md --block output-style"
+checks  = [{ file = "~/.config/opencode/opencode.json", pointer = "plugins", includes = "i-have-adhd" }]
+install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
 
 [provision.opencode-no-claude]
-check   = { file = "~/.zshrc", contains = "OPENCODE_DISABLE_CLAUDE_CODE" }
-install = "./scripts/zshrc-export.sh OPENCODE_DISABLE_CLAUDE_CODE=1"
+checks  = [{ file = "~/.zshrc", contains = "OPENCODE_DISABLE_CLAUDE_CODE" }]
+install = "grep -q OPENCODE_DISABLE_CLAUDE_CODE ~/.zshrc || echo 'export OPENCODE_DISABLE_CLAUDE_CODE=1' >> ~/.zshrc"
 ```
 
-- **Check is a closed set of four predicates**, each an inline table: `{ file }` (exists),
-  `{ file, contains = "<regex>" }`, `{ file, pointer = "<address>" [, equals = <value>] }`, and
+- **A Check is a closed set of six predicates**, each an inline table: `{ file }` (exists),
+  `{ file, contains = "<regex>" }`, `{ file, pointer = "<address>" [, equals = <value>] }`,
+  `{ file, pointer = "<address>", includes = <value> }`, `{ file, section = "<payload>" }`, and
   `{ onPath = "<name>" }`. An address's format is derived from the file's extension by the same
-  pointer reader the editor uses, so a JSON pointer and a TOML dotted key are written the same way.
-  A fifth predicate kind is a schema change.
-- **Install is a string**, required, and the only field ACM ever executes.
-- **Validation is total.** An unknown key, a missing `install`, an unknown harness id, an unknown
-  predicate kind, or an empty `contains` refuses the whole file with line and column. A file that does
-  not parse contributes nothing; the other tiers still load.
-- **A relative path in `file`, `contains`'s file, or an `install` string resolves against the tier
+  pointer reader the editor uses, so a JSON pointer and a TOML dotted key are written the same way. A
+  segment in double quotes names a key literally and a numeric segment indexes an array; an address
+  the reader cannot spell refuses the file rather than answering for it. A seventh predicate kind is a
+  schema change.
+- **An entry's `checks` all have to hold**, and `check = { … }` stays legal as a one-element list, so
+  a file written before this slice keeps loading at `version = 1`.
+- **Install is one of three shapes**: a string, required and the only text ACM ever executes;
+  `{ payload = "<path>" [, args = [ … ]] }`, whose Payload is read at run time and whose arguments
+  reach it as argv; or `{ file = "<native file>", section = "<payload>" }`, which rewrites one Section
+  and nothing else of that file.
+- **Validation is total.** An unknown key, a missing `install`, an empty `checks` list, an unknown
+  harness id, an unknown predicate kind, an empty `contains`, or an address that cannot be spelled
+  refuses the whole file with line and column. A file that does not parse contributes nothing; the
+  other tiers still load.
+- **A relative path in `file`, a Payload path, or an `install` string resolves against the tier
   root** — `$HOME` for `user`, the Project root for `project` and `project-local`. A leading `~` or
   `/` is absolute. This is what lets one Provision's text be written twice for two tiers and stay
   readable.
@@ -236,15 +264,20 @@ Install command, and source file. It reads `user` always, and the two project fi
 root has them. Merge is per `(provision, harness)` key with `project-local` > `project` > `user`; a
 Provision's `tags` merge the same way, replaced rather than unioned, so a nearer file owns its entry
 whole. Ordering for a run is file order of the winning entry, `user` file first, which keeps a
-human-editable sequence without inventing a dependency syntax.
+human-editable sequence without inventing a dependency syntax. A file is read once: when two tiers
+resolve to one path — a Project root that is `$HOME` — the `user` tier keeps it, so the home file is
+never relabelled as a project declaration.
 
 ### Presence
 
 `Presence` is `present | absent | unknown`, with an optional `detail` explaining an `unknown`
 (unreadable file, unparseable file, missing binary directory, invalid regex). Checks read; they never
 spawn. `onPath` walks `PATH` and requires a regular executable file. `pointer` presence means a value
-exists at that address; with `equals`, the value must also match by deep equality. Presence is never
-stored between runs — `acm status` always re-evaluates.
+exists at that address; with `equals`, the value must also match by deep equality; with `includes`,
+the array at that address must hold an element deeply equal to it. An entry's Presence folds its
+Checks: any `absent` answers `absent`, otherwise any `unknown` answers `unknown`, otherwise
+`present`, and `detail` names every Check that did not answer `present`. Presence is never stored
+between runs — `acm status` always re-evaluates.
 
 ### The install run
 
@@ -254,13 +287,19 @@ Tier, and command, then starts the commands whose Presence is not `present` (or 
 
 - Each command starts via the POSIX shell, with `cwd` = the Tier root, stdin from `/dev/null`,
   inherited stdout/stderr, and the parent environment unchanged. ACM adds no variables.
+- A Payload starts as `sh <payload> <args…>` from that same root, so its text is read at run time and
+  needs no executable bit. A Payload that cannot be read fails its entry without spawning anything.
+- A Section write replaces the text between a Section's heading and the next `## ` heading, creates
+  the file when it is absent, and appends at end of file when the Section is. Nothing outside the
+  Section is touched, and the comparison strips trailing blank lines from both sides.
 - A failing command is recorded and the run continues. The exit status is non-zero if any command
   failed or any Presence is still not `present` afterwards.
 - No per-command timeout in this slice: a hung command holds the run until interrupted.
   `shortcut: no per-command timeout; add one when a real command hangs.`
 - `--dry-run` is the default when stdin is not a TTY. `--only` and `--tier` filter; `--force` re-runs.
 - Presence is re-evaluated after each command, and that answer is what the run records. A command that
-  half-worked reports `present` if its Check passes.
+  half-worked reports `present` if its Checks pass. The recorded command is what ran, spelled: the
+  Payload path followed by its arguments when there is one.
 
 ### The MCP surface
 
@@ -272,6 +311,9 @@ Three tools, identical on all three clients, registered with zod input schemas:
 | `read_native_config` | `harness`, `tier?` | secret-free declarations with native locations, or a parse error | `readOnlyHint: true` |
 | `define_provision` | `name`, `harness`, `tier?`, `check`, `install`, `tags?` | the written pointer and the file's digest | `readOnlyHint: false` |
 
+- `define_provision`'s `checks` and `install` are discriminated unions of the shapes above, so a
+  client sees every predicate and every install form in the tool schema instead of a free-form object.
+- No tool deletes a Provision: the environment file is the interface, and removal is an edit to it.
 - No tool runs a command and no tool runs a Check that spawns anything, by construction: Checks cannot
   spawn.
 - `define_provision` defaults to `project-local`, so an agent's unreviewed addition never lands in a
@@ -348,6 +390,9 @@ them.
   the known gap is that the environment file is a place a token could sit unremarked.
 - **Any agent-triggered execution.** No MCP tool runs an Install command, and no Check spawns.
 - **Removing a Provision through MCP.** The environment file is the interface; removal is an edit.
+- **Declaring absence, remove commands, and pruning.** A Provision says what should be present, and a
+  Section is the only native text ACM may overwrite. Revisit when a machine has to be reproduced
+  *without* a leftover.
 - **Per-command timeouts, retries, and parallel runs.**
 - **Command output capture or persistence.**
 - **Categorising Provisions.** `tags` filter; they are not identity and carry no vocabulary.
