@@ -7,7 +7,7 @@ import { tomlPath, writePointer } from '../engine/edit.ts'
 import type { NativeValue } from '../engine/native-value.ts'
 import { environmentFiles } from './loader.ts'
 import { parseEnvironmentFile } from './parse.ts'
-import type { EnvironmentTier, ProvisionDeclaration, Refusal } from './types.ts'
+import type { EnvironmentTier, InstallCommand, ProvisionDeclaration, Refusal } from './types.ts'
 
 // One Provision's Check and Install command for one harness, written into the environment file its
 // tier names. Nothing here runs the command or evaluates the Check: the only effect is bytes in a
@@ -27,8 +27,9 @@ export interface DefineRequest {
   checks?: Record<string, NativeValue>[]
   // Required, and never optional: an entry is a Check and an Install command, so a definition that
   // named only the Check would write a subtree the loader refuses and an existing command would
-  // survive a write that said it replaced the entry.
-  install: string
+  // survive a write that said it replaced the entry. A Payload form `{ payload [, args] }` is
+  // written as the table the file spells, and the validator after the write owns both shapes.
+  install: InstallCommand
   tags?: string[]
 }
 

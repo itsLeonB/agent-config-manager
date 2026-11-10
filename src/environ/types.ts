@@ -46,13 +46,25 @@ export interface OnPathCheck {
 
 export type Check = FileExistsCheck | FileContainsCheck | FilePointerCheck | OnPathCheck
 
+// A Payload is where an Install command too long to read inline lives: the file its text is in, and
+// the arguments that reach it as argv, never substituted into its text. A type alias, not an
+// interface: the alias's implicit index signature is what lets the editor write one as a TOML value.
+export type PayloadInstall = {
+  payload: string
+  args?: string[]
+}
+
+// An Install command is either the text spelled in the file, or the Payload that holds it.
+export type InstallCommand = string | PayloadInstall
+
 // One `(provision, harness)` as the file spells it, before any path is resolved against a tier
 // root. `checks` is one or more, and all of them have to hold; a file that spells a single
-// `check = { … }` is read as this list's one element.
+// `check = { … }` is read as this list's one element. `install` is the command spelled in the file
+// or the Payload a too-long command lives in.
 export interface DeclaredEntry {
   harness: HarnessId
   checks: Check[]
-  install: string
+  install: InstallCommand
 }
 
 // One `[provision.<name>]` table. `tags` filter and are not identity.
@@ -62,8 +74,8 @@ export interface ProvisionDeclaration {
   entries: DeclaredEntry[]
 }
 
-// One `(provision, harness)` after the loader applied its tier's root: every Check's `file` is
-// absolute and `source` is the environment file the entry came from.
+// One `(provision, harness)` after the loader applied its tier's root: every Check's `file` and a
+// Payload's path are absolute and `source` is the environment file the entry came from.
 export interface ResolvedProvision {
   name: string
   tags: string[]
@@ -75,7 +87,7 @@ export interface ResolvedProvision {
   root: string
   source: string
   checks: Check[]
-  install: string
+  install: InstallCommand
 }
 
 // A refusal locates the declaration at fault, so a typo is a line to edit rather than a file to

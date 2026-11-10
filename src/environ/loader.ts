@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { EngineConfig } from '../engine/config.ts'
 import { parseEnvironmentFile } from './parse.ts'
-import type { Check, EnvironmentTier, FileRefusal, ResolvedProvision } from './types.ts'
+import type { Check, EnvironmentTier, FileRefusal, InstallCommand, PayloadInstall, ResolvedProvision } from './types.ts'
 
 // The loader answers what the environment declares: one entry per Provision and harness, with its
 // tier, its resolved Check, its Install command, and the file it came from. It reads environment
@@ -49,6 +49,27 @@ export function resolveDeclaredPath(declared: string, root: string, home: string
 function resolveCheck(check: Check, root: string, home: string): Check {
   if (!('file' in check)) return check
   return { ...check, file: resolveDeclaredPath(check.file, root, home) }
+}
+
+// The two forms of an Install command share no runtime tag — one is a string, the other a table —
+// so this one test is the branch the loader and the runner both make on the union the parser closed.
+export function isPayloadInstall(install: InstallCommand): install is PayloadInstall {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- typeof is the union's own discriminator
+  return typeof install !== 'string'
+}
+
+// A Payload's path resolves the way a Check's file does; a string command has nothing to resolve.
+function resolveInstall(install: InstallCommand, root: string, home: string): InstallCommand {
+  if (!isPayloadInstall(install)) return install
+  return { payload: resolveDeclaredPath(install.payload, root, home), args: install.args }
+}
+
+// What a Payload runs as, and the one spelling the preview prints and the Run records: the resolved
+// path followed by its arguments, through the same shell a string command uses. A string command is
+// its own spelling.
+export function installCommand(install: InstallCommand): string {
+  if (!isPayloadInstall(install)) return install
+  return ['sh', install.payload, ...(install.args ?? [])].join(' ')
 }
 
 export interface Environment {
@@ -126,7 +147,7 @@ export function loadEnvironment(config: EngineConfig): Environment {
           root: location.root,
           source: location.file,
           checks: entry.checks.map((check) => resolveCheck(check, location.root, config.home)),
-          install: entry.install,
+          install: resolveInstall(entry.install, location.root, config.home),
         }
         won.set(keyOf(provision), { provision, precedence, position })
         position += 1

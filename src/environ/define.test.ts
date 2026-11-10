@@ -7,6 +7,7 @@ import type { EngineConfig } from '../engine/config.ts'
 import { digestOfBytes } from '../engine/digest.ts'
 import { defineProvision, readNativeConfig, readStatus } from './service.ts'
 import type { DefineOutcome, DefineRequest } from './service.ts'
+import type { NativeValue } from '../engine/native-value.ts'
 import type { Refusal } from './types.ts'
 
 // Seam A: a definition against a fixture home and a fixture project root, and then the rows `acm
@@ -534,3 +535,76 @@ install = "opencode mcp add serena"
     },
   ])
 })
+
+test('a definition with a payload install writes the table form the file spells, and it loads', () => {
+  const f = fixture()
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'codex',
+        check: { file: '~/.codex/config.toml', contains: 'serena' },
+        install: { payload: 'install/codex-mcp.sh', args: ['serena'] },
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.serena.codex')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.serena.codex]
+check = { file = "~/.codex/config.toml", contains = "serena" }
+install = { payload = "install/codex-mcp.sh", args = ["serena"] }
+`,
+  )
+  // The written form is one the loader accepts: the entry is read back with its Presence, not
+  // reported as a file that refuses to load.
+  const status = readStatus({ name: 'serena' }, f.config)
+  assert.equal(status.refusals.length, 0)
+  assert.equal(status.provisions[0].harnesses[0].presence, 'absent')
+})
+
+// A Payload shape the parser refuses is refused with that reason, and the file is left as it was:
+// the write never reaches disk.
+test('a payload definition the loader would refuse is refused with that reason and writes nothing', () => {
+  const f = fixture()
+  write(localFile(f), REVIEWED)
+  const notAString = refused(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        check: { file: '~/.pi/agent/mcp.json' },
+        install: brokenInstall({ payload: 1 }),
+      },
+      f.config,
+    ),
+  )
+  assert.equal(notAString.reason, 'payload must be a string')
+  assert.equal(read(localFile(f)), REVIEWED, 'the refused definition changed the file')
+
+  const missing = refused(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        check: { file: '~/.pi/agent/mcp.json' },
+        install: brokenInstall({}),
+      },
+      f.config,
+    ),
+  )
+  assert.equal(missing.reason, 'install has no payload')
+  assert.equal(read(localFile(f)), REVIEWED, 'the refused definition changed the file')
+})
+
+// A definition can name an Install shape the file parser must refuse, the way a loose client could:
+// the request type will not spell it, so the test smuggles one past it on purpose. The parameter is
+// the file's own value domain, which is what a boundary would have handed over.
+function brokenInstall(value: Record<string, NativeValue>): DefineRequest['install'] {
+  // SAFETY: the test deliberately names a shape the file parser must refuse.
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- the broken shape is the point of the test
+  return value as unknown as DefineRequest['install']
+}

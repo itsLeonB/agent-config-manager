@@ -2,7 +2,7 @@ import { parse, TomlError } from 'smol-toml'
 import { z } from 'zod'
 import { HARNESSES } from '../engine/adapters/types.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
-import type { Check, DeclaredEntry, ParseResult, ProvisionDeclaration, Refusal } from './types.ts'
+import type { Check, DeclaredEntry, InstallCommand, ParseResult, ProvisionDeclaration, Refusal } from './types.ts'
 
 // The parser is total against the closed environment-file schema: every value in the document is
 // either decoded into a Provision or refuses the whole file with the line and column of the part at
@@ -15,6 +15,8 @@ const TAGS_KEY = 'tags'
 const CHECK_KEY = 'check'
 const CHECKS_KEY = 'checks'
 const INSTALL_KEY = 'install'
+const PAYLOAD_KEY = 'payload'
+const ARGS_KEY = 'args'
 const FILE_KEY = 'file'
 const CONTAINS_KEY = 'contains'
 const POINTER_KEY = 'pointer'
@@ -172,8 +174,8 @@ function decodeEntry(
     }
   }
   if (!has(table, INSTALL_KEY)) return refused(place(at.header(block), 'missing install'))
-  const install = stringValue(table[INSTALL_KEY])
-  if (install === null) return refused(place(at.declaration(block, INSTALL_KEY), 'install must be a string'))
+  const install = decodeInstall(table[INSTALL_KEY], block, at)
+  if (!install.ok) return install
   if (has(table, CHECK_KEY) && has(table, CHECKS_KEY)) {
     return refused(place(at.declaration(block, CHECKS_KEY), 'an entry holds check or checks, not both'))
   }
@@ -184,7 +186,7 @@ function decodeEntry(
     if (checkTable === null) return refused(place(at.declaration(block, CHECK_KEY), 'check must be an inline table'))
     const check = decodeCheck(checkTable, block, at)
     if (!check.ok) return check
-    return { ok: true, value: { harness, checks: [check.value], install } }
+    return { ok: true, value: { harness, checks: [check.value], install: install.value } }
   }
   if (!has(table, CHECKS_KEY)) return refused(place(at.header(block), 'missing check'))
   const checksList = z.array(TOML_TABLE).safeParse(table[CHECKS_KEY])
@@ -198,7 +200,35 @@ function decodeEntry(
     if (!check.ok) return check
     checks.push(check.value)
   }
-  return { ok: true, value: { harness, checks, install } }
+  return { ok: true, value: { harness, checks, install: install.value } }
+}
+
+// `install` is the one command ACM ever executes, and it is either spelled in the file or a
+// Payload: `{ payload = "<path>" [, args = [ … ]] }`. The set of keys is closed the way a Check's
+// predicates are, so a shape the parser does not understand refuses the file rather than being
+// half-read.
+function decodeInstall(
+  value: EnvironmentValue | undefined,
+  block: readonly string[],
+  at: SourceIndex,
+): Decoded<InstallCommand> {
+  const asString = stringValue(value)
+  if (asString !== null) return { ok: true, value: asString }
+  const table = tableValue(value)
+  if (table === null) return refused(place(at.declaration(block, INSTALL_KEY), 'install must be a string or a table'))
+  for (const key of Object.keys(table)) {
+    if (key !== PAYLOAD_KEY && key !== ARGS_KEY) {
+      return refused(place(at.declaration(block, key), `unknown install key '${key}'`))
+    }
+  }
+  if (!has(table, PAYLOAD_KEY)) return refused(place(at.declaration(block, INSTALL_KEY), 'install has no payload'))
+  const payload = stringValue(table[PAYLOAD_KEY])
+  if (payload === null) return refused(place(at.declaration(block, PAYLOAD_KEY), 'payload must be a string'))
+  if (payload === '') return refused(place(at.declaration(block, PAYLOAD_KEY), 'payload is empty'))
+  if (!has(table, ARGS_KEY)) return { ok: true, value: { payload } }
+  const args = stringList(table[ARGS_KEY])
+  if (args === null) return refused(place(at.declaration(block, ARGS_KEY), 'args must be an array of strings'))
+  return { ok: true, value: { payload, args } }
 }
 
 function decodeProvision(name: string, table: EnvironmentTable, at: SourceIndex): Decoded<ProvisionDeclaration> {

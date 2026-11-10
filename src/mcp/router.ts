@@ -88,9 +88,13 @@ export function createRouter(): McpServer {
           .record(z.string(), z.json())
           .describe('the Check as the file spells it, for example { file, contains }'),
         install: z
-          .string()
-          .min(1)
-          .describe('the idempotent Install command for this harness at this tier; an entry carries both fields'),
+          .union([
+            z.string().min(1),
+            z.object({ payload: z.string().min(1), args: z.array(z.string()).optional() }),
+          ])
+          .describe(
+            'the idempotent Install command for this harness at this tier: a string, or { payload, args? } whose payload path resolves like a Check file and whose args reach it as argv; an entry carries both fields',
+          ),
         tags: z.array(z.string()).optional().describe('tags for the Provision, written when it has none'),
       },
       annotations: { readOnlyHint: false },
