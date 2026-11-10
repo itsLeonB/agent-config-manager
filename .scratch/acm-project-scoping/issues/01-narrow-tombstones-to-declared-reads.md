@@ -15,12 +15,21 @@ Prefix matching is by path segment, not string prefix: a file under `/a/bc` is n
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Scanning project A then project B against one store leaves every one of A's project-scope
+- [x] Scanning project A then project B against one store leaves every one of A's project-scope
       Installations live
-- [ ] An entry removed from a file the pass did read is still tombstoned, so the inventory can shrink
-- [ ] A tier that reports `unreadable` still tombstones nothing (the existing rule, unchanged)
-- [ ] A file whose path shares a string prefix with a declared read but is not inside it is not
+- [x] An entry removed from a file the pass did read is still tombstoned, so the inventory can shrink
+- [x] A tier that reports `unreadable` still tombstones nothing (the existing rule, unchanged)
+- [x] A file whose path shares a string prefix with a declared read but is not inside it is not
       tombstoned by that tier
-- [ ] `bun run check` green
+- [x] `bun run check` green
+
+## Answer
+
+`TierReport` carries the tier's `declaredReads`, computed in `discover()` by the new
+`declaredReads(tier)` helper in `src/engine/adapters/types.ts` — every path the tier declares across
+all four categories. `recordDiscovery` now reads live rows as `{id, nativeFile}` and tombstones one
+only when its `nativeFile` is `under()` those reads, using the same segment-based containment that
+bounds a write (`declaresReadPath` is now spelled with it). An `unreadable` tier still returns before
+the loop, so it tombstones nothing.

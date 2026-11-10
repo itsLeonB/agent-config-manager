@@ -30,8 +30,9 @@ _Avoid_: scope, level, layer
 _Avoid_: scope (when a tier is meant), level
 
 **Tier health**: whether a tier's config parsed cleanly on the last discovery pass — `ok` or
-`unreadable`. Only an `ok` tier may tombstone an Installation it no longer sees; `unreadable` means
-the tier was left alone, and the inventory is incomplete rather than smaller. Some harnesses report
+`unreadable`. Only an `ok` tier may tombstone an Installation it no longer sees, and only one whose
+native location the tier declared it reads; `unreadable` means the tier was left alone, so the
+inventory is incomplete rather than smaller. Some harnesses report
 invalid config as success (OpenCode exits 0 and drops the file), so this is measured, never assumed.
 _Avoid_: error state, scan status
 

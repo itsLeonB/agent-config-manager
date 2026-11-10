@@ -271,6 +271,7 @@ test('a pass in another project leaves the first project’s project-tier rows l
   const projectB = path.join(path.dirname(projectA), 'project-b')
   fs.mkdirSync(path.join(projectB, '.pi'), { recursive: true })
   writeMcp(path.join(projectA, '.pi', 'mcp.json'), { alpha: { command: 'alpha' } })
+  writeSkill(path.join(projectA, '.agents', 'skills', 'review'))
   discover({ ...config, projectRoot: projectA })
 
   writeMcp(path.join(projectB, '.pi', 'mcp.json'), { beta: { command: 'beta' } })
@@ -281,8 +282,16 @@ test('a pass in another project leaves the first project’s project-tier rows l
     listInstallations(config, { scope: 'project' }).installations.map((row) => [row.name, row]),
   )
   assert.ok(rows.get('alpha'))
+  assert.ok(rows.get('review'))
   assert.ok(rows.get('beta'))
 })
+
+// A skill root is a directory, so a live row's path can carry a declared read as a plain string
+// prefix without being inside it — which is why containment is compared by path segment.
+function writeSkill(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: review\n---\n')
+}
 
 test('an entry removed from a file the pass read is still tombstoned', () => {
   const config = fixture()
@@ -303,32 +312,36 @@ test('an entry removed from a file the pass read is still tombstoned', () => {
 test('a live row under a path that only shares a string prefix with a declared read survives', () => {
   const config = fixture()
   const declared = path.join(config.projectRoot, '.agents', 'skills')
-  const inside = path.join(declared, 'kept', 'SKILL.md')
-  const sibling = path.join(config.projectRoot, '.agents', 'skills-extra', 'kept', 'SKILL.md')
-  const skill = (file: string, name: string) => ({
+  const inside = path.join(declared, 'gone')
+  const sibling = path.join(config.projectRoot, '.agents', 'skills-extra', 'kept')
+  writeSkill(inside)
+  writeSkill(sibling)
+  const skill = (dir: string) => ({
     category: 'skills' as const,
-    name,
+    name: path.basename(dir),
     scope: 'project' as const,
     tierId: 'pi:project',
-    nativeFile: file,
-    nativePointer: 'SKILL.md',
-    knownFieldsJson: '{}',
+    nativeFile: dir,
+    nativePointer: '',
+    knownFieldsJson: '{"files":[]}',
     contentDigest: `sha256:${'d'.repeat(64)}`,
   })
-  const report = (installations: ReturnType<typeof skill>[]) => [
-    { harness: 'pi', tierId: 'pi:project', health: 'ok' as const, detail: null, declaredReads: [declared], installations },
-  ]
 
-  recordDiscovery(config.storePath, report([skill(inside, 'kept'), skill(sibling, 'sibling')]), '2026-01-01T00:00:00.000Z')
-  // The next pass read the declared root only, so the sibling that merely shares its string prefix
-  // is outside this tier's reads and stays live.
-  recordDiscovery(config.storePath, report([]), '2026-01-02T00:00:00.000Z')
+  // Both rows are live before the pass; the pass reads the declared root and finds only the sibling
+  // missing, because that one was never inside a root the tier declares.
+  recordDiscovery(
+    config.storePath,
+    [{ harness: 'pi', tierId: 'pi:project', health: 'ok', detail: null, declaredReads: [declared], installations: [skill(inside), skill(sibling)] }],
+    '2026-01-01T00:00:00.000Z',
+  )
+  fs.rmSync(inside, { recursive: true })
+  discover(config)
 
   const rows = new Map(
     listInstallations(config, { includeRemoved: true }).installations.map((row) => [row.name, row]),
   )
-  assert.ok(rows.get('kept')?.removedAt)
-  assert.equal(rows.get('sibling')?.removedAt, null)
+  assert.ok(rows.get('gone')?.removedAt)
+  assert.equal(rows.get('kept')?.removedAt, null)
 })
 
 test('one listing call returns installations from all three harnesses, filterable by harness and scope', () => {

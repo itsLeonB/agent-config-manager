@@ -104,7 +104,7 @@ export function declaresWritePath(tier: Tier, category: Category, file: string):
 }
 
 export function declaresReadPath(tier: Tier, file: string): boolean {
-  return CATEGORIES.some((category) => under(declaredPaths(tier, category), file))
+  return under(declaredReads(tier), file)
 }
 
 export function mirrorTarget(
