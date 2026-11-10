@@ -10,7 +10,7 @@ import {
 import type { Settings } from '../lib/settings'
 import { getStore } from './dashboard.server'
 
-// shortcut: these two defaults are mirrored in scan.cjs's resolveConfig, which the
+// shortcut: these two defaults are duplicated in scan.cjs's resolveConfig, which the
 // scanner uses when no value is stored; change both together.
 const DEFAULT_PROJECTS_ROOT = path.join(os.homedir(), 'Projects')
 const DEFAULT_SCAN_INTERVAL_MINUTES = 15

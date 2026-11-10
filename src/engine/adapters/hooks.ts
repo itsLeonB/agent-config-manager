@@ -3,40 +3,35 @@ import { z } from 'zod'
 import { digestOfBytes } from '../digest.ts'
 import { classify, withheldMarker, type Verdict } from '../secret.ts'
 import { stripJsonc } from './opencode/read.ts'
-import { declaredPaths, type DiscoveredInstallation, type Tier, type TierRead } from './types.ts'
+import { declaredPaths, type DiscoveredDeclaration, type Tier, type TierRead } from './types.ts'
 
 // A hook's canonical vocabulary is what one hook is made of whatever the harness calls it: the event
-// it fires on, the matcher that narrows it, and the handlers it runs. The event is renamed per
-// target, never copied (see `hook-write.ts`); everything else travels as it is, or becomes a gap.
-export const HOOK_FIELDS = ['event', 'matcher', 'handlers'] as const
-
+// it fires on, the matcher that narrows it, and the handlers it runs.
 const handlerSchema = z.object({
   // Codex spells the handler kind out (`command` or `mcp_tool`); Pi's bridge only has commands, so
   // its reader supplies the type instead of inventing a field.
   type: z.string().optional(),
   command: z.string().optional(),
   // Normalised to seconds by both readers, because Codex reads seconds and Pi's bridge milliseconds.
-  // One plan then maps one unit instead of guessing which harness wrote the file.
+  // One unit then describes one hook instead of guessing which harness wrote the file.
   timeout: z.number().optional(),
   statusMessage: z.string().optional(),
   print: z.boolean().optional(),
-  // Codex lets a handler run without holding the session; a target that cannot do that reports it
-  // as a gap rather than writing a synchronous hook under an async one's name.
+  // Codex lets a handler run without holding the session; a harness that cannot say so reports the
+  // field as absent rather than inventing a synchronous hook under an async one's name.
   async: z.boolean().optional(),
 })
 export type HookHandler = z.infer<typeof handlerSchema>
 
-export const hookFactsSchema = z.object({
-  event: z.string(),
-  matcher: z.string().optional(),
-  handlers: z.array(handlerSchema),
-})
-export type HookFacts = z.infer<typeof hookFactsSchema>
+export interface HookFacts {
+  event: string
+  matcher?: string
+  handlers: HookHandler[]
+}
 
-// A command is text like any other, and a literal token inside one would otherwise sit in the store
-// for `acm inspect` to print. Each string is classified here, before it can reach known fields,
-// exactly as an instruction body is; a value that is not clean is persisted as its marker, and the
-// planner then reports the marker's verdict instead of writing the text anywhere.
+// A command is text like any other, and a literal token inside one would otherwise sit in a
+// declaration unremarked. Each string is classified here, before it can reach known fields, exactly
+// as an instruction body is; a value that is not clean is withheld as its marker.
 function cleanFacts(facts: HookFacts): HookFacts {
   return {
     ...facts,
@@ -78,27 +73,26 @@ function commandVerdict(pointer: string, command: string): Verdict {
 export type HookSource = 'codex' | 'pi'
 
 export function readHookTier(tier: Tier, source: HookSource): TierRead {
-  const installations: DiscoveredInstallation[] = []
+  const declarations: DiscoveredDeclaration[] = []
   for (const file of declaredPaths(tier, 'hooks')) {
     if (!existsSync(file)) continue
     let bytes: Buffer
     try {
       bytes = readFileSync(file)
     } catch {
-      return { health: 'unreadable', detail: `${file} could not be read`, installations: [] }
+      return { health: 'unreadable', detail: `${file} could not be read`, declarations: [] }
     }
     const parsed = hookDocument(bytes.toString('utf8'), source)
     if (parsed.kind === 'invalid') {
-      return { health: 'unreadable', detail: `${file}: ${parsed.detail}`, installations: [] }
+      return { health: 'unreadable', detail: `${file}: ${parsed.detail}`, declarations: [] }
     }
     // One read answers both questions — the text that is parsed and the bytes the digest names — so
     // the digest can never describe a different read than the values it stands for.
     const digest = digestOfBytes(bytes)
     for (const entry of parsed.entries) {
-      installations.push({
+      declarations.push({
         category: 'hooks',
         name: entry.facts.event,
-        scope: tier.scopeBucket,
         tierId: tier.id,
         nativeFile: file,
         nativePointer: entry.pointer,
@@ -107,7 +101,7 @@ export function readHookTier(tier: Tier, source: HookSource): TierRead {
       })
     }
   }
-  return { health: 'ok', detail: null, installations }
+  return { health: 'ok', detail: null, declarations }
 }
 
 interface HookEntry {
@@ -118,7 +112,7 @@ interface HookEntry {
 type HookDocument =
   | { kind: 'ok'; entries: HookEntry[] }
   // A hooks file this process cannot describe fails the whole tier closed: reported as empty it
-  // would tombstone the installs it hides.
+  // would answer "no hooks" for a file nobody could read.
   | { kind: 'invalid'; detail: string }
 
 function hookDocument(text: string, source: HookSource): HookDocument {

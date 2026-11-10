@@ -1,14 +1,14 @@
 import { parse as parseToml } from 'smol-toml'
 import { z } from 'zod'
-import { planObjectSchema, planValueSchema, type PlanValue } from './plan-value.ts'
+import { nativeObjectSchema, nativeValueSchema, type NativeValue } from './native-value.ts'
 
-// A native config file is edited in place, not re-serialised: a plan writes addresses, and every
+// A native config file is edited in place, not re-serialised: a write names addresses, and every
 // byte it did not address — comments, key order, sibling entries — is somebody else's.
 export type EditResult = { kind: 'ok'; text: string } | { kind: 'failed'; reason: string }
 
-export type PlanFormat = 'json' | 'toml'
+export type NativeFormat = 'json' | 'toml'
 
-export function formatOf(file: string): PlanFormat {
+export function formatOf(file: string): NativeFormat {
   return file.endsWith('.toml') ? 'toml' : 'json'
 }
 
@@ -16,9 +16,9 @@ export function formatOf(file: string): PlanFormat {
 // previous one produced, because an inserted parent moves every address below it.
 export function writePointer(
   text: string,
-  format: PlanFormat,
+  format: NativeFormat,
   segments: string[],
-  value: PlanValue,
+  value: NativeValue,
 ): EditResult {
   try {
     return format === 'toml' ? writeToml(text, segments, value) : writeJson(text, segments, value)
@@ -29,7 +29,7 @@ export function writePointer(
 
 // Whether a document the editor produced is still a document the harness can read. Checked before
 // anything reaches disk, so a bad insertion fails the write instead of corrupting the file.
-export function parses(text: string, format: PlanFormat): boolean {
+export function parses(text: string, format: NativeFormat): boolean {
   try {
     if (format === 'toml') {
       parseToml(text)
@@ -169,7 +169,7 @@ function parseJsonDocument(text: string): JsonNode {
   return document
 }
 
-function writeJson(text: string, segments: string[], value: PlanValue): EditResult {
+function writeJson(text: string, segments: string[], value: NativeValue): EditResult {
   const root = parseJsonDocument(text)
   if (segments.length === 0) throw new Error('a write needs a pointer below the document root')
   let node: JsonNode = root
@@ -185,7 +185,7 @@ function writeJson(text: string, segments: string[], value: PlanValue): EditResu
     }
     // The address does not exist yet: everything from here down is created in one insertion, so a
     // new entry arrives whole rather than leaving half-built parents behind. An object that sits on
-    // one line stays on one line — reformatting it would be a change the plan never asked for.
+    // one line stays on one line — reformatting it would be a change nobody asked for.
     const indent = childIndent(text, node)
     const inline = !text.slice(node.start, node.end).includes('\n')
     const rendered = pretty(nest(segments.slice(index + 1), value), indent, inline)
@@ -202,7 +202,7 @@ function writeJson(text: string, segments: string[], value: PlanValue): EditResu
   }
   // A node is replaced only by a value of its own kind: a table by a table (OpenCode's normalised
   // `mcp` block is one), a list by a list (an existing `command[]`), a leaf by a leaf. A write that
-  // would change the kind of what it names is a plan the engine misread, not an edit to make.
+  // would change the kind of what it names is an engine that misread the file, not an edit to make.
   if (node.kind !== kindOf(value)) {
     throw new Error(`${segments.join('.')} holds a ${node.kind}, and this engine does not write a ${kindOf(value)} there`)
   }
@@ -210,13 +210,13 @@ function writeJson(text: string, segments: string[], value: PlanValue): EditResu
   return { kind: 'ok', text: text.slice(0, node.start) + rendered + text.slice(node.end) }
 }
 
-function kindOf(value: PlanValue): 'object' | 'array' | 'scalar' {
-  if (z.array(planValueSchema).safeParse(value).success) return 'array'
-  return planObjectSchema.safeParse(value).success ? 'object' : 'scalar'
+function kindOf(value: NativeValue): 'object' | 'array' | 'scalar' {
+  if (z.array(nativeValueSchema).safeParse(value).success) return 'array'
+  return nativeObjectSchema.safeParse(value).success ? 'object' : 'scalar'
 }
 
-function nest(segments: string[], value: PlanValue): PlanValue {
-  return segments.reduceRight<PlanValue>((inner, segment) => ({ [segment]: inner }), value)
+function nest(segments: string[], value: NativeValue): NativeValue {
+  return segments.reduceRight<NativeValue>((inner, segment) => ({ [segment]: inner }), value)
 }
 
 // The indentation of the line a position sits on, so an inserted member lines up with its siblings.
@@ -230,7 +230,7 @@ function childIndent(text: string, node: JsonObject): string {
   return last === undefined ? `${indentAt(text, node.start)}  ` : indentAt(text, last.keyStart)
 }
 
-function pretty(value: PlanValue, indent: string, inline: boolean): string {
+function pretty(value: NativeValue, indent: string, inline: boolean): string {
   if (inline) return JSON.stringify(value)
   return JSON.stringify(value, null, 2).split('\n').join(`\n${indent}`)
 }
@@ -276,7 +276,7 @@ function parseTomlPath(path: string): string[] {
   return segments
 }
 
-function writeToml(text: string, segments: string[], value: PlanValue): EditResult {
+function writeToml(text: string, segments: string[], value: NativeValue): EditResult {
   if (segments.length === 0) throw new Error('a write needs a pointer below the document root')
   const lines = text.split('\n')
   const tables = tomlTables(lines)
@@ -350,25 +350,25 @@ function tomlTrailingComment(line: string): string | null {
 // Whether the document already defines this path, which makes an appended table header a duplicate
 // key: `env = { A = "1" }` is a table TOML will not let a `[mcp_servers.x.env]` header repeat.
 function definesPath(text: string, segments: string[]): boolean {
-  const document = planObjectSchema.safeParse(parseToml(text))
+  const document = nativeObjectSchema.safeParse(parseToml(text))
   if (!document.success) return false
-  let node: PlanValue | undefined = document.data
+  let node: NativeValue | undefined = document.data
   for (const segment of segments) {
-    const object = planObjectSchema.safeParse(node)
+    const object = nativeObjectSchema.safeParse(node)
     if (!object.success) return false
     node = object.data[segment]
   }
   return node !== undefined
 }
 
-function tomlValue(value: PlanValue): string {
+function tomlValue(value: NativeValue): string {
   const text = z.string().safeParse(value)
   if (text.success) return JSON.stringify(text.data)
   const scalar = z.union([z.number(), z.boolean()]).safeParse(value)
   if (scalar.success) return String(scalar.data)
-  const list = z.array(planValueSchema).safeParse(value)
+  const list = z.array(nativeValueSchema).safeParse(value)
   if (list.success) return `[${list.data.map(tomlValue).join(', ')}]`
-  const map = planObjectSchema.safeParse(value)
+  const map = nativeObjectSchema.safeParse(value)
   if (!map.success) throw new Error('TOML has no null, so a null cannot be written')
   const entries = Object.entries(map.data).map(([name, entry]) => `${tomlKey(name)} = ${tomlValue(entry)}`)
   return `{ ${entries.join(', ')} }`

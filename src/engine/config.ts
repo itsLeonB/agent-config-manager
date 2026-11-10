@@ -13,10 +13,6 @@ export interface EngineConfig {
   // A harness may relocate its own config root (`CODEX_HOME`). It is resolved here, at the
   // boundary, so no adapter reads the environment.
   codexHome?: string
-  // A harness probe is a subprocess, so its binary is a boundary fact like `codexHome`: a test
-  // points it at a stub and never runs the real tool. `false` disables probing, which leaves health
-  // as the local parse's verdict.
-  opencodeProbe?: string | false
 }
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
@@ -52,8 +48,8 @@ export function resolveProjectRoot(cwd: string = process.cwd()): string {
 
 export function resolveDefaultConfig(): EngineConfig {
   const home = process.env.ACM_HOME ?? os.homedir()
-  // The store is anchored on where acm is installed, not on the project being read: every project
-  // adds its rows to the one inventory instead of forking a database into it.
+  // The store is anchored on where acm is installed, not on the project being read, so every project
+  // shares one store instead of forking a database into each one.
   const installRoot = deriveProjectRoot(MODULE_DIR)
   const projectRoot = resolveProjectRoot()
   return {
