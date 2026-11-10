@@ -10,8 +10,8 @@ export function createAdapters(config: EngineConfig): Adapter[] {
   return adapters
 }
 
-// The capability table and the handlers are two halves of one claim: a category declared without a
-// handler would list as supported and then fail at scan time, so it fails while loading instead.
+// The claimed categories and the handlers are two halves of one claim: a category declared without
+// a handler would report as supported and then fail when read, so it fails while loading instead.
 export function assertAgreement(adapter: Adapter): void {
   for (const category of adapter.claimedCategories) {
     if (adapter.handlers[category] === undefined) {

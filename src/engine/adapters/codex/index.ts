@@ -1,28 +1,23 @@
 import path from 'node:path'
 import type { EngineConfig } from '../../config.ts'
-import { HOOK_WRITE_SURFACES } from '../hook-write.ts'
 import { readHookTier } from '../hooks.ts'
-import { mcpInstallation } from '../mcp-facts.ts'
-import { MCP_WRITE_SURFACES } from '../mcp-write.ts'
+import { mcpDeclaration } from '../mcp-facts.ts'
 import { readInstructionTier } from '../instructions.ts'
 import { readSkillTier } from '../skills.ts'
 import { readTier } from '../tier.ts'
 import type { Adapter, Tier, TierRead } from '../types.ts'
 import { readCodexMcpToml } from './read.ts'
 
-// Codex has three layers, and only two of them are mirror targets: `profile` files are read at
-// launch time and are not state ACM may write, so the tier is declared (`notState`) and never read.
-// `$CODEX_HOME` defaults to `~/.codex`; project config is inert until the *user* config trusts the
-// path, which is a manual step the planner owns, not a read-time concern.
+// Codex has two layers. `$CODEX_HOME` defaults to `~/.codex`; project config is inert until the
+// *user* config trusts the path, which is a fact about the file rather than about where it is read.
 export function codexTiers(config: EngineConfig): Tier[] {
   const codexRoot = config.codexHome ?? path.join(config.home, '.codex')
   // Codex declares no harness-owned skill directory of its own: the two `.agents/skills` roots and
-  // `/etc/codex/skills` are the documented locations, and the last is not one ACM may write.
+  // `/etc/codex/skills` are the documented locations.
   const userSkills = path.join(config.home, '.agents', 'skills')
   const projectSkills = path.join(config.projectRoot, '.agents', 'skills')
-  // Hooks are their own file beside the config layer, and hooks.json is the form a mirror writes:
-  // inline `[hooks]` in config.toml is merged with it rather than replaced, so one file per layer is
-  // what keeps a write and its trust review in one place.
+  // Hooks are their own file beside the config layer: inline `[hooks]` in config.toml is merged with
+  // it rather than replaced, so one file per layer is what a reader has to look at.
   const userHooks = path.join(codexRoot, 'hooks.json')
   const projectHooks = path.join(config.projectRoot, '.codex', 'hooks.json')
   return [
@@ -30,44 +25,25 @@ export function codexTiers(config: EngineConfig): Tier[] {
       id: 'codex:user',
       nativeLabel: 'user',
       rank: 1,
-      scopeBucket: 'user',
       configPaths: [path.join(codexRoot, 'config.toml')],
       categoryPaths: {
-        skills: { reads: [userSkills], target: userSkills },
-        // `AGENTS.override.md` outranks this file when both exist, which the planner names as a
-        // manual step rather than reading.
-        instructions: { reads: [path.join(codexRoot, 'AGENTS.md')], target: path.join(codexRoot, 'AGENTS.md') },
-        hooks: { reads: [userHooks], target: userHooks },
+        skills: { reads: [userSkills] },
+        // `AGENTS.override.md` outranks this file when both exist.
+        instructions: { reads: [path.join(codexRoot, 'AGENTS.md')] },
+        hooks: { reads: [userHooks] },
       },
-      writability: 'writable',
-    },
-    {
-      id: 'codex:profile',
-      nativeLabel: 'profile',
-      rank: 2,
-      scopeBucket: 'user',
-      // A profile is a launch-time `$CODEX_HOME/<name>.config.toml` (or a `[profiles.<name>]`
-      // table); it declares no readable location until a ticket reads it.
-      configPaths: [],
-      writability: 'notState',
     },
     {
       id: 'codex:project',
       nativeLabel: 'project',
-      rank: 3,
-      scopeBucket: 'project',
+      rank: 2,
       configPaths: [path.join(config.projectRoot, '.codex', 'config.toml')],
       categoryPaths: {
-        skills: { reads: [projectSkills], target: projectSkills },
-        // The same file Pi and OpenCode read for a project: one project instruction file, so
-        // mirroring between them writes nothing.
-        instructions: {
-          reads: [path.join(config.projectRoot, 'AGENTS.md')],
-          target: path.join(config.projectRoot, 'AGENTS.md'),
-        },
-        hooks: { reads: [projectHooks], target: projectHooks },
+        skills: { reads: [projectSkills] },
+        // The same file Pi and OpenCode read for a project: one project instruction file.
+        instructions: { reads: [path.join(config.projectRoot, 'AGENTS.md')] },
+        hooks: { reads: [projectHooks] },
       },
-      writability: 'writable',
     },
   ]
 }
@@ -83,8 +59,6 @@ export function createCodexAdapter(config: EngineConfig): Adapter {
       instructions: { read: readInstructionTier },
       hooks: { read: (tier) => readHookTier(tier, 'codex') },
     },
-    mcpWrite: MCP_WRITE_SURFACES.codex,
-    hookWrite: HOOK_WRITE_SURFACES.codex,
   }
 }
 
@@ -93,10 +67,10 @@ function readMcpTier(tier: Tier): TierRead {
     // A user-tier entry with neither `command` nor `url` names nothing to launch, so it is not a
     // server. A project entry like that is a legitimate per-field override of the user one, so
     // only the base tier filters.
-    tier.scopeBucket === 'user' &&
+    tier.id.endsWith(':user') &&
     server.facts.command === undefined &&
     server.facts.url === undefined
       ? null
-      : mcpInstallation(tier, file, server),
+      : mcpDeclaration(tier, file, server),
   )
 }

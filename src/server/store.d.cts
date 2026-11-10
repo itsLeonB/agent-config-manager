@@ -1,105 +1,5 @@
 import type { Json, LocalData } from '../types/dashboard'
 
-// The binding's latest status: what an apply leaves behind, and the only four values the store holds.
-export type VerificationStatus = 'verified' | 'unverified' | 'failed' | 'notApplicable'
-
-export interface DiscoveryBinding {
-  harness: string
-  tierId: string
-  method: string
-  verificationStatus: string
-}
-
-export interface DiscoveryInstallation {
-  id: string
-  category: string
-  name: string
-  aliases: string[]
-  scope: string
-  nativeFile: string
-  nativePointer: string | null
-  // `known_fields` stays an opaque JSON string here: the store never interprets it, and the
-  // engine's own reader is the only thing that decides what it holds.
-  knownFieldsJson: string
-  contentDigest: string
-  bindings: DiscoveryBinding[]
-}
-
-export interface DiscoveryTierHealth {
-  harness: string
-  tierId: string
-  status: string
-  detail: string | null
-}
-
-export interface DiscoveryBatch {
-  at: string
-  installations: DiscoveryInstallation[]
-  tombstones: string[]
-  tierHealth: DiscoveryTierHealth[]
-}
-
-export interface InstallationFilter {
-  category?: string
-  harness?: string
-  scope?: string
-  includeRemoved?: boolean
-}
-
-export interface InstallationRow {
-  id: string
-  category: string
-  name: string
-  aliases: string[]
-  scope: string
-  nativeFile: string
-  nativePointer: string | null
-  contentDigest: string | null
-  knownFieldsJson: string
-  firstSeenAt: string
-  lastSeenAt: string
-  removedAt: string | null
-  bindings: DiscoveryBinding[]
-}
-
-export interface TierHealthRow {
-  harness: string
-  tierId: string
-  status: string
-  detail: string | null
-  at: string
-}
-
-// One apply as it is recorded: the operation row plus, when the target was found again, the write
-// back onto the target installation and its binding.
-export interface MirrorRecord {
-  id: string
-  at: string
-  kind: string
-  planId: string
-  grade: string
-  outcome: string
-  toolVersion: string
-  // Null when the plan's source is not a stored installation — `acm setup` mirrors the tool itself,
-  // and a provenance edge to a row that does not exist is not one to invent.
-  sourceInstallationId: string | null
-  targetInstallationId: string | null
-  landed: unknown[]
-  binding: { installationId: string; harness: string; tierId: string; status: VerificationStatus } | null
-}
-
-export interface OperationRow {
-  id: string
-  at: string
-  kind: string
-  planId: string
-  grade: string
-  outcome: string
-  sourceInstallationId: string | null
-  targetInstallationId: string | null
-  landed: unknown[]
-}
-
 // The store only round-trips JSON; typing the 'local' kind means readers get LocalData
 // back without a cast.
 export interface Store {
@@ -107,15 +7,6 @@ export interface Store {
   readLatestSnapshot(kind: 'local'): LocalData | null
   writeConfig(key: string, value: Json): void
   readConfig(key: string): Json | null
-  writeDiscovery(batch: DiscoveryBatch): void
-  listInstallations(filter: InstallationFilter): InstallationRow[]
-  listLiveInstallationsForTier(
-    harness: string,
-    tierId: string,
-  ): { id: string; nativeFile: string }[]
-  readTierHealth(): TierHealthRow[]
-  recordMirror(record: MirrorRecord): void
-  listOperations(): OperationRow[]
   close(): void
 }
 

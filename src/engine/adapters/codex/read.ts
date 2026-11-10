@@ -5,7 +5,7 @@ import type { ParsedEntries } from '../tier.ts'
 
 // Codex keeps MCP servers in `[mcp_servers.<id>]` tables. `oauth` (whose `client_secret` lives in
 // this file) and `http_headers_helper` (a command) are deliberately unnamed: an unnamed field never
-// becomes a fact, so a credential or an executable is never read, stored, or mirrored.
+// becomes a fact, so a credential or an executable is never read or stored.
 // shortcut: only the fields the canonical vocabulary carries are typed; `startup_readiness`,
 // `enabled_tools`, `scopes` and friends stay in the native file until a ticket needs them.
 const entrySchema = z.object({

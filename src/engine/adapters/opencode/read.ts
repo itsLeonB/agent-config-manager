@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { planObjectSchema, type PlanValue } from '../../plan-value.ts'
+import { nativeObjectSchema, type NativeValue } from '../../native-value.ts'
 import type { McpEntry, McpFacts } from '../mcp-facts.ts'
 import type { ParsedEntries } from '../tier.ts'
 
@@ -39,31 +39,31 @@ const fileSchema = z.object({
 // must be a server, and a malformed one makes the tier unreadable instead of vanishing.
 const RESERVED_MCP_KEYS = new Set(['servers', 'timeout'])
 
-// The legacy flat shape a plan cannot leave in place: OpenCode reads `mcp.<name>` beside
-// `mcp.servers`, so a document holding both defines every legacy server twice. The plan therefore
-// normalises the block before it writes into it, and `absent` means there is nothing to convert.
+// The legacy flat shape a reader cannot leave unremarked: OpenCode reads `mcp.<name>` beside
+// `mcp.servers`, so a document holding both defines every legacy server twice. The read therefore
+// normalises the block, and `absent` means there is nothing to convert.
 export type LegacyMcpNormalisation =
   | { kind: 'absent' }
   | { kind: 'invalid'; detail: string }
-  // `rewritten` names the entries whose spelling had to change, so the plan can report a conversion
+  // `rewritten` names the entries whose spelling had to change, so the read can report a conversion
   // it made to somebody else's entry instead of changing it quietly.
-  | { kind: 'normalised'; value: Record<string, PlanValue>; rewritten: { name: string; spellings: string[] }[] }
+  | { kind: 'normalised'; value: Record<string, NativeValue>; rewritten: { name: string; spellings: string[] }[] }
 
 // Every legacy entry moves under `servers`, with its two legacy spellings converted: `enabled` is
 // `disabled` inverted, and one numeric `timeout` covers both phases. The reserved keys stay put, and
 // a value that is not a table is reported rather than guessed at.
-export function normaliseLegacyMcp(document: PlanValue): LegacyMcpNormalisation {
-  const root = planObjectSchema.safeParse(document)
-  const mcp = planObjectSchema.safeParse(root.success ? root.data.mcp : null)
+export function normaliseLegacyMcp(document: NativeValue): LegacyMcpNormalisation {
+  const root = nativeObjectSchema.safeParse(document)
+  const mcp = nativeObjectSchema.safeParse(root.success ? root.data.mcp : null)
   if (!mcp.success) return { kind: 'absent' }
   const legacy = Object.keys(mcp.data).filter((key) => !RESERVED_MCP_KEYS.has(key))
   if (legacy.length === 0) return { kind: 'absent' }
-  const servers = planObjectSchema.safeParse(mcp.data.servers ?? {})
+  const servers = nativeObjectSchema.safeParse(mcp.data.servers ?? {})
   if (!servers.success) return { kind: 'invalid', detail: 'mcp.servers is not a table' }
   const converted = { ...servers.data }
   const rewritten: { name: string; spellings: string[] }[] = []
   for (const name of legacy) {
-    const entry = planObjectSchema.safeParse(mcp.data[name])
+    const entry = nativeObjectSchema.safeParse(mcp.data[name])
     if (!entry.success) return { kind: 'invalid', detail: `mcp.${name} is not a server entry` }
     // Which of the two definitions the harness honours is not verified, so a name in both is
     // reported rather than resolved by picking one.
@@ -84,7 +84,7 @@ export function normaliseLegacyMcp(document: PlanValue): LegacyMcpNormalisation 
 
 // A per-phase timeout object is already the current spelling, so it is carried as it stands —
 // including `catalog`, which the canonical vocabulary does not name but the file still holds.
-function fromLegacyEntry(entry: Record<string, PlanValue>) {
+function fromLegacyEntry(entry: Record<string, NativeValue>) {
   const { enabled, timeout, ...rest } = entry
   const converted = { ...rest }
   const spellings: string[] = []
@@ -124,7 +124,7 @@ export function readOpenCodeMcpJsonc(text: string): ParsedEntries<McpEntry> {
     }
     for (const [name, entry] of Object.entries(group.data)) {
       // A remote server with no address connects to nothing, so it is a broken entry rather than a
-      // healthy HTTP installation.
+      // healthy HTTP server.
       if (entry.type === 'remote' && entry.url === undefined) {
         return { kind: 'invalid', detail: `${name} is remote with no url` }
       }
@@ -139,7 +139,7 @@ export function readOpenCodeMcpJsonc(text: string): ParsedEntries<McpEntry> {
     if (!legacy.success) {
       return { kind: 'invalid', detail: legacy.error.issues[0]?.message ?? `invalid server ${name}` }
     }
-    // A legacy entry naming no transport connects to nothing, so it is not an installation.
+    // A legacy entry naming no transport connects to nothing, so it is not a server.
     if (
       legacy.data.type === undefined &&
       legacy.data.command === undefined &&

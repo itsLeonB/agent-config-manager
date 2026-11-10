@@ -13,73 +13,61 @@ Before editing files for a substantial task:
 
 Inventories a Claude Code setup — plugins, MCP servers, skills, environment tools, project scope —
 on the local machine, and is becoming an engine that reads Pi, Codex, and OpenCode config natively
-so one harness's configuration can be mirrored into another. [README.md](README.md) covers what it
-does and how to run it. Configuration on claude.ai is deliberately out of scope; see
+for a declared environment of Provisions. [README.md](README.md) covers what it does and how to run
+it. Configuration on claude.ai is deliberately out of scope; see
 [docs/adr/0002](docs/adr/0002-no-cloud-config-management.md).
 
 Bun is the package manager and script runner (`bun install`, `bun run <script>`, `bunx`); npm and
 npx are not used here.
 
-## Engine tickets
+## Environment tickets
 
-Implementing a ticket under `.scratch/acm-rearchitecture/` starts at that ticket file: follow its
-`Blocked by:` line, and read [`spec.md`](.scratch/acm-rearchitecture/spec.md) beside it for the
-settled decisions.
+Implementing a ticket under `.scratch/agents-environ/` starts at that ticket file: follow its
+`Blocked by:` line, and read [`spec.md`](.scratch/agents-environ/spec.md) beside it for the settled
+decisions.
 
-- The spec is the authority. [`map.md`](.scratch/acm-rearchitecture/map.md) indexes each settled
-  decision by ticket: read it when the reasoning behind one of them matters.
+- The spec is the authority, and a ticket's checklist is its definition of done.
 - [`CONTEXT.md`](CONTEXT.md) holds the vocabulary the spec, tickets, and code share; a word that is
-  not there is a smell.
+  not there is a smell. [ADR 0007](docs/adr/0007-declare-provisions-and-delete-the-mirror-engine.md)
+  retires the previous model's words: nothing in code, tool output, or docs names a Component,
+  Installation, Binding, Capability, Gap, Mirror, Plan, Grade, or scope bucket.
 - A resolved ticket's `## Answer` is settled — build on it instead of re-deriving it.
 - `docs/research/{pi,codex,opencode}-config-surface.md` are the verified native surfaces for each
   harness — config paths and precedence, formats, merge semantics, which gates are human-only. Read
-  the harness's file before changing its adapter or writing a mirror step for it. The canonical
-  field tables, the seven transforms, and the per-tier allowlists are in
-  [docs/mcp-field-tables.md](docs/mcp-field-tables.md), beside the planner data that mirrors them.
+  the harness's file before changing its adapter.
 
 ## Architecture
 
 - **`src/server/store.cjs` is the only module that touches `node:sqlite`.** It stays plain
   CJS so the TypeScript app can load it and `scan.cjs` can require it, and it holds
-  everything the app persists: scan snapshots, the `config` rows behind `/settings`, the engine's
-  canonical tables, and the operations an apply records — one transaction per apply, so the audit
-  row, the target's plan hash, and its binding's verification status land together or not at all.
+  everything the app persists: scan snapshots and the `config` rows behind `/settings`.
   `PRAGMA user_version` gates an ordered migration list run on every
   open, so a fresh database and an existing one reach the same schema; migration 1 is pure
-  `CREATE TABLE IF NOT EXISTS` next to `snapshots` / `config`, which therefore keep their rows.
-  Every write transaction opens with `BEGIN IMMEDIATE`, because the CLI, the MCP server, and the
-  scanner all open the file.
-- **The engine and the CLI are a second face over that store.** `src/engine/service.ts` exposes
-  `discover()`, `listInstallations()`, `inspectInstallation()`, `planMirror()`, and
-  `applyPlan()` / `verifyPlan()`; `src/engine/repo.ts` is the only module that calls `store.cjs`;
-  `src/engine/plan.ts` builds the mirror plan document from a stored row and the target file alone
-  — plus whatever source its bytes would have to come from: the tree a skill copy digests, or the
-  file behind a body or a command the plan carries as a value — and writes nothing; `src/engine/apply.ts` executes exactly that document — one lock per store,
-  every precondition read before the first byte, one file at a time, `partial` with no rollback
-  when a write fails — and re-reads the target to verify it; `src/engine/edit.ts` is the
-  pointer-level native editor, so a write lands only on the addresses the plan named and comments
-  and sibling entries survive — the one exception being a write that names a whole container
-  (OpenCode's `mcp` block, normalised out of its legacy flat shape), which replaces that node and
-  drops the comments inside it, which the plan says as a manual step; `src/engine/adapters/`
-  holds one directory per harness (Pi, Codex, OpenCode), shared
-  MCP fact storage in `mcp-facts.ts`, the per-harness MCP write surfaces and transforms in
-  `mcp-write.ts`, shared skill and instruction readers in `skills.ts` and `instructions.ts` (the
-  three harnesses differ only in which locations they declare), and per-tier file reading in
-  `tier.ts`; and
-  `src/engine/adapters/registry.ts` fails at load when a claimed category has no handler. Roots
-  (home, project root, store path, `CODEX_HOME`) arrive as an injected `EngineConfig`, resolved once
-  in `src/engine/config.ts` and never read by an adapter; `ACM_HOME` / `ACM_PROJECT_ROOT` /
-  `ACM_STORE` are the boundary
+  `CREATE TABLE IF NOT EXISTS` next to `snapshots` / `config`, which therefore keep their rows, and
+  migration 2 drops the previous engine's inventory tables in four `DROP TABLE IF EXISTS`
+  statements. Every write transaction opens with `BEGIN IMMEDIATE`, because the CLI, the MCP
+  server, and the scanner all open the file.
+- **The engine is a library of readers, with the environment path still to come.**
+  `src/engine/config.ts` resolves the roots an adapter never reads itself (home, project root,
+  store path, `CODEX_HOME`); `src/engine/adapters/` holds one directory per harness (Pi, Codex,
+  OpenCode) plus the shared readers: MCP fact classification in `mcp-facts.ts`, skills in
+  `skills.ts`, instructions in `instructions.ts`, hooks in `hooks.ts` (the three harnesses differ
+  only in which locations they declare), per-tier file reading in `tier.ts`, and
+  `src/engine/adapters/registry.ts`, which fails at load when a claimed category has no handler. A
+  `Tier` in `types.ts` is a read location and nothing else. `src/engine/edit.ts` is the
+  pointer-level native editor — a write lands only on the address it names, and comments and
+  sibling entries survive — `src/engine/secret.ts` is the credential classifier every reader runs
+  before a value can reach a result, and `src/engine/digest.ts` is what makes two copies of one
+  tree comparable. `ACM_HOME` / `ACM_PROJECT_ROOT` / `ACM_STORE` / `CODEX_HOME` are the boundary
   overrides a test uses to point the engine at a fixture. `src/cli/main.ts` is the `acm` source
-  entry (`bun run acm -- list`); `bun run build:acm` bundles it to the single ESM file
-  `dist/acm.mjs` that the package's `bin` declares, with a Node shebang. Two paths, two rules: the
-  **store** is derived from the nearest `package.json` above whichever of the two it is running from
-  — where `acm` is installed, shared by every project — while the **project root** is the working
-  directory the harness or shell opened `acm` in (or `ACM_PROJECT_ROOT` / `CLAUDE_PROJECT_DIR`,
-  canonicalised, never walked up), so one installed `acm` reads whatever repository it was started
-  in. `src/mcp/router.ts` registers the five MCP
-  tools over the same service functions while `src/mcp/server.ts` puts them on a stdio transport
-  behind `acm mcp serve` — two faces over one library, and neither imports `repo`, `plan`, or an
+  entry; `bun run build:acm` bundles it to the single ESM file `dist/acm.mjs` that the package's
+  `bin` declares, with a Node shebang. Two paths, two rules: the **store** is derived from the
+  nearest `package.json` above whichever of the two it is running from — where `acm` is installed,
+  shared by every project — while the **project root** is the working directory the harness or
+  shell opened `acm` in (or `ACM_PROJECT_ROOT` / `CLAUDE_PROJECT_DIR`, canonicalised, never walked
+  up), so one installed `acm` reads whatever repository it was started in. `src/mcp/router.ts` is
+  the MCP face and `src/mcp/server.ts` puts it on a stdio transport behind `acm mcp serve`; the
+  router registers no tool yet, so `tools/list` answers an empty list, and neither face imports an
   adapter. Nothing under `src/routes/` or `src/components/` imports either.
 - **The Claude dashboard is the previous product, kept working unchanged.** It reads the same store;
   its rendering, rescan, settings, scanner, and container notes are in
@@ -97,7 +85,8 @@ settled decisions.
   thing to report.
 
 - `database/` is gitignored and holds `dashboard.db` — the only store. Deleting it drops the
-  engine's inventory too, which `acm list` rebuilds from the native configs on its next run.
+  dashboard's saved settings and scan history; a rescan rebuilds the snapshot, and a settings save
+  rewrites the `config` rows.
 
 ## Agent skills
 

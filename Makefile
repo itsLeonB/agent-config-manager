@@ -5,11 +5,10 @@ LINK := $(BIN)/acm
 
 .PHONY: install build link uninstall check test clean
 
-# Install acm, then register it with each harness: acm setup
+# Install acm: builds the bundle and links it onto PATH
 install: link
 	@echo
-	@echo "Next: acm setup"
-	@echo "If acm is not found, add $(BIN) to PATH."
+	@echo "Installed. If acm is not found, add $(BIN) to PATH."
 
 build:
 	bun install

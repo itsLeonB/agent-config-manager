@@ -47,7 +47,7 @@ Authorization = "Bearer sk-fixturetoken"
   assert.equal(facts.bearerTokenEnvVar, 'EXAMPLE_TOKEN')
   assert.deepEqual(facts.headers, { Authorization: 'Bearer sk-fixturetoken' })
 
-  // The bearer variable is a name, not a secret: a mirror has to carry it, so it stays readable
+  // The bearer variable is a name, not a secret: a reader has to carry it, so it stays readable
   // while the header beside it is withheld.
   const stored = knownFieldsForStorage(facts)
   assert.equal(stored.bearerTokenEnvVar, 'EXAMPLE_TOKEN')
