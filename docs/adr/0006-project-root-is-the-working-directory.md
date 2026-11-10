@@ -39,10 +39,10 @@ instead of reading an empty list as an empty project.
   own project layer is not in its inventory. This is deliberate — it is what that harness read — and
   the listing names the root, so the difference is visible rather than silent.
 - **Accepted cost: `CLAUDE_PROJECT_DIR` is in the chain for one reason.** Claude Code starts a
-  user-scope MCP server in its own configuration directory, and it is the one in-slice harness whose
-  default working directory is not the project. Without that variable in the chain, a Claude-spawned
-  server would have scoped every repository to the configuration directory. Pi, Codex, and OpenCode
-  spawn in the project and need no equivalent.
+  user-scope MCP server in its own configuration directory, and it is the one installed harness
+  whose default working directory is not the project. Without that variable in the chain, a
+  Claude-spawned server would have scoped every repository to the configuration directory. Pi, Codex
+  and OpenCode spawn in the project and need no equivalent.
 - **The store stays where `acm` is installed and stays shared.** Project root and store location are
   two different paths with two different rules: the first follows the caller, the second follows the
   install. Only the first moved.

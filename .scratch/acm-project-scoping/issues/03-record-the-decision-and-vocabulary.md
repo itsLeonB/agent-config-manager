@@ -33,8 +33,11 @@ project; the sentence has to say which is which, or the next agent implements th
 
 [ADR 0006](../../../docs/adr/0006-project-root-is-the-working-directory.md): the working directory
 wins over the walk-up, the per-call argument, and the incumbent module-location rule, with both
-costs named as consequences. Two sentences were false after ticket 02 and now are not: ADR 0004's
-spawn paragraph (amended in place, since it is the ADR that said the opposite) and the `AGENTS.md`
-line that the working directory is never consulted — roots are resolved once in
-`src/engine/config.ts`, not by an adapter. This effort had no map, so `map.md` was created and
-carries 01 and 02 beside this line.
+costs named as consequences. Two sentences were false after ticket 02 and are not now: ADR 0004's spawn paragraph (amended in
+place, since it is the ADR that said the opposite) and the `AGENTS.md` line that the working
+directory is never consulted — roots are resolved once in `src/engine/config.ts`, not by an adapter.
+Five more said the same thing and were found while reviewing: `README.md`'s `--project-root`
+paragraph and the `ACM_PROJECT_ROOT` row of its variable table, `spec.md` (which AGENTS.md calls the
+authority), and the ticket-14 records in `map.md` and `issues/14`. The ticket-14 ones are amended in
+place with a pointer, not rewritten, because they are closed records of what was decided then. This
+effort had no map, so `map.md` was created and carries 01 and 02 beside this line.

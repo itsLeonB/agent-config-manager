@@ -81,9 +81,10 @@ resolves whatever they installed, once, and pins it. Bare `acm` on `PATH` is rej
 spawns with a different `PATH` than the shell, which is the documented `ENOENT` failure mode for
 Serena and Pi.
 
-**Consequence:** the project root is derived from the module's own location, not `process.cwd()`
-(which amends the `AGENTS.md` gotcha that `scan.cjs` and `database/` resolve from the working
-directory).
+**Consequence:** the store is derived from the module's own location, not `process.cwd()` (which
+amends the `AGENTS.md` gotcha that `scan.cjs` and `database/` resolve from the working directory).
+The project root itself moved to the working directory afterwards —
+[ADR 0006](../../../docs/adr/0006-project-root-is-the-working-directory.md).
 
 ### 3. Module layout
 

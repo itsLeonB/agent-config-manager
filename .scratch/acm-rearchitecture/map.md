@@ -213,7 +213,9 @@ that slice.
   binary** — `src/engine/service.ts` is the library, and `acm mcp serve` (stdio, official SDK 1.32.2
   with consent via `server.elicitInput`) plus the CLI subcommands are two faces over it; the MCP server
   never execs the CLI. A harness entry is the absolute bin path + `["mcp","serve"]`, **no `cwd`**, with
-  the project root derived from the module's location rather than `process.cwd()`; `acm setup` writes
+  the store derived from the module's location rather than `process.cwd()` — the project root moved to
+  the working directory later, in [ADR 0006](../../docs/adr/0006-project-root-is-the-working-directory.md);
+  `acm setup` writes
   that entry through the plan/apply path. `parseArgs` + zod, no CLI framework; **TypeScript, no Effect**
   (reversal condition: a supervised long-lived engine). Both writers now owe `BEGIN IMMEDIATE` +
   `user_version`, amended into ticket 10. No UI in the slice; when one exists it is `acm serve` — one
