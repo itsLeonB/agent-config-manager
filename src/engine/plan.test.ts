@@ -547,6 +547,7 @@ test('a field no adapter names is preserved, never written and never claimed as 
         tierId: 'pi:user',
         health: 'ok',
         detail: null,
+        declaredReads: [path.join(config.home, '.pi', 'agent')],
         installations: [
           {
             category: 'mcp',
@@ -585,6 +586,7 @@ test('a stored row that cannot be decoded is refused, not planned from nothing',
         tierId: 'pi:user',
         health: 'ok',
         detail: null,
+        declaredReads: [path.join(config.home, '.pi', 'agent')],
         installations: [
           {
             category: 'mcp',

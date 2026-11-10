@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { createAdapters } from './adapters/registry.ts'
 import { pointerSegment, pointerSegments } from './adapters/mcp-facts.ts'
 import type { Adapter } from './adapters/types.ts'
-import { HARNESSES } from './adapters/types.ts'
+import { declaredReads, HARNESSES } from './adapters/types.ts'
 import type { Category, HarnessId, ScopeBucket, Writability } from './adapters/types.ts'
 import {
   containmentFault,
@@ -63,6 +63,7 @@ export function discover(config: EngineConfig): DiscoverResult {
             ...read,
             harness: adapter.harness,
             tierId: tier.id,
+            declaredReads: declaredReads(tier),
           })
           continue
         }

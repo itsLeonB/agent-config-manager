@@ -9,10 +9,14 @@ import type {
   TierHealthRow,
 } from '../server/store.cjs'
 import type { DiscoveredInstallation, TierRead } from './adapters/types.ts'
+import { under } from './adapters/types.ts'
 
 export interface TierReport extends TierRead {
   harness: string
   tierId: string
+  // Every location this tier declared it reads. A tombstone may only reach a row whose own file sits
+  // under one of them.
+  declaredReads: readonly string[]
 }
 
 // The id is a hash of the identity tuple, so re-discovery upserts the same row and a plan can name
@@ -66,8 +70,11 @@ export function recordDiscovery(storePath: string, reports: TierReport[], at: st
       // Only a tier that reported cleanly may tombstone: an unreadable config means the tier was
       // left alone, so its rows survive.
       if (report.health !== 'ok') continue
-      for (const liveId of store.listLiveInstallationIdsForTier(report.harness, report.tierId)) {
-        if (!seen.has(liveId)) batch.tombstones.push(liveId)
+      for (const live of store.listLiveInstallationsForTier(report.harness, report.tierId)) {
+        // The inventory spans every project, so a row under a file this pass never read is another
+        // project's entry, not a removal.
+        if (seen.has(live.id) || !under(report.declaredReads, live.nativeFile)) continue
+        batch.tombstones.push(live.id)
       }
     }
     store.writeDiscovery(batch)

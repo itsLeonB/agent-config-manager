@@ -109,7 +109,10 @@ export interface Store {
   readConfig(key: string): Json | null
   writeDiscovery(batch: DiscoveryBatch): void
   listInstallations(filter: InstallationFilter): InstallationRow[]
-  listLiveInstallationIdsForTier(harness: string, tierId: string): string[]
+  listLiveInstallationsForTier(
+    harness: string,
+    tierId: string,
+  ): { id: string; nativeFile: string }[]
   readTierHealth(): TierHealthRow[]
   recordMirror(record: MirrorRecord): void
   listOperations(): OperationRow[]
