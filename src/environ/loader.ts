@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { EngineConfig } from '../engine/config.ts'
 import { parseEnvironmentFile } from './parse.ts'
-import type { Check, EnvironmentTier, FileRefusal, InstallCommand, PayloadInstall, ResolvedProvision } from './types.ts'
+import type { Check, EnvironmentTier, FileRefusal, InstallCommand, PayloadInstall, ResolvedProvision, SectionInstall } from './types.ts'
 
 // The loader answers what the environment declares: one entry per Provision and harness, with its
 // tier, its resolved Check, its Install command, and the file it came from. It reads environment
@@ -45,30 +45,51 @@ export function resolveDeclaredPath(declared: string, root: string, home: string
 }
 
 // A Check's file is declared against the tier's root and every other part of the predicate is a
-// value, so re-pointing a Check is replacing the one path it holds; `onPath` names no file at all.
+// value, so re-pointing a Check is replacing the path(s) it holds; `onPath` names no file at all.
 function resolveCheck(check: Check, root: string, home: string): Check {
   if (!('file' in check)) return check
+  if ('section' in check) {
+    return {
+      ...check,
+      file: resolveDeclaredPath(check.file, root, home),
+      section: resolveDeclaredPath(check.section, root, home),
+    }
+  }
   return { ...check, file: resolveDeclaredPath(check.file, root, home) }
 }
 
-// The two forms of an Install command share no runtime tag — one is a string, the other a table —
-// so this one test is the branch the loader and the runner both make on the union the parser closed.
+// The three forms of an Install command share no runtime tag — one is a string, the other two are
+// tables — so these tests are the branches the loader and the runner both make on the union the
+// parser closed. A Section install carries the native file it writes, a Payload install does not.
 export function isPayloadInstall(install: InstallCommand): install is PayloadInstall {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- typeof is the union's own discriminator
   return typeof install !== 'string'
 }
 
-// A Payload's path resolves the way a Check's file does; a string command has nothing to resolve.
+export function isSectionInstall(install: InstallCommand): install is SectionInstall {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- typeof is the union's own discriminator
+  return typeof install !== 'string' && 'file' in install
+}
+
+// A Payload's path and a Section write's two paths resolve the way a Check's file does; a string
+// command has nothing to resolve.
 function resolveInstall(install: InstallCommand, root: string, home: string): InstallCommand {
   if (!isPayloadInstall(install)) return install
+  if (isSectionInstall(install)) {
+    return {
+      file: resolveDeclaredPath(install.file, root, home),
+      section: resolveDeclaredPath(install.section, root, home),
+    }
+  }
   return { payload: resolveDeclaredPath(install.payload, root, home), args: install.args }
 }
 
-// What a Payload runs as, and the one spelling the preview prints and the Run records: the resolved
-// path followed by its arguments, through the same shell a string command uses. A string command is
-// its own spelling.
+// What a Payload runs as and what a Section write writes, the one spelling the preview prints and
+// the Run records: the resolved paths, never the bytes. A string command is its own spelling.
 export function installCommand(install: InstallCommand): string {
-  if (!isPayloadInstall(install)) return install
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- typeof is the union's own discriminator
+  if (typeof install === 'string') return install
+  if (isSectionInstall(install)) return `write ${install.file} from ${install.section}`
   return ['sh', install.payload, ...(install.args ?? [])].join(' ')
 }
 

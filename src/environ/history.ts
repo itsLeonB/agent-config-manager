@@ -26,8 +26,9 @@ export function recordRun(
       provision: provision.name,
       harness: provision.harness,
       tier: provision.tier,
-      // The command that ran, spelled: the Payload path followed by its arguments when there is
-      // one. The bytes a Payload held are what ran, never what is recorded.
+      // The command that ran, spelled: the Payload path followed by its arguments, or the file and
+      // Payload pair a Section write named, when there is one. The bytes a Payload held are what
+      // ran, never what is recorded.
       command: installCommand(provision.install),
       exitCode,
       presence,

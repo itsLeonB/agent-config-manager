@@ -566,6 +566,36 @@ install = { payload = "install/codex-mcp.sh", args = ["serena"] }
   assert.equal(status.provisions[0].harnesses[0].presence, 'absent')
 })
 
+test('a definition with a section install writes the table form the file spells, and it loads', () => {
+  const f = fixture()
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'i-have-adhd',
+        harness: 'pi',
+        check: { file: '~/.pi/agent/AGENTS.md', section: 'instructions/output-style.md' },
+        install: { file: '~/.pi/agent/AGENTS.md', section: 'instructions/output-style.md' },
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.i-have-adhd.pi')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.i-have-adhd.pi]
+check = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+`,
+  )
+  // The written form is one the loader accepts: the entry is read back with its Presence, not
+  // reported as a file that refuses to load.
+  const status = readStatus({ name: 'i-have-adhd' }, f.config)
+  assert.equal(status.refusals.length, 0)
+  assert.equal(status.provisions[0].harnesses[0].presence, 'absent')
+})
+
 // A Payload shape the parser refuses is refused with that reason, and the file is left as it was:
 // the write never reaches disk.
 test('a payload definition the loader would refuse is refused with that reason and writes nothing', () => {

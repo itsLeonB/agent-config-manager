@@ -17,9 +17,10 @@ export type Presence = (typeof PRESENCES)[number]
 
 // A Check is the inline table the file spells. `{ file }` asks whether a file exists,
 // `{ file, contains }` whether its text matches a multiline pattern, `{ file, pointer [, equals] }`
-// whether a native config holds a value at an address, and `{ onPath }` whether a name is an
-// executable file on PATH. The set is closed: a predicate outside it refuses the file instead of
-// being ignored, and a fifth one is a schema change.
+// whether a native config holds a value at an address, `{ file, section }` whether a Section of the
+// file holds the Payload's text, and `{ onPath }` whether a name is an executable file on PATH. The
+// set is closed: a predicate outside it refuses the file instead of being ignored, and a seventh
+// one is a schema change.
 export interface FileExistsCheck {
   file: string
 }
@@ -44,7 +45,15 @@ export interface OnPathCheck {
   onPath: string
 }
 
-export type Check = FileExistsCheck | FileContainsCheck | FilePointerCheck | OnPathCheck
+// `section` names a Payload: the Section of `file` whose `## ` heading is the Payload's first
+// `## ` line, compared with the Payload's text byte for byte after trailing blank lines are
+// stripped from both sides.
+export interface FileSectionCheck {
+  file: string
+  section: string
+}
+
+export type Check = FileExistsCheck | FileContainsCheck | FilePointerCheck | FileSectionCheck | OnPathCheck
 
 // A Payload is where an Install command too long to read inline lives: the file its text is in, and
 // the arguments that reach it as argv, never substituted into its text. A type alias, not an
@@ -54,8 +63,17 @@ export type PayloadInstall = {
   args?: string[]
 }
 
-// An Install command is either the text spelled in the file, or the Payload that holds it.
-export type InstallCommand = string | PayloadInstall
+// An install that rewrites one Section of a native file: the Payload's text replaces the Section
+// its heading spells, appends it when the Section is missing, and creates the file when the file
+// is missing. A type alias for the same editor reason as PayloadInstall.
+export type SectionInstall = {
+  file: string
+  section: string
+}
+
+// An Install command is either the text spelled in the file, the Payload that holds it, or the
+// native file and Payload a Section write names.
+export type InstallCommand = string | PayloadInstall | SectionInstall
 
 // One `(provision, harness)` as the file spells it, before any path is resolved against a tier
 // root. `checks` is one or more, and all of them have to hold; a file that spells a single

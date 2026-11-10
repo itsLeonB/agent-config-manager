@@ -4,15 +4,19 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkInputsOf, evaluateCheck, foldAnswers } from './check.ts'
-import type { CheckInputs } from './check.ts'
+import type { CheckInputs, FileInput } from './check.ts'
 import type { Check } from './types.ts'
 
 // Seam B: the evaluator is a pure function of what it is handed, so the fixtures are strings and a
 // temp directory standing in for PATH. The filesystem enters only where a Check names it — a Check's
 // own file is read by the caller, and a directory that is not there is a cause of `unknown`.
 
-function over(bytes: string | null, pathDirs: readonly string[] = []): CheckInputs {
-  return { file: bytes === null ? { kind: 'absent' } : { kind: 'read', bytes }, pathDirs }
+function over(
+  bytes: string | null,
+  pathDirs: readonly string[] = [],
+  payload: FileInput = { kind: 'absent' },
+): CheckInputs {
+  return { file: bytes === null ? { kind: 'absent' } : { kind: 'read', bytes }, payload, pathDirs }
 }
 
 function presenceOf(check: Check, bytes: string | null) {
@@ -138,6 +142,96 @@ test('a missing file is absent, addressing the file itself or a value inside it'
   })
 })
 
+// A Section Check compares two texts: the Payload's is the Section's, heading included, and only
+// trailing blank lines may differ between the two sides.
+const AGENTS = `# AGENTS.md
+
+## Output style
+
+Be terse.
+
+## Next heading
+
+More text.
+`
+const INSTRUCTIONS = `## Output style
+
+Be terse.
+`
+const SECTION_CHECK = { file: '/home/ann/.pi/agent/AGENTS.md', section: '/home/ann/.pi/agent/instructions/output-style.md' }
+
+test('a section check is present when the Section matches the Payload, trailing blank lines apart', () => {
+  assert.deepEqual(evaluateCheck(SECTION_CHECK, over(AGENTS, [], { kind: 'read', bytes: INSTRUCTIONS + '\n\n\n' })), {
+    presence: 'present',
+    detail: null,
+  })
+  // The blank lines may sit on the file's side instead.
+  assert.deepEqual(
+    evaluateCheck(SECTION_CHECK, over(AGENTS + '\n\n', [], { kind: 'read', bytes: INSTRUCTIONS })),
+    { presence: 'present', detail: null },
+  )
+})
+
+test('a section check is absent when the Section drifted from the Payload', () => {
+  const drifted = AGENTS.replace('Be terse.', 'Be verbose.')
+  const answer = evaluateCheck(SECTION_CHECK, over(drifted, [], { kind: 'read', bytes: INSTRUCTIONS }))
+  assert.equal(answer.presence, 'absent')
+  assert.match(answer.detail ?? '', /AGENTS\.md's ## Output style Section is not the declared text/)
+})
+
+test('a section check is absent when the file has no such Section', () => {
+  const answer = evaluateCheck(
+    SECTION_CHECK,
+    over('# AGENTS.md\n\nNothing to style.\n', [], { kind: 'read', bytes: INSTRUCTIONS }),
+  )
+  assert.equal(answer.presence, 'absent')
+  assert.match(answer.detail ?? '', /AGENTS\.md has no ## Output style Section/)
+})
+
+test('a section check is absent when the native file is missing', () => {
+  assert.deepEqual(evaluateCheck(SECTION_CHECK, over(null, [], { kind: 'read', bytes: INSTRUCTIONS })), {
+    presence: 'absent',
+    detail: '/home/ann/.pi/agent/AGENTS.md is not there',
+  })
+})
+
+// The fence the native files actually use: a `## ` line inside a three-backtick block is body text,
+// so it neither starts a Section, ends one, nor shares a heading with one.
+test('a fenced `## ` line neither starts nor ends a Section', () => {
+  const payload = '## Output style\n\nBe terse.\n\n```\n## Not a heading\n```\n'
+  const fenced = `${payload}\n## After the fence\n\nMore.\n`
+  assert.deepEqual(evaluateCheck(SECTION_CHECK, over(fenced, [], { kind: 'read', bytes: payload })), {
+    presence: 'present',
+    detail: null,
+  })
+  // The heading fenced before the real Section is not a second Section sharing it.
+  const fencedHeading = '```\n## Output style\n```\n\n' + AGENTS
+  assert.equal(evaluateCheck(SECTION_CHECK, over(fencedHeading, [], { kind: 'read', bytes: INSTRUCTIONS })).presence, 'present')
+})
+
+test('a Payload with no `## ` heading answers unknown, with the Payload named', () => {
+  const answer = evaluateCheck(SECTION_CHECK, over(AGENTS, [], { kind: 'read', bytes: 'no heading here\n' }))
+  assert.equal(answer.presence, 'unknown')
+  assert.match(answer.detail ?? '', /output-style\.md has no '## ' heading/)
+})
+
+test('two Sections sharing the Payload\u2019s heading answer unknown', () => {
+  const twice = '## Output style\n\none\n\n## Output style\n\ntwo\n'
+  const answer = evaluateCheck(SECTION_CHECK, over(twice, [], { kind: 'read', bytes: INSTRUCTIONS }))
+  assert.equal(answer.presence, 'unknown')
+  assert.match(answer.detail ?? '', /AGENTS\.md has two Sections headed ## Output style/)
+})
+
+test('a Payload that cannot be read answers unknown, with the Payload named', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'acm-section-payload-'))
+  const native = join(directory, 'AGENTS.md')
+  writeFileSync(native, '# AGENTS.md\n')
+  const missing = join(directory, 'style.md')
+  const answer = evaluateCheck({ file: native, section: missing }, checkInputsOf({ file: native, section: missing }))
+  assert.equal(answer.presence, 'unknown')
+  assert.match(answer.detail ?? '', /style\.md could not be read: it is not there/)
+})
+
 // The read error that is not `ENOENT` is the case this pins: a directory passes an existence test and
 // fails the read on every uid, so the fixture does not depend on a permission bit root may ignore.
 // Before this, every error was folded into `null` and answered `absent` — an unanswered question
@@ -148,6 +242,7 @@ test('a file that cannot be read is unknown with the cause, whatever predicate a
     { file: directory },
     { file: directory, contains: 'serena' },
     { file: directory, pointer: ADDRESS },
+    { file: directory, section: ADDRESS },
   ] satisfies Check[]) {
     const answer = evaluateCheck(check, checkInputsOf(check))
     assert.equal(answer.presence, 'unknown')

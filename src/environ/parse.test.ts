@@ -117,6 +117,87 @@ install = "./scripts/zshrc-export.sh OPENCODE_DISABLE_CLAUDE_CODE=1"
   )
 })
 
+// The sixth predicate and the third Install shape: a Section named by a Payload, which is one text
+// one Check compares and one Install rewrites.
+test('a section check and a section install load as the pair they spell', () => {
+  const declarations = provisionsOf(`version = 1
+
+[provision.i-have-adhd.pi]
+check   = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+`)
+  assert.deepEqual(declarations[0].entries[0].checks, [
+    { file: '~/.pi/agent/AGENTS.md', section: 'instructions/output-style.md' },
+  ])
+  assert.deepEqual(declarations[0].entries[0].install, {
+    file: '~/.pi/agent/AGENTS.md',
+    section: 'instructions/output-style.md',
+  })
+})
+
+// `section` is a predicate of its own, so beside another it is two Checks spelled as one, the way
+// `contains` beside `pointer` is.
+test('a section check beside another predicate refuses the file at the other key', () => {
+  const besidePointer = refusalOf(
+    'version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "x", section = "s", pointer = "y" }\ninstall = "x"\n',
+  )
+  assert.equal(besidePointer.line, 4)
+  assert.equal(besidePointer.reason, 'a check holds section or pointer, not both')
+
+  const besideContains = refusalOf(
+    'version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "x", section = "s", contains = "y" }\ninstall = "x"\n',
+  )
+  assert.equal(besideContains.reason, 'a check holds section or contains, not both')
+
+  const besideEquals = refusalOf(
+    'version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "x", section = "s", equals = true }\ninstall = "x"\n',
+  )
+  assert.equal(besideEquals.reason, 'a check holds section or equals, not both')
+
+  const besideOnPath = refusalOf(
+    'version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { onPath = "x", section = "s" }\ninstall = "x"\n',
+  )
+  assert.equal(besideOnPath.reason, "onPath takes no other key, and 'section' is one")
+})
+
+test('a section that is not a string or is empty refuses the file at it', () => {
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "x", section = 1 }\ninstall = "x"\n').reason,
+    'section must be a string',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "x", section = "" }\ninstall = "x"\n').reason,
+    'section is empty',
+  )
+})
+
+// The Section shape is `{ file, section }`, nothing beside it: a Payload beside it contradicts, and
+// either half without the other names nothing to write.
+test('a malformed section install refuses the file at the offending key', () => {
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "y" }\ninstall = { section = "s" }\n').reason,
+    'section needs a file',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "y" }\ninstall = { file = "x" }\n').reason,
+    'install has no section',
+  )
+  assert.equal(
+    refusalOf(
+      'version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "y" }\ninstall = { file = "x", section = "s", payload = "p" }\n',
+    ).reason,
+    'a section install holds file and section, not payload',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "y" }\ninstall = { file = "", section = "s" }\n').reason,
+    'file is empty',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.i-have-adhd.pi]\ncheck = { file = "y" }\ninstall = { file = "x", section = 1 }\n').reason,
+    'section must be a string',
+  )
+})
+
 test('an unknown version refuses the file where the version is written', () => {
   assert.deepEqual(refusalOf('version = 2\n'), { line: 1, column: 1, reason: 'version 2 is not supported' })
 })
@@ -310,9 +391,9 @@ install = "npx rtk init"
 // that are not a list of strings.
 test('a malformed payload install refuses the file at the offending key', () => {
   assert.equal(
-    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = { file = "x", section = "z" }\n')
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = { payload = "x", wibble = 1 }\n')
       .reason,
-    "unknown install key 'file'",
+    "unknown install key 'wibble'",
   )
   assert.deepEqual(refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = { args = ["a"] }\n'), {
     line: 5,
