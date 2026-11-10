@@ -1,62 +1,17 @@
-import path from 'node:path'
 import type { EngineConfig } from '../../config.ts'
 import { readHookTier } from '../hooks.ts'
 import { mcpDeclaration } from '../mcp-facts.ts'
 import { readInstructionTier } from '../instructions.ts'
+import { nativeTiers } from '../native-paths.ts'
 import { readSkillTier } from '../skills.ts'
 import { readTier } from '../tier.ts'
 import type { Adapter, Tier, TierRead } from '../types.ts'
 import { readPiMcpJson } from './read.ts'
 
-// Pi has two layers. `configPaths` is the tier's MCP file; a skill and an instruction file are
-// separate locations under the same layer, declared in `categoryPaths`.
-export function piTiers(config: EngineConfig): Tier[] {
-  const agentDir = path.join(config.home, '.pi', 'agent')
-  const piProject = path.join(config.projectRoot, '.pi')
-  const userSkills = path.join(config.home, '.agents', 'skills')
-  const projectSkills = path.join(config.projectRoot, '.agents', 'skills')
-  const userAgentsMd = path.join(agentDir, 'AGENTS.md')
-  const projectAgentsMd = path.join(config.projectRoot, 'AGENTS.md')
-  // Hooks under Pi are the file the `@vahor/pi-hooks` extension reads; without that package the file
-  // is inert, so its presence says nothing about whether anything loads it.
-  const userHooks = path.join(agentDir, 'hooks.json')
-  const projectHooks = path.join(piProject, 'hooks.json')
-  return [
-    {
-      id: 'pi:user',
-      nativeLabel: 'user',
-      rank: 1,
-      configPaths: [path.join(agentDir, 'mcp.json')],
-      categoryPaths: {
-        // `~/.agents/skills` is the cross-harness location; the harness-owned `skills/` beside it is
-        // read too, because the harness loads it.
-        skills: {
-          reads: [userSkills, path.join(agentDir, 'skills')],
-        },
-        instructions: { reads: [userAgentsMd] },
-        hooks: { reads: [userHooks] },
-      },
-    },
-    {
-      id: 'pi:project',
-      nativeLabel: 'project',
-      rank: 2,
-      configPaths: [path.join(piProject, 'mcp.json')],
-      categoryPaths: {
-        skills: {
-          reads: [projectSkills, path.join(piProject, 'skills')],
-        },
-        instructions: { reads: [projectAgentsMd] },
-        hooks: { reads: [projectHooks] },
-      },
-    },
-  ]
-}
-
 export function createPiAdapter(config: EngineConfig): Adapter {
   return {
     harness: 'pi',
-    tiers: piTiers(config),
+    tiers: nativeTiers(config, 'pi'),
     claimedCategories: ['mcp', 'skills', 'instructions', 'hooks'],
     handlers: {
       mcp: { read: readMcpTier },

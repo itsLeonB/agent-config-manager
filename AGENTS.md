@@ -53,7 +53,10 @@ decisions.
   OpenCode) plus the shared readers: MCP fact classification in `mcp-facts.ts`, skills in
   `skills.ts`, instructions in `instructions.ts`, hooks in `hooks.ts` (the three harnesses differ
   only in which locations they declare), per-tier file reading in `tier.ts`, and
-  `src/engine/adapters/registry.ts`, which fails at load when a claimed category has no handler. A
+  `src/engine/adapters/registry.ts`, which fails at load when a claimed category has no handler. The
+  one path table lives in `native-paths.ts`: `nativeTiers(config, harness)` and
+  `nativeTier(config, harness, tierId)` answer where a harness reads at a tier, and the three
+  adapters take their `tiers` from there rather than declaring their own. A
   `Tier` in `types.ts` is a read location and nothing else. `src/engine/edit.ts` is the
   pointer-level native editor — a write lands only on the address it names, and comments and
   sibling entries survive — `src/engine/secret.ts` is the credential classifier every reader runs
