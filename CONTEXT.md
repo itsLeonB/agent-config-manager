@@ -25,8 +25,10 @@ could not be evaluated (a file it reads is missing or unparseable), so an unansw
 reported as an absence.
 _Avoid_: status, state, installed flag, health, verdict
 
-**Install command**: the idempotent command that puts a Provision into one harness. Run only by
-`acm install`, and only when a human started it in a terminal.
+**Install command**: the idempotent, non-interactive command that puts a Provision into one harness.
+It is written for one Tier: it runs from that Tier's root, a relative path in it means that root, and
+ACM passes it no environment variables and no standard input. It carries no credential. Run only by
+`acm install`, which a human starts.
 _Avoid_: recipe, script, action, mutation
 
 **Environment**: the merged set of Provisions declared by the environment files ACM is facing.
@@ -38,7 +40,8 @@ _Avoid_: manifest, lockfile, dotfile, registry
 
 **Tier**: where an environment file lives — `user` (`~/agents_environ.toml`), `project`
 (`<repo>/agents_environ.toml`, committed), `project-local` (`<repo>/agents_environ.local.toml`,
-gitignored). Nothing else is a tier, and no entry names one: the file it sits in says it.
+gitignored). Nothing else is a tier, and no entry names one: the file it sits in says it. A tier's
+root is `$HOME` for `user` and the **Project root** for the other two.
 _Avoid_: scope, scope bucket, layer, level
 
 **Harness**: one agent CLI that reads its own native configuration — Pi, Codex, OpenCode. Identified
@@ -75,6 +78,8 @@ _Avoid_: store location, install root, repository root, working directory when t
 - The environment file is the source of truth. Native config is output, not inventory: what a
   Provision did not declare, ACM cannot report.
 - A check executes nothing. Only `acm install`, started by a human, runs an Install command.
+- An Install command is static text: no placeholders, no environment variables, no credential. The
+  same Provision at two tiers therefore has two commands, and that duplication is intended.
 - A Provision's form is per harness, so no rule may assume the same category, path, or number of
   native entries on two harnesses.
 - Retired by [ADR 0007](docs/adr/0007-declare-provisions-and-delete-the-mirror-engine.md): Component,

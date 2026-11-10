@@ -21,7 +21,13 @@ than hand-translating config.
 
 Checks are declared predicates, not shell commands, because agents are allowed to define them through
 MCP and a shell check would let an agent's `define` call turn the next `list` into arbitrary code
-execution. Only `acm install`, started by a human in a terminal, executes anything.
+execution. Only `acm install`, started by a human, executes anything; it asks no questions, and every
+command it starts gets no standard input.
+
+An Install command is static text. It is written for one Tier, so nothing has to tell it which
+Provision, Harness, or file it serves: it runs from the Tier's root — `$HOME` for `user`, the Project
+root otherwise — and a relative path inside it means that root. ACM passes no environment variables
+and no standard input, so what the file says is exactly what runs.
 
 ## Considered Options
 
@@ -41,11 +47,13 @@ execution. Only `acm install`, started by a human in a terminal, executes anythi
 
 ## Consequences
 
-- **`acm install` is blanket consent, deliberately.** One human command approves N commands. ADR 0005
-  forbids blanket approval in every form; this supersedes that prohibition instead of quietly
-  violating it. The guards that remain are that the command is human-started, prints every Provision
-  and the exact command before running it, confirms per Provision, and refuses to run without a TTY
-  (`--dry-run` works anywhere).
+- **`acm install` is blanket consent, deliberately, and it asks nothing.** One human command approves
+  N commands and no per-Provision prompt stands in between, because a prompt on a fresh machine
+  defeats the one command that reproduces it. ADR 0005 forbids blanket approval in every form; this
+  supersedes that prohibition instead of quietly violating it. The guards that remain: a human starts
+  it, it prints every Provision and its exact command before the first byte, `--dry-run` is the
+  default when stdin is not a TTY, and each command runs with stdin closed, so a command that wants
+  an answer fails instead of hanging the run.
 - **This supersedes ADR 0001's tier/scope split.** The split existed to reconcile harness-native
   layers; the tier is now the environment file's location, so the split has nothing left to reconcile
   and the scope bucket is retired. Per-harness native paths survive as a plain read lookup, not as a
@@ -62,3 +70,9 @@ execution. Only `acm install`, started by a human in a terminal, executes anythi
   credential to reach an agent), digesting, and the three harness readers.
 - **Coverage is unenforced.** A Provision with no entry for some harness is "not applicable" and
   reports nothing, so a new harness's environment is only as complete as the entries written for it.
+- **Harness installs are out of scope.** A machine is assumed to have Pi, Codex, and OpenCode already
+  installed. Provisioning a harness binary, and automating its authentication, is a per-machine
+  install rather than a per-harness one, and no Provision represents it yet.
+- **An Install command is assumed to carry no credential**, so the classifier does not inspect it.
+  The environment file is therefore a place a token could sit in plain text without anything
+  flagging it. That gap is known and out of scope for this slice.
