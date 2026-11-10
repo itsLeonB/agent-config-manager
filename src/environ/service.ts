@@ -17,6 +17,12 @@ import type { FileRefusal, ProvisionRow } from './types.ts'
 // into the engine to spell it.
 export { HARNESSES } from '../engine/adapters/types.ts'
 
+// The run is the one command that executes anything, and it answers through this module like every
+// other part of the environment. It is a CLI surface only: nothing the MCP face registers can start
+// one.
+export { installRun } from './runner.ts'
+export type { InstallEntry, InstallOptions, InstallOutcome } from './runner.ts'
+
 export interface StatusFilter {
   harness?: HarnessId
   name?: string
