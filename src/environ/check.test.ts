@@ -93,6 +93,82 @@ test('a pointer check reports absent when the address is not in the document', (
   assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'mcp_servers.serena.command.flag' }, JSON_CONFIG), 'absent')
 })
 
+// `includes` answers whether the array at an address holds a value, which is how a plugin list is
+// addressed without a regex over the whole file.
+const PLUGINS_JSON = '{"plugins": ["i-have-adhd", "serena"]}\n'
+const PLUGINS_TOML = 'plugins = ["i-have-adhd", "serena"]\n'
+
+test('an includes check answers whether an array holds a string', () => {
+  const present = { file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins', includes: 'i-have-adhd' }
+  assert.deepEqual(evaluateCheck(present, over(PLUGINS_JSON)), { presence: 'present', detail: null })
+  assert.deepEqual(evaluateCheck({ ...present, file: '/home/ann/.codex/config.toml' }, over(PLUGINS_TOML)), {
+    presence: 'present',
+    detail: null,
+  })
+  const absent = evaluateCheck({ ...present, includes: 'rtk' }, over(PLUGINS_JSON))
+  assert.deepEqual(absent, {
+    presence: 'absent',
+    detail: "/home/ann/.config/opencode/opencode.json's plugins does not include the declared value",
+  })
+  // The address being missing is the same absence, named the same way every missing pointer is.
+  const missing = evaluateCheck({ ...present, pointer: 'hooks' }, over(PLUGINS_JSON))
+  assert.deepEqual(missing, {
+    presence: 'absent',
+    detail: '/home/ann/.config/opencode/opencode.json has no hooks',
+  })
+})
+
+test('an includes check compares array elements by deep equality, whatever the format', () => {
+  const serversJson = '{"servers": [{"name": "serena", "command": "uvx"}, {"name": "rtk"}]}\n'
+  const serversToml = '[[servers]]\nname = "serena"\ncommand = "uvx"\n\n[[servers]]\nname = "rtk"\n'
+  const expected = { name: 'serena', command: 'uvx' }
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'servers', includes: expected }, serversJson), 'present')
+  assert.equal(presenceOf({ file: '/home/ann/.codex/config.toml', pointer: 'servers', includes: expected }, serversToml), 'present')
+  // A value that is a part of an element is not the element: equality, not containment.
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'servers', includes: { name: 'serena' } }, serversJson), 'absent')
+})
+
+test('a numeric segment indexes an array element, and a quoted one is a key', () => {
+  assert.equal(presenceOf({ file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins.0', equals: 'i-have-adhd' }, PLUGINS_JSON), 'present')
+  assert.equal(presenceOf({ file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins.1', equals: 'serena' }, PLUGINS_JSON), 'present')
+  assert.equal(presenceOf({ file: '/home/ann/.codex/config.toml', pointer: 'plugins.1' }, PLUGINS_TOML), 'present')
+  // An index the array does not hold is as missing as a key the document does not hold.
+  const outOfRange = evaluateCheck({ file: '/home/ann/.codex/config.toml', pointer: 'plugins.2' }, over(PLUGINS_TOML))
+  assert.deepEqual(outOfRange, { presence: 'absent', detail: '/home/ann/.codex/config.toml has no plugins.2' })
+  // The unquoted segment indexes, so on an object it names nothing; `"0"` is the key named 0.
+  const objectWithZero = '{"plugins": {"0": "kept"}}\n'
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'plugins.0' }, objectWithZero), 'absent')
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'plugins."0"', equals: 'kept' }, objectWithZero), 'present')
+})
+
+test('a quoted key containing a dot addresses that key in JSON and TOML', () => {
+  const dottedJson = '{"mcp_servers": {"my.server": {"command": "uvx"}}}\n'
+  const dottedToml = '[mcp_servers."my.server"]\ncommand = "uvx"\n'
+  const pointer = 'mcp_servers."my.server".command'
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer, equals: 'uvx' }, dottedJson), 'present')
+  assert.equal(presenceOf({ file: '/home/ann/.codex/config.toml', pointer, equals: 'uvx' }, dottedToml), 'present')
+  // The unquoted spelling names a member `my`, which neither document holds.
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'mcp_servers.my.server.command' }, dottedJson), 'absent')
+  assert.equal(presenceOf({ file: '/home/ann/.codex/config.toml', pointer: 'mcp_servers.my.server.command' }, dottedToml), 'absent')
+})
+
+test('a pointer that cannot be spelled is unknown, never absent', () => {
+  const answer = evaluateCheck({ file: '/home/ann/.codex/config.toml', pointer: 'mcp_servers."my.server' }, over('[mcp_servers."my.server"]\n'))
+  assert.equal(answer.presence, 'unknown')
+  assert.match(answer.detail ?? '', /cannot be spelled/)
+})
+
+test('an includes check on a value that is not an array is unknown with the reason', () => {
+  const scalar = evaluateCheck({ file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins', includes: 'i-have-adhd' }, over('{"plugins": "i-have-adhd"}\n'))
+  assert.deepEqual(scalar, {
+    presence: 'unknown',
+    detail: "/home/ann/.config/opencode/opencode.json's plugins is not an array",
+  })
+  const table = evaluateCheck({ file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins', includes: 'i-have-adhd' }, over('{"plugins": {"name": "x"}}\n'))
+  assert.equal(table.presence, 'unknown')
+  assert.match(table.detail ?? '', /is not an array/)
+})
+
 // `equals` is the reason the predicate has a second form: an entry that is in the file but switched
 // off is not installed, so the value has to be the one the Provision means, not merely present.
 test('an equals check reports absent for an entry the file disables', () => {
