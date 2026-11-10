@@ -103,7 +103,7 @@ test('acm status prints Provision by harness, and --json prints the same rows as
   assert.match(printed.stdout, /^opencode-no-claude\s+opencode\s+~\/agents_environ\.toml\s+present$/m)
   assert.match(printed.stdout, /^i-have-adhd\s+pi\s+~\/agents_environ\.toml\s+present$/m)
   // No entry for a harness is no row for it, and no file at the check's path is an absence.
-  assert.match(printed.stdout, /^serena\s+pi\s+~\/agents_environ\.toml\s+absent$/m)
+  assert.match(printed.stdout, /^serena\s+pi\s+~\/agents_environ\.toml\s+absent\s+.*is not there$/m)
   assert.doesNotMatch(printed.stdout, /^serena\s+(codex|opencode)/m)
 
   const asJson = run(binPath(), home, ['status', '--json'], { ACM_STORE: store })
@@ -129,7 +129,7 @@ test('acm status prints Provision by harness, and --json prints the same rows as
             tier: 'user',
             source: path.join(home, 'agents_environ.toml'),
             presence: 'absent',
-            detail: null,
+            detail: `${path.join(home, '.pi', 'agent', 'mcp.json')} is not there`,
             latestRun: {
               at: '2024-05-01T00:00:00.000Z',
               provision: 'serena',

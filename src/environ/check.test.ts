@@ -3,7 +3,7 @@ import assert from 'node:assert'
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkInputsOf, evaluateCheck } from './check.ts'
+import { checkInputsOf, evaluateCheck, foldAnswers } from './check.ts'
 import type { CheckInputs } from './check.ts'
 import type { Check } from './types.ts'
 
@@ -24,7 +24,10 @@ test('an exists check is present when the file was read and absent when it is no
     presence: 'present',
     detail: null,
   })
-  assert.deepEqual(evaluateCheck({ file: '/home/ann/.zshrc' }, over(null)), { presence: 'absent', detail: null })
+  assert.deepEqual(evaluateCheck({ file: '/home/ann/.zshrc' }, over(null)), {
+    presence: 'absent',
+    detail: '/home/ann/.zshrc is not there',
+  })
 })
 
 test('a contains check finds an export in a shell profile', () => {
@@ -39,7 +42,7 @@ test('a contains check reports absent when the pattern is not in the file', () =
   const profile = 'export PATH="$HOME/.bun/bin:$PATH"\n'
   assert.deepEqual(evaluateCheck({ file: '/home/ann/.zshrc', contains: 'OPENCODE_DISABLE_CLAUDE_CODE' }, over(profile)), {
     presence: 'absent',
-    detail: null,
+    detail: '/home/ann/.zshrc does not contain OPENCODE_DISABLE_CLAUDE_CODE',
   })
 })
 
@@ -127,9 +130,12 @@ test('a file that does not parse is unknown, with the file and the reason', () =
 test('a missing file is absent, addressing the file itself or a value inside it', () => {
   assert.deepEqual(evaluateCheck({ file: '/home/ann/.pi/mcp.json', pointer: ADDRESS }, over(null)), {
     presence: 'absent',
-    detail: null,
+    detail: '/home/ann/.pi/mcp.json is not there',
   })
-  assert.deepEqual(evaluateCheck({ file: '/home/ann/.pi/mcp.json' }, over(null)), { presence: 'absent', detail: null })
+  assert.deepEqual(evaluateCheck({ file: '/home/ann/.pi/mcp.json' }, over(null)), {
+    presence: 'absent',
+    detail: '/home/ann/.pi/mcp.json is not there',
+  })
 })
 
 // The read error that is not `ENOENT` is the case this pins: a directory passes an existence test and
@@ -152,7 +158,7 @@ test('a file that cannot be read is unknown with the cause, whatever predicate a
   const missing = join(directory, 'not-there.toml')
   assert.deepEqual(evaluateCheck({ file: missing, pointer: ADDRESS }, checkInputsOf({ file: missing })), {
     presence: 'absent',
-    detail: null,
+    detail: `${missing} is not there`,
   })
 })
 
@@ -177,9 +183,18 @@ test('an onPath check is absent for a name that is missing or not executable', (
     { name: 'notes', mode: 0o644 },
     { name: 'rtk', mode: 0o644 },
   ])
-  assert.deepEqual(evaluateCheck({ onPath: 'notes' }, over(null, [directory])), { presence: 'absent', detail: null })
-  assert.deepEqual(evaluateCheck({ onPath: 'nothing-here' }, over(null, [directory])), { presence: 'absent', detail: null })
-  assert.deepEqual(evaluateCheck({ onPath: 'serena' }, over(null, [])), { presence: 'absent', detail: null })
+  assert.deepEqual(evaluateCheck({ onPath: 'notes' }, over(null, [directory])), {
+    presence: 'absent',
+    detail: 'notes is not on PATH',
+  })
+  assert.deepEqual(evaluateCheck({ onPath: 'nothing-here' }, over(null, [directory])), {
+    presence: 'absent',
+    detail: 'nothing-here is not on PATH',
+  })
+  assert.deepEqual(evaluateCheck({ onPath: 'serena' }, over(null, [])), {
+    presence: 'absent',
+    detail: 'serena is not on PATH',
+  })
   // A directory that carries the name is not the regular file a shell would run.
   mkdirSync(join(directory, 'opencode'))
   assert.equal(evaluateCheck({ onPath: 'opencode' }, over(null, [directory])).presence, 'absent')
@@ -198,4 +213,49 @@ test('a PATH entry that is not a directory is unknown too', () => {
   const answer = evaluateCheck({ onPath: 'serena' }, over(null, [join(directory, 'plain-file')]))
   assert.equal(answer.presence, 'unknown')
   assert.match(answer.detail ?? '', /is not a directory/)
+})
+
+// The fold is the entry's answer: `absent` over `unknown` over `present`, and the detail names
+// every Check that did not answer `present` with its own reason. The answers come from the same
+// evaluator and the same fixture bytes as every other test in this file.
+test('the fold answers absent when any Check is absent, and names the Check that failed', () => {
+  const answers = [
+    evaluateCheck({ file: '/home/ann/.pi/mcp.json', contains: 'serena' }, over('serena\n')),
+    evaluateCheck({ file: '/home/ann/.zshrc' }, over(null)),
+  ]
+  assert.deepEqual(foldAnswers(answers), {
+    presence: 'absent',
+    detail: '/home/ann/.zshrc is not there',
+  })
+})
+
+test('absent beats unknown: the fold answers absent and names both Checks', () => {
+  const answers = [
+    evaluateCheck({ file: '/home/ann/.zshrc' }, over(null)),
+    evaluateCheck({ onPath: 'serena' }, over(null, ['/home/ann/empty-bin'])),
+  ]
+  const answer = foldAnswers(answers)
+  assert.equal(answer.presence, 'absent')
+  assert.match(answer.detail ?? '', /\/home\/ann\/\.zshrc is not there/)
+  assert.match(answer.detail ?? '', /PATH could not be searched: \/home\/ann\/empty-bin/)
+})
+
+test('the fold answers unknown when a Check is unknown and none is absent, with that Check named', () => {
+  const directory = pathWith([{ name: 'plain-file', mode: 0o755 }])
+  const answers = [
+    evaluateCheck({ file: '/home/ann/.pi/mcp.json', contains: 'serena' }, over('serena\n')),
+    evaluateCheck({ onPath: 'serena' }, over(null, [join(directory, 'plain-file')])),
+  ]
+  assert.deepEqual(foldAnswers(answers), {
+    presence: 'unknown',
+    detail: `PATH could not be searched: ${join(directory, 'plain-file')} is not a directory`,
+  })
+})
+
+test('the fold answers present only when every Check is present', () => {
+  const answers = [
+    evaluateCheck({ file: '/home/ann/.pi/mcp.json', contains: 'serena' }, over('serena\n')),
+    evaluateCheck({ file: '/home/ann/.codex/config.toml', pointer: 'mcp_servers.serena' }, over('[mcp_servers.serena]\n')),
+  ]
+  assert.deepEqual(foldAnswers(answers), { presence: 'present', detail: null })
 })

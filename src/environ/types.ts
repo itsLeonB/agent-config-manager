@@ -46,10 +46,12 @@ export interface OnPathCheck {
 
 export type Check = FileExistsCheck | FileContainsCheck | FilePointerCheck | OnPathCheck
 
-// One `(provision, harness)` as the file spells it, before any path is resolved against a tier root.
+// One `(provision, harness)` as the file spells it, before any path is resolved against a tier
+// root. `checks` is one or more, and all of them have to hold; a file that spells a single
+// `check = { … }` is read as this list's one element.
 export interface DeclaredEntry {
   harness: HarnessId
-  check: Check
+  checks: Check[]
   install: string
 }
 
@@ -60,8 +62,8 @@ export interface ProvisionDeclaration {
   entries: DeclaredEntry[]
 }
 
-// One `(provision, harness)` after the loader applied its tier's root: `check.file` is absolute and
-// `source` is the environment file the entry came from.
+// One `(provision, harness)` after the loader applied its tier's root: every Check's `file` is
+// absolute and `source` is the environment file the entry came from.
 export interface ResolvedProvision {
   name: string
   tags: string[]
@@ -72,7 +74,7 @@ export interface ResolvedProvision {
   // instead of being derived a second time.
   root: string
   source: string
-  check: Check
+  checks: Check[]
   install: string
 }
 
@@ -92,8 +94,8 @@ export type ParseResult =
   | { ok: true; provisions: ProvisionDeclaration[] }
   | { ok: false; refusal: Refusal }
 
-// One harness's answer for one Provision: where the entry came from, what a Check said, and why when
-// it could not say. A Provision with no entry for a harness has no such row at all.
+// One harness's answer for one Provision: where the entry came from, what its Checks said folded,
+// and why when a Check could not answer. A Provision with no entry for a harness has no such row.
 export interface HarnessPresence {
   harness: HarnessId
   tier: EnvironmentTier
@@ -110,7 +112,8 @@ export interface ProvisionRow {
   harnesses: HarnessPresence[]
 }
 
-// One Check's answer, before the row learns which harness and tier it belongs to.
+// One Check's answer, and the same shape an entry's folded answer takes: `detail` is the reason a
+// Check did not answer `present` — why it is absent, or why it could not be evaluated.
 export interface CheckAnswer {
   presence: Presence
   detail: string | null

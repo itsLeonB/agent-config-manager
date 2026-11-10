@@ -145,7 +145,15 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
         {
           name: 'serena',
           tags: [],
-          harnesses: [{ harness: 'pi', tier: 'user', source: path.join(home, 'agents_environ.toml'), presence: 'absent', detail: null }],
+          harnesses: [
+            {
+              harness: 'pi',
+              tier: 'user',
+              source: path.join(home, 'agents_environ.toml'),
+              presence: 'absent',
+              detail: `${path.join(home, '.pi', 'agent', 'mcp.json')} is not there`,
+            },
+          ],
         },
       ],
     })
@@ -157,7 +165,15 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
         {
           name: 'serena',
           tags: [],
-          harnesses: [{ harness: 'pi', tier: 'user', source: path.join(home, 'agents_environ.toml'), presence: 'absent', detail: null }],
+          harnesses: [
+            {
+              harness: 'pi',
+              tier: 'user',
+              source: path.join(home, 'agents_environ.toml'),
+              presence: 'absent',
+              detail: `${path.join(home, '.pi', 'agent', 'mcp.json')} is not there`,
+            },
+          ],
         },
       ],
     })

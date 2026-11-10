@@ -41,13 +41,66 @@ test('a version and its Provision tables load, with tags and one entry per harne
       entries: [
         {
           harness: 'codex',
-          check: { file: '~/.codex/config.toml', contains: '^\\[mcp_servers.serena\\]' },
+          checks: [{ file: '~/.codex/config.toml', contains: '^\\[mcp_servers.serena\\]' }],
           install: 'python3 scripts/merge-codex-mcp.py serena',
         },
-        { harness: 'pi', check: { file: '~/.pi/agent/mcp.json' }, install: 'pi plugin install serena' },
+        { harness: 'pi', checks: [{ file: '~/.pi/agent/mcp.json' }], install: 'pi plugin install serena' },
       ],
     },
   ])
+})
+
+// `check = { … }` is the one-element spelling of `checks`, so a file written before this slice and
+// one written with the list load as the same declaration.
+test('a check key and a checks key with one element load the same entry', () => {
+  const single = provisionsOf(`version = 1
+
+[provision.serena.codex]
+check   = { file = "~/.codex/config.toml", contains = "serena" }
+install = "true"
+`)
+  const list = provisionsOf(`version = 1
+
+[provision.serena.codex]
+checks  = [{ file = "~/.codex/config.toml", contains = "serena" }]
+install = "true"
+`)
+  assert.deepEqual(single, list)
+})
+
+// One entry, several Checks, each with its own predicate rules: a pointer with the value it must
+// hold beside a name on PATH is one row's two questions.
+test('checks loads several predicates, each its own table', () => {
+  const [provision] = provisionsOf(`version = 1
+
+[provision.serena.pi]
+checks  = [
+  { file = "~/.pi/agent/mcp.json", pointer = "mcpServers.serena", equals = { command = "uvx" } },
+  { onPath = "serena" },
+]
+install = "true"
+`)
+  assert.deepEqual(provision.entries[0].checks, [
+    { file: '~/.pi/agent/mcp.json', pointer: 'mcpServers.serena', equals: { command: 'uvx' } },
+    { onPath: 'serena' },
+  ])
+})
+
+test('an empty checks list refuses the file at the key', () => {
+  assert.deepEqual(refusalOf('version = 1\n\n[provision.serena.codex]\nchecks = []\ninstall = "x"\n'), {
+    line: 4,
+    column: 1,
+    reason: 'checks is empty',
+  })
+})
+
+test('a check beside checks refuses the file at the checks key', () => {
+  assert.deepEqual(
+    refusalOf(
+      'version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\nchecks = [{ file = "z" }]\ninstall = "x"\n',
+    ),
+    { line: 5, column: 1, reason: 'an entry holds check or checks, not both' },
+  )
 })
 
 // A Provision with no entry for a harness is legal: nothing is invented for the harnesses it skips.
@@ -130,7 +183,7 @@ check   = { onPath = "rtk" }
 install = "true"
 `)
   assert.deepEqual(
-    declarations.map((provision) => provision.entries.map((entry) => entry.check)),
+    declarations.map((provision) => provision.entries.flatMap((entry) => entry.checks)),
     [
       [
         {
@@ -180,6 +233,22 @@ test('a pointer that is not a string or is empty refuses the file at it', () => 
     refusalOf('version = 1\n\n[provision.rtk.pi]\ncheck = { onPath = "" }\ninstall = "x"\n').reason,
     'onPath is empty',
   )
+})
+
+// The rules that are per Check stay per Check, wherever the Check is spelled: a predicate that
+// contradicts itself refuses the file even as one member of a checks list.
+test('per-check rules refuse a checks member at its offending key', () => {
+  const both = refusalOf(
+    'version = 1\n\n[provision.serena.codex]\nchecks = [{ file = "x", contains = "y", pointer = "z" }]\ninstall = "x"\n',
+  )
+  assert.equal(both.line, 4)
+  assert.equal(both.reason, 'a check holds contains or pointer, not both')
+
+  const withoutPointer = refusalOf(
+    'version = 1\n\n[provision.serena.codex]\nchecks = [{ file = "x", equals = true }]\ninstall = "x"\n',
+  )
+  assert.equal(withoutPointer.line, 4)
+  assert.equal(withoutPointer.reason, 'equals needs a pointer')
 })
 
 test('an empty contains refuses the file at the pattern', () => {

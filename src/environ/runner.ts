@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
-import { evaluate } from './check.ts'
+import { evaluateChecks } from './check.ts'
 import { recordRun } from './history.ts'
 import { loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
@@ -159,7 +159,7 @@ export function installRun(
   }
   const selected = only.length === 0 ? inTier : inTier.filter((entry) => only.includes(entry.name))
   const previewed: Previewed[] = selected.map((provision) => {
-    const presence = evaluate(provision.check).presence
+    const presence = evaluateChecks(provision.checks).presence
     return { provision, presence, skip: presence === 'present' && options.force !== true }
   })
   write(previewText(previewed, dryRun))
@@ -181,7 +181,7 @@ export function installRun(
     const command = spawnInstall(item.provision)
     // The answer after the command, not before and not the command's report of itself: a command
     // that half-worked is present if its Check now passes.
-    const after = evaluate(item.provision.check).presence
+    const after = evaluateChecks(item.provision.checks).presence
     // Recorded now, before the next command starts: the row is committed on its own, so an
     // interrupted run keeps the history of the commands that had already finished.
     recordRun(item.provision, command.status, after, config)
