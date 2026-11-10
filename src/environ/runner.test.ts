@@ -313,14 +313,81 @@ install = "${command} two; echo x > two.marker"
   const narrowed = run(f, { only: ['one'] })
   assert.deepEqual(logLines(f), ['one'])
   assert.match(narrowed.printed, /^preview: 1 entry, 1 to run, 0 already present$/m)
+  assert.match(narrowed.printed, /^selection: --only one$/m)
   assert.equal(narrowed.outcome.exitCode, 0)
 
   fs.rmSync(f.log)
   // A typo is a typo: running the rest would look like the named fix succeeded.
   const refused = run(f, { only: ['nope'] })
-  assert.match(refused.printed, /^no Provision named nope$/m)
+  assert.match(refused.printed, /^no Provision named or tagged nope \(each tried as a name and as a tag\)$/m)
   assert.equal(fs.existsSync(f.log), false)
   assert.equal(refused.outcome.exitCode, 1)
+})
+
+test('--only selects a tag as well as a name, and the preview names the selection', () => {
+  const f = fixture()
+  const command = recorder(f)
+  environment(f, `version = 1
+
+[provision.one]
+tags = ["alpha"]
+
+[provision.one.pi]
+check   = { file = "~/one.marker" }
+install = "${command} one-pi; echo x > one.marker"
+
+[provision.one.codex]
+check   = { file = "~/one-codex.marker" }
+install = "${command} one-codex; echo x > one-codex.marker"
+
+[provision.two]
+tags = ["shared"]
+
+[provision.two.pi]
+check   = { file = "~/two.marker" }
+install = "${command} two; echo x > two.marker"
+
+[provision.three.pi]
+check   = { file = "~/three.marker" }
+install = "${command} three; echo x > three.marker"
+`)
+
+  // A tag selects every entry of the Provision that carries it, across harnesses.
+  const byTag = run(f, { only: ['alpha'] })
+  assert.deepEqual(logLines(f), ['one-pi', 'one-codex'])
+  assert.match(byTag.printed, /^selection: --only alpha$/m)
+  assert.match(byTag.printed, /^preview: 2 entries, 2 to run, 0 already present$/m)
+  assert.equal(byTag.outcome.exitCode, 0)
+
+  fs.rmSync(f.log)
+  // A tag and a name in one call select their union.
+  const both = run(f, { only: ['shared', 'three'] })
+  assert.deepEqual(logLines(f), ['two', 'three'])
+  assert.match(both.printed, /^selection: --only shared, three$/m)
+  assert.equal(both.outcome.exitCode, 0)
+})
+
+test('--only leaves a present entry it selects by tag alone, unless --force', () => {
+  const f = fixture()
+  const command = recorder(f)
+  file(path.join(f.home, '.zshrc'), 'export READY=1\n')
+  environment(f, `version = 1
+
+[provision.done]
+tags = ["shared"]
+
+[provision.done.opencode]
+check   = { file = "~/.zshrc", contains = "READY" }
+install = "${command} done"
+`)
+  const skipped = run(f, { only: ['shared'] })
+  assert.deepEqual(logLines(f), [])
+  assert.match(skipped.printed, /^preview: 1 entry, 0 to run, 1 already present$/m)
+  assert.equal(skipped.outcome.exitCode, 0)
+
+  const forced = run(f, { only: ['shared'], force: true })
+  assert.deepEqual(logLines(f), ['done'])
+  assert.match(forced.printed, /^  ran: done \(opencode\) exit 0$/m)
 })
 
 test('a run never writes an environment file', () => {
