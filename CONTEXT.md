@@ -29,6 +29,13 @@ _Avoid_: scope, level, layer
 `project-local`, `system`. Derived from the tier, never inferred from a path.
 _Avoid_: scope (when a tier is meant), level
 
+**Project root**: the one project `acm` is currently reading — the directory the harness or shell in
+front of it was opened in, taken as given and never walked up to a repository marker, because a pass
+must read the layers that harness itself read. Every project-scoped location is inside it; nothing
+belonging to another project is in the answer, and the answer names the root it used.
+_Avoid_: store location, install root, repository root, working directory when the resolved root is
+meant
+
 **Tier health**: whether a tier's config parsed cleanly on the last discovery pass — `ok` or
 `unreadable`. Only an `ok` tier may tombstone an Installation it no longer sees, and only one whose
 native location the tier declared it reads; `unreadable` means the tier was left alone, so the
