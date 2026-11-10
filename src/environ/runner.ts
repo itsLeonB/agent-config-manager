@@ -22,7 +22,7 @@ export interface InstallOptions {
   // invocation cannot change the machine by accident.
   dryRun?: boolean
   force?: boolean
-  // Provision names to restrict the run to. Empty means the whole environment.
+  // Provision names or tags to restrict the run to. Empty means the whole environment.
   only?: string[]
   // Only the entries one tier owns after the merge. `--tier` restricts a run the way `--only` does.
   tier?: EnvironmentTier
@@ -64,8 +64,10 @@ function label(provision: ResolvedProvision): string {
 }
 
 // Every Provision, harness, tier, and the exact command, all of it before anything runs. A Present
-// Provision is still printed: what a run will not do is part of what a human reviews.
-function previewText(previewed: Previewed[], dryRun: boolean): string {
+// Provision is still printed: what a run will not do is part of what a human reviews. The selection
+// line names the `--only` values that produced this preview, so a tag-filtered run does not read as
+// the whole environment.
+function previewText(previewed: Previewed[], dryRun: boolean, only: string[]): string {
   if (previewed.length === 0) return 'preview: no Provisions declared\n'
   const nameWidth = Math.max(...previewed.map((item) => printable(item.provision.name).length))
   const harnessWidth = Math.max(...previewed.map((item) => item.provision.harness.length))
@@ -74,6 +76,7 @@ function previewText(previewed: Previewed[], dryRun: boolean): string {
   const lines = [
     `preview: ${counted(previewed.length, 'entry', 'entries')}, ${toRun} to run, ${previewed.length - toRun} already present${dryRun ? ' · dry run' : ''}`,
   ]
+  if (only.length > 0) lines.push(`selection: --only ${only.join(', ')}`)
   for (const item of previewed) {
     const action = item.skip ? 'present, skipped' : item.presence === 'present' ? 'present, forced' : item.presence
     lines.push(
@@ -156,25 +159,26 @@ export function installRun(
     dryRun: isDryRun,
     exitCode,
   })
-  // The tier narrows the environment before anything else reads it, so a name it leaves out is a
-  // name this run cannot reach and says so instead of running nothing quietly.
+  // The tier narrows the environment before anything else reads it, so a name or tag it leaves out
+  // is one this run cannot reach and says so instead of running nothing quietly.
   const inTier =
     options.tier === undefined
       ? environment.provisions
       : environment.provisions.filter((entry) => entry.tier === options.tier)
-  // A name that matches no Provision is a typo, not an empty environment: running the rest would
-  // look like the named fix succeeded.
-  const missing = only.filter((name) => !inTier.some((entry) => entry.name === name))
+  // A value that matches no Provision name and no tag is a typo, not an empty environment: running
+  // the rest would look like the named fix succeeded.
+  const matches = (value: string, entry: ResolvedProvision): boolean => entry.name === value || entry.tags.includes(value)
+  const missing = only.filter((value) => !inTier.some((entry) => matches(value, entry)))
   if (missing.length > 0) {
-    write(`no Provision named ${missing.join(', ')}\n`)
+    write(`no Provision named or tagged ${missing.join(', ')} (each tried as a name and as a tag)\n`)
     return outcome([], 1, dryRun)
   }
-  const selected = only.length === 0 ? inTier : inTier.filter((entry) => only.includes(entry.name))
+  const selected = only.length === 0 ? inTier : inTier.filter((entry) => only.some((value) => matches(value, entry)))
   const previewed: Previewed[] = selected.map((provision) => {
     const presence = evaluateChecks(provision.checks).presence
     return { provision, presence, skip: presence === 'present' && options.force !== true }
   })
-  write(previewText(previewed, dryRun))
+  write(previewText(previewed, dryRun, only))
   if (dryRun) {
     write('\ndry run: nothing was run\n')
     return outcome(

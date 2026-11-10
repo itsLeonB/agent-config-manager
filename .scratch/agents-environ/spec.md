@@ -121,8 +121,8 @@ unstored input for authoring). Everything else in the mirror engine is deleted, 
     Provision does not stop the other thirty.
 35. As a human, I want a non-zero exit status when anything failed or stayed absent, so that a wrapper
     script and my own eye agree about success.
-36. As a human, I want `--only <name>` to restrict a run to named Provisions, so that I can fix one
-    thing without re-checking the world.
+36. As a human, I want `--only <name>` to restrict a run to Provisions of that name or tag, so
+    that I can fix one thing without re-checking the world.
 37. As a human, I want `--force` to run even what is already `present`, so that a repaired command can
     be re-applied.
 38. As a human, I want a summary at the end naming what was already present, what ran, what failed,
@@ -297,7 +297,8 @@ Tier, and command, then starts the commands whose Presence is not `present` (or 
   failed or any Presence is still not `present` afterwards.
 - No per-command timeout in this slice: a hung command holds the run until interrupted.
   `shortcut: no per-command timeout; add one when a real command hangs.`
-- `--dry-run` is the default when stdin is not a TTY. `--only` and `--tier` filter; `--force` re-runs.
+- `--dry-run` is the default when stdin is not a TTY. `--only` (a Provision name or a tag) and
+  `--tier` filter; `--force` re-runs.
 - Presence is re-evaluated after each command, and that answer is what the run records. A command that
   half-worked reports `present` if its Checks pass. The recorded command is what ran, spelled: the
   Payload path followed by its arguments when there is one.

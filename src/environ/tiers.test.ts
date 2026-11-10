@@ -267,7 +267,7 @@ install = "./install.sh project installed.txt"
   const missing: string[] = []
   const refused = installRun((text) => missing.push(text), { dryRun: false, tier: 'project', only: ['home-thing'] }, f.config)
   assert.equal(refused.exitCode, 1)
-  assert.match(missing.join(''), /no Provision named home-thing/)
+  assert.match(missing.join(''), /no Provision named or tagged home-thing/)
 })
 
 // Each file refuses on its own: the fault is reported with the file it is in, and the tiers that
