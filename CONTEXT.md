@@ -15,21 +15,38 @@ a human (`serena`, `rtk`, `i-have-adhd`), never by a native address. Keyed by
 `(provision name, harness)` within one environment file.
 _Avoid_: component, plugin, entry, package, item, installation
 
-**Check**: the declared predicate that answers whether a Provision is present in one harness — a file
-that exists, a file that contains a pattern, a value at a native location, a name on `PATH`. It is
-data, never code: a check is evaluated by reading, so declaring one executes nothing.
+**Check**: the declared predicate that answers whether part of a Provision is present in one harness —
+a file that exists, a file that contains a pattern, a value at a native location, a value among the
+elements of an array at one, a Section that matches its Payload, a name on `PATH`. An entry declares one
+or more of them and all of them must hold. A Check is data, never code: it is evaluated by reading, so
+declaring one executes nothing.
 _Avoid_: detection, probe, test, health check
 
-**Presence**: the answer a check gives — `present`, `absent`, or `unknown`. `unknown` means the check
-could not be evaluated (a file it reads is missing or unparseable), so an unanswered question is never
-reported as an absence.
+**Presence**: the answer an entry gives — `present`, `absent`, or `unknown`, folded from its Checks: any
+`absent` answers `absent`, otherwise any `unknown` answers `unknown`. `unknown` means a Check could not
+be evaluated (a file or Payload it reads is missing or unparseable, an address it cannot spell), so an
+unanswered question is never reported as an absence.
 _Avoid_: status, state, installed flag, health, verdict
 
 **Install command**: the idempotent, non-interactive command that puts a Provision into one harness.
-It is written for one Tier: it runs from that Tier's root, a relative path in it means that root, and
-ACM passes it no environment variables and no standard input. It carries no credential. Run only by
+Its text is either spelled in the file or kept in a Payload, and a Payload may be given arguments. It
+is written for one Tier: it runs from that Tier's root, a relative path in it means that root, and ACM
+passes it no environment variables and no standard input. It carries no credential. Run only by
 `acm install`, which a human starts.
-_Avoid_: recipe, script, action, mutation
+_Avoid_: recipe, action, mutation
+
+**Payload**: the file a declared text lives in — an Install command too long to read inline, or the text
+of one Section. Its path resolves the way a Check's file does: `~` or an absolute path as written,
+anything else against the Tier's root. One Payload serves every entry that names it, which is how three
+harnesses share one instruction text instead of holding three copies of it. Arguments passed to a
+Payload reach it as argv and are never substituted into its text.
+_Avoid_: script, snippet, template, partial, block
+
+**Section**: the part of a native instruction file that one Payload owns — the `## ` heading the
+Payload's first line spells, through the line before the next `## ` heading, with `## ` lines inside a
+fenced code block ignored and `### ` headings not ending it. ACM reads it and may rewrite it, and
+nothing outside it is touched.
+_Avoid_: block, marker, region, chunk
 
 **Environment**: the merged set of Provisions declared by the environment files ACM is facing.
 _Avoid_: config, inventory, setup, state
@@ -79,7 +96,12 @@ _Avoid_: store location, install root, repository root, working directory when t
   Provision did not declare, ACM cannot report.
 - A check executes nothing. Only `acm install`, started by a human, runs an Install command.
 - An Install command is static text: no placeholders, no environment variables, no credential. The
-  same Provision at two tiers therefore has two commands, and that duplication is intended.
+  same Provision at two tiers therefore has two commands, and that duplication is intended. Arguments
+  are passed to a Payload as argv, never substituted into it.
+- Nothing is declared absent and nothing is removed: a Provision says what should be present, an
+  entry's Section is the only text ACM may overwrite, and retiring a Provision is an edit to the file.
+- Two Tiers that resolve to one file are one environment file: the nearer Tier wins and the farther
+  contributes nothing.
 - A Provision's form is per harness, so no rule may assume the same category, path, or number of
   native entries on two harnesses.
 - Retired by [ADR 0007](docs/adr/0007-declare-provisions-and-delete-the-mirror-engine.md): Component,
