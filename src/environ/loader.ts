@@ -14,10 +14,19 @@ export interface EnvironmentFileLocation {
   root: string
 }
 
-// The one place that knows where a tier's environment file lives and what its root is. 06 adds the
-// two project files here and nothing outside this function learns that a third one exists.
+// The one place that knows where a tier's environment file lives and what its root is, and it is
+// the table a writer asks too: a definition lands in the file this function names for its tier, so
+// the tool that writes and the loader that reads cannot disagree about where a tier is.
 export function environmentFiles(config: EngineConfig): EnvironmentFileLocation[] {
-  return [{ tier: 'user', file: path.join(config.home, 'agents_environ.toml'), root: config.home }]
+  return [
+    { tier: 'user', file: path.join(config.home, 'agents_environ.toml'), root: config.home },
+    { tier: 'project', file: path.join(config.projectRoot, 'agents_environ.toml'), root: config.projectRoot },
+    {
+      tier: 'project-local',
+      file: path.join(config.projectRoot, 'agents_environ.local.toml'),
+      root: config.projectRoot,
+    },
+  ]
 }
 
 // A leading `~` or `/` is absolute; anything else resolves against the tier's root, which is what

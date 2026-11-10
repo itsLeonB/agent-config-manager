@@ -94,7 +94,7 @@ function answered(result: ToolAnswer): string {
   return first.text
 }
 
-test('a client that initialises and lists tools sees the read-only status and native-read tools', async () => {
+test('a client that initialises and lists tools sees every tool, with the writer not read-only', async () => {
   const client = await connect()
   try {
     const listed = await client.listTools()
@@ -103,6 +103,7 @@ test('a client that initialises and lists tools sees the read-only status and na
       [
         { name: 'list_provisions', readOnly: true },
         { name: 'read_native_config', readOnly: true },
+        { name: 'define_provision', readOnly: false },
       ],
     )
   } finally {
@@ -159,6 +160,59 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
         },
       ],
     })
+  } finally {
+    await client.close()
+  }
+})
+
+// The definition the tool answers with, checked by the protocol's own answer rather than cast: the
+// bundle has to land bytes in the fixture's project-local file and name the pointer it wrote.
+const DEFINED = z.object({
+  kind: z.literal('defined'),
+  tier: z.literal('project-local'),
+  file: z.string(),
+  pointer: z.literal('provision.serena.opencode'),
+  digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+})
+
+const LOCAL = `version = 1
+
+[provision.serena.opencode]
+check = { file = "~/.config/opencode/opencode.json", contains = "serena" }
+install = "opencode mcp add serena"
+`
+
+test('define_provision writes the entry into the project-local file and answers its pointer', async () => {
+  const project = somewhere()
+  const client = await connect({ ACM_PROJECT_ROOT: project })
+  try {
+    const defined = DEFINED.parse(
+      JSON.parse(
+        answered(
+          await client.callTool({
+            name: 'define_provision',
+            arguments: {
+              name: 'serena',
+              harness: 'opencode',
+              check: { file: '~/.config/opencode/opencode.json', contains: 'serena' },
+              install: 'opencode mcp add serena',
+            },
+          }),
+        ),
+      ),
+    )
+    const file = path.join(project, 'agents_environ.local.toml')
+    assert.equal(defined.file, file)
+    assert.equal(fs.readFileSync(file, 'utf8'), LOCAL)
+
+    // A definition the loader would refuse is an error the caller fixes, and the file is untouched.
+    const refusedResult = await client.callTool({
+      name: 'define_provision',
+      arguments: { name: 'serena', harness: 'gemini', check: { file: '~/.gemini/settings.json' }, install: 'x' },
+    })
+    assert.equal(CallToolResultSchema.parse(refusedResult).isError, true)
+    assert.match(answered(refusedResult), /unknown harness 'gemini'/)
+    assert.equal(fs.readFileSync(file, 'utf8'), LOCAL, 'the refused definition changed the file')
   } finally {
     await client.close()
   }

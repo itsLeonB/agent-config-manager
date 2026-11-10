@@ -241,7 +241,9 @@ function tomlKey(name: string): string {
   return TOML_BARE_KEY.test(name) ? name : JSON.stringify(name)
 }
 
-function tomlPath(segments: string[]): string {
+// The dotted address a caller names, quoted exactly as a table header will be: a writer that reports
+// what it wrote has to spell it the way the reader of the same file spells it.
+export function tomlPath(segments: string[]): string {
   return segments.map(tomlKey).join('.')
 }
 
