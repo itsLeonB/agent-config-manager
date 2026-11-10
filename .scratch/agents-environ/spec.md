@@ -270,9 +270,10 @@ never relabelled as a project declaration.
 
 ### Presence
 
-`Presence` is `present | absent | unknown`, with an optional `detail` explaining an `unknown`
-(unreadable file, unparseable file, missing binary directory, invalid regex). Checks read; they never
-spawn. `onPath` walks `PATH` and requires a regular executable file. `pointer` presence means a value
+`Presence` is `present | absent | unknown`, with an optional `detail`: the reason a Check could not be
+answered (unreadable file, unparseable file, missing binary directory, invalid regex) or, for an
+entry that declared several Checks, every Check that did not answer `present` named with its own
+reason. Checks read; they never spawn. `onPath` walks `PATH` and requires a regular executable file. `pointer` presence means a value
 exists at that address; with `equals`, the value must also match by deep equality; with `includes`,
 the array at that address must hold an element deeply equal to it. An entry's Presence folds its
 Checks: any `absent` answers `absent`, otherwise any `unknown` answers `unknown`, otherwise
