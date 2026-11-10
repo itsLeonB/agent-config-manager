@@ -102,7 +102,7 @@ acm verify plan.json
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ACM_HOME` | `os.homedir()` | Home directory the engine reads harness tiers from |
-| `ACM_PROJECT_ROOT` | the working directory | Project root the engine reads project tiers from. The store does not follow it: `ACM_PROJECT_ROOT` names what to read, never where to write |
+| `ACM_PROJECT_ROOT` | the working directory | The project root: which project-tier locations the engine reads, and where a project-tier mirror writes. The store does not follow it — its path is fixed beside the install, so this names what to read and write, never where the inventory lives |
 | `CLAUDE_PROJECT_DIR` | — | Read when `ACM_PROJECT_ROOT` is absent. Claude Code starts a user-scope MCP server in its own config directory, so the harness names the project instead |
 | `ACM_STORE` | `<installation>/database/dashboard.db` | Store the engine opens. If you pointed `ACM_PROJECT_ROOT` elsewhere before, your old rows are in `<that root>/database/dashboard.db` — set `ACM_STORE` to it |
 | `CODEX_HOME` | `~/.codex` | Codex config root, when relocated |

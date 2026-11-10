@@ -46,7 +46,10 @@ instead of reading an empty list as an empty project.
 - **The store stays where `acm` is installed and stays shared.** Project root and store location are
   two different paths with two different rules: the first follows the caller, the second follows the
   install. Only the first moved.
-- **No tool takes a project argument**, and a tool call cannot reach outside the root its server was
-  started with, so the agent's surface did not grow a knob in exchange for the rule.
+- **No tool takes a project argument**, and a project-tier location outside the root is unreachable:
+  the five MCP tools answer from that root's view and cannot resolve an id belonging to another
+  project. User and system tiers are the exception by construction — a `codex` user-scope file under
+  `$HOME` is outside every project root and stays readable and writable, because it belongs to no
+  project.
 - **Amends ADR 0004.** Its spawn consequence said the project root comes from the module's own
   location rather than `process.cwd()`; that holds for the store only.

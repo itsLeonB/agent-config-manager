@@ -30,9 +30,10 @@ _Avoid_: scope, level, layer
 _Avoid_: scope (when a tier is meant), level
 
 **Project root**: the one project `acm` is currently reading — the directory the harness or shell that
-started `acm` was opened in, taken as given and never walked up to a repository marker, because a pass
-must read the layers that harness itself read. Every project-scoped location is inside it; nothing
-belonging to another project is in the answer, and the answer names the root it used.
+started `acm` was opened in, or one that harness or caller names instead, taken as given and never
+walked up to a repository marker, because a pass must read the layers that harness itself read. Every
+project-scoped location is inside it; nothing belonging to another project is in the answer, and the
+answer names the root it used.
 _Avoid_: store location, install root, tier, repository root, working directory when the resolved
 root is meant
 
