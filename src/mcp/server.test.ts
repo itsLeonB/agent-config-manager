@@ -84,20 +84,46 @@ install = "pi plugin install serena"
 // protocol's own schema before anything reads a field of it.
 type ToolAnswer = Awaited<ReturnType<Client['callTool']>>
 
+// A token shaped like a GitHub credential: the classifier knows it wherever it sits, so the answer
+// can be told from one that simply never carried the value.
+const TOKEN = 'ghp_0123456789abcdefghijABCDEFGHIJ012345'
+
 function answered(result: ToolAnswer): string {
   const [first] = CallToolResultSchema.parse(result).content
   if (first.type !== 'text') assert.fail('the tool did not answer text')
   return first.text
 }
 
-test('a client that initialises and lists tools sees the read-only status tool', async () => {
+test('a client that initialises and lists tools sees the read-only status and native-read tools', async () => {
   const client = await connect()
   try {
     const listed = await client.listTools()
     assert.deepEqual(
       listed.tools.map((tool) => ({ name: tool.name, readOnly: tool.annotations?.readOnlyHint })),
-      [{ name: 'list_provisions', readOnly: true }],
+      [
+        { name: 'list_provisions', readOnly: true },
+        { name: 'read_native_config', readOnly: true },
+      ],
     )
+  } finally {
+    await client.close()
+  }
+})
+
+test('read_native_config answers a native location with a credential withheld', async () => {
+  const home = somewhere()
+  write(
+    path.join(home, '.pi', 'agent', 'mcp.json'),
+    JSON.stringify({ mcpServers: { github: { command: 'gh-mcp', env: { GITHUB_TOKEN: TOKEN } } } }),
+  )
+  const client = await connect({ ACM_HOME: home })
+  try {
+    const answeredText = answered(
+      await client.callTool({ name: 'read_native_config', arguments: { harness: 'pi', tier: 'pi:user' } }),
+    )
+    assert.match(answeredText, /"pointer": "mcpServers\.github"/)
+    assert.match(answeredText, /\[withheld: secret\]/)
+    assert.equal(answeredText.includes(TOKEN), false, 'the credential reached the tool result')
   } finally {
     await client.close()
   }

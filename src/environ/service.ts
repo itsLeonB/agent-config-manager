@@ -16,6 +16,10 @@ import type { FileRefusal, ProvisionRow } from './types.ts'
 // into the engine to spell it.
 export { HARNESSES } from '../engine/adapters/types.ts'
 
+// A native read reuses the harness readers and answers live: nothing is stored, and no Install
+// command is read or run. Re-exported so both faces ask the service, never an adapter.
+export { readNativeConfig } from './native-read.ts'
+
 // The run is the one command that executes anything, and it answers through this module like every
 // other part of the environment. It is a CLI surface only: nothing the MCP face registers can start
 // one.
