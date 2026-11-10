@@ -3,7 +3,7 @@ import type { EngineConfig } from '../engine/config.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
 import { checkInputsOf, evaluateCheck } from './check.ts'
 import { loadEnvironment } from './loader.ts'
-import type { FileRefusal, ProvisionRow } from './types.ts'
+import type { EnvironmentTier, FileRefusal, ProvisionRow } from './types.ts'
 
 // The environment's whole public surface. The CLI and the MCP face import this module and nothing
 // below it: the parser, the evaluator, and the loader are implementation, and a face that reached
@@ -13,8 +13,10 @@ import type { FileRefusal, ProvisionRow } from './types.ts'
 // machine's now rather than a remembered one.
 
 // The closed harness list, re-exported because it is the filter's domain and a face may not reach
-// into the engine to spell it.
+// into the engine to spell it. The tier list is re-exported for the same reason.
 export { HARNESSES } from '../engine/adapters/types.ts'
+export { ENVIRONMENT_TIERS } from './types.ts'
+export type { EnvironmentTier } from './types.ts'
 
 // A native read reuses the harness readers and answers live: nothing is stored, and no Install
 // command is read or run. Re-exported so both faces ask the service, never an adapter.
@@ -29,6 +31,8 @@ export type { InstallEntry, InstallOptions, InstallOutcome } from './runner.ts'
 export interface StatusFilter {
   harness?: HarnessId
   name?: string
+  // Only the entries a tier owns after the merge, which is what `--tier` asks for.
+  tier?: EnvironmentTier
 }
 
 export interface Status {
@@ -51,6 +55,7 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
   for (const provision of environment.provisions) {
     if (filter.name !== undefined && filter.name !== provision.name) continue
     if (filter.harness !== undefined && filter.harness !== provision.harness) continue
+    if (filter.tier !== undefined && filter.tier !== provision.tier) continue
     // Grouping keeps file order: a Provision's entries are the ones the file declares for it, in the
     // order it declares them, and a repeated harness would be a duplicate key the file cannot hold.
     const row = rows.get(provision.name) ?? { name: provision.name, tags: provision.tags, harnesses: [] }
