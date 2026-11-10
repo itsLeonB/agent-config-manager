@@ -6,6 +6,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
+import { openStore } from '../server/store.cjs'
 
 // Seam C's CLI half: the built bundle, spawned on Node the way a harness starts it. `status` is the
 // subcommand these assertions need, which is also what makes the bundle's own package root
@@ -41,10 +42,10 @@ function childEnv(extra: Record<string, string>) {
   return { ...Object.fromEntries(inherited), ...extra }
 }
 
-function run(entry: string, home: string, args: string[]) {
+function run(entry: string, home: string, args: string[], extra: Record<string, string> = {}) {
   return spawnSync(process.execPath, [entry, ...args], {
     cwd: somewhere(),
-    env: childEnv({ ACM_HOME: home }),
+    env: childEnv({ ACM_HOME: home, ...extra }),
     encoding: 'utf8',
   })
 }
@@ -81,7 +82,23 @@ const SECRET = 'ghp_0123456789abcdefghijABCDEFGHIJ012345'
 
 test('acm status prints Provision by harness, and --json prints the same rows as data', () => {
   const home = installed()
-  const printed = run(binPath(), home, ['status'])
+  // The store is the fixture's, so this machine's own run history cannot reach the answer.
+  const store = path.join(home, 'store', 'dashboard.db')
+  // One Run recorded earlier. It says `present` while the Check now says `absent`: the json carries
+  // what happened, not a second reading of today's files.
+  const seeded = openStore(store)
+  seeded.recordRun({
+    at: '2024-05-01T00:00:00.000Z',
+    provision: 'serena',
+    harness: 'pi',
+    tier: 'user',
+    command: 'pi plugin install serena',
+    exitCode: 1,
+    presence: 'present',
+  })
+  seeded.close()
+
+  const printed = run(binPath(), home, ['status'], { ACM_STORE: store })
   assert.equal(printed.status, 0, printed.stderr)
   assert.match(printed.stdout, /^opencode-no-claude\s+opencode\s+present$/m)
   assert.match(printed.stdout, /^i-have-adhd\s+pi\s+present$/m)
@@ -89,7 +106,7 @@ test('acm status prints Provision by harness, and --json prints the same rows as
   assert.match(printed.stdout, /^serena\s+pi\s+absent$/m)
   assert.doesNotMatch(printed.stdout, /^serena\s+(codex|opencode)/m)
 
-  const asJson = run(binPath(), home, ['status', '--json'])
+  const asJson = run(binPath(), home, ['status', '--json'], { ACM_STORE: store })
   assert.equal(asJson.status, 0, asJson.stderr)
   assert.deepEqual(JSON.parse(asJson.stdout), {
     provisions: [
@@ -106,7 +123,23 @@ test('acm status prints Provision by harness, and --json prints the same rows as
       {
         name: 'serena',
         tags: ['mcp'],
-        harnesses: [{ harness: 'pi', tier: 'user', presence: 'absent', detail: null }],
+        harnesses: [
+          {
+            harness: 'pi',
+            tier: 'user',
+            presence: 'absent',
+            detail: null,
+            latestRun: {
+              at: '2024-05-01T00:00:00.000Z',
+              provision: 'serena',
+              harness: 'pi',
+              tier: 'user',
+              command: 'pi plugin install serena',
+              exitCode: 1,
+              presence: 'present',
+            },
+          },
+        ],
       },
     ],
   })

@@ -11,7 +11,8 @@ const { DatabaseSync } = require('node:sqlite');
 // clone reach the same schema. Migration 1 is pure CREATE ... IF NOT EXISTS, which leaves the
 // snapshot and settings rows exactly where the dashboard expects them. Migration 2 drops the
 // previous engine's inventory tables: recreating the file instead would cost more code and lose
-// those saved settings.
+// those saved settings. Migration 3 adds `runs`, the only history the environment keeps, and
+// touches neither table the dashboard reads.
 const MIGRATIONS = [
   `
   CREATE TABLE IF NOT EXISTS snapshots (
@@ -78,6 +79,21 @@ const MIGRATIONS = [
   DROP TABLE IF EXISTS operations;
   DROP TABLE IF EXISTS tier_health;
 `,
+  // One row per executed Install command, written when that command ends. There is no stdout or
+  // stderr column and there never will be: a command that prints a token must not put it here.
+  // `exit_code` is nullable because a command killed by a signal never got a status of its own.
+  `
+  CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    provision TEXT NOT NULL,
+    harness TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    command TEXT NOT NULL,
+    exit_code INTEGER,
+    presence TEXT NOT NULL
+  );
+`,
 ];
 
 function migrate(db) {
@@ -101,6 +117,19 @@ function migrate(db) {
   }
 }
 
+// SQLite columns are snake_case and the rest of the engine is not, so the row is named here once.
+function runRow(row) {
+  return {
+    at: row.at,
+    provision: row.provision,
+    harness: row.harness,
+    tier: row.tier,
+    command: row.command,
+    exitCode: row.exit_code,
+    presence: row.presence,
+  };
+}
+
 function openStore(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const db = new DatabaseSync(filePath);
@@ -115,6 +144,16 @@ function openStore(filePath) {
   const selectConfig = db.prepare('SELECT value FROM config WHERE key = ?');
   const upsertConfig = db.prepare(
     'INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value'
+  );
+  const insertRun = db.prepare(
+    'INSERT INTO runs (at, provision, harness, tier, command, exit_code, presence) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  // The newest id per entry is the most recent Run for it, so one query answers every Provision and
+  // harness the history holds.
+  const latestRuns = db.prepare(
+    `SELECT at, provision, harness, tier, command, exit_code, presence FROM runs
+     WHERE id IN (SELECT MAX(id) FROM runs GROUP BY provision, harness)
+     ORDER BY id DESC`
   );
 
   return {
@@ -131,6 +170,14 @@ function openStore(filePath) {
     readConfig(key) {
       const row = selectConfig.get(key);
       return row === undefined ? null : JSON.parse(row.value);
+    },
+    recordRun(run) {
+      // One INSERT, autocommitted on its own: a run that is interrupted keeps the rows of the
+      // commands that had already finished, and nothing has to write them afterwards.
+      insertRun.run(run.at, run.provision, run.harness, run.tier, run.command, run.exitCode, run.presence);
+    },
+    readLatestRuns() {
+      return latestRuns.all().map(runRow);
     },
     close() {
       db.close();

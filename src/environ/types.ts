@@ -114,3 +114,29 @@ export interface CheckAnswer {
   presence: Presence
   detail: string | null
 }
+
+// One Run: a single executed Install command, recorded when it ended. There is deliberately no field
+// for the command's stdout or stderr — a command that prints a token must not put it in the store —
+// and `exitCode` is null when a signal, not a shell, ended the command.
+export interface Run {
+  at: string
+  provision: string
+  harness: HarnessId
+  tier: EnvironmentTier
+  command: string
+  exitCode: number | null
+  presence: Presence
+}
+
+// One harness's row in the `--json` document: the Presence the status pass just read, plus the most
+// recent Run recorded for that (Provision, harness) when the caller asked for history. An entry that
+// was never installed carries no `latestRun` key at all.
+export interface RunPresenceRow extends HarnessPresence {
+  latestRun?: Run
+}
+
+export interface ProvisionDocumentRow {
+  name: string
+  tags: string[]
+  harnesses: RunPresenceRow[]
+}

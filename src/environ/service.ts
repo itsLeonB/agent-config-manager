@@ -3,7 +3,13 @@ import type { EngineConfig } from '../engine/config.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
 import { checkInputsOf, evaluateCheck } from './check.ts'
 import { loadEnvironment } from './loader.ts'
-import type { EnvironmentTier, FileRefusal, ProvisionRow } from './types.ts'
+import type {
+  EnvironmentTier,
+  FileRefusal,
+  ProvisionDocumentRow,
+  ProvisionRow,
+  Run,
+} from './types.ts'
 
 // The environment's whole public surface. The CLI and the MCP face import this module and nothing
 // below it: the parser, the evaluator, and the loader are implementation, and a face that reached
@@ -28,6 +34,9 @@ export { readNativeConfig } from './native-read.ts'
 export { installRun } from './runner.ts'
 export type { InstallEntry, InstallOptions, InstallOutcome } from './runner.ts'
 
+// The history a run leaves. It is read through this module so a face never opens the store itself.
+export { latestRuns } from './history.ts'
+
 export interface StatusFilter {
   harness?: HarnessId
   name?: string
@@ -46,7 +55,7 @@ export interface Status {
 }
 
 export interface StatusDocument {
-  provisions: ProvisionRow[]
+  provisions: ProvisionDocumentRow[]
 }
 
 export function readStatus(filter: StatusFilter = {}, config: EngineConfig = resolveDefaultConfig()): Status {
@@ -78,9 +87,28 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
 }
 
 // The same rows as data, for `--json` and for the MCP tool: one document, so a script and an agent
-// read the answer a human reads.
-export function statusDocument(status: Status): StatusDocument {
-  return { provisions: status.provisions }
+// read the answer a human reads. `runs` is the most recent Run per (Provision, harness) — the caller
+// passes the history it wants shown, so the printed status stays Presence alone.
+function runKey(provision: string, harness: string): string {
+  // A space is legal in neither a Provision name nor a harness id, so it cannot make two entries
+  // collide.
+  return `${provision} ${harness}`
+}
+
+export function statusDocument(status: Status, runs: Run[] = []): StatusDocument {
+  const latest = new Map(runs.map((run) => [runKey(run.provision, run.harness), run]))
+  return {
+    provisions: status.provisions.map((row) => ({
+      name: row.name,
+      tags: row.tags,
+      harnesses: row.harnesses.map((entry) => {
+        const run = latest.get(runKey(row.name, entry.harness))
+        // An entry with no Run has no key, not a null one: the tool answer the spec declares is
+        // Presence and detail, and a caller that asked for no history gets exactly that.
+        return run === undefined ? entry : { ...entry, latestRun: run }
+      }),
+    })),
+  }
 }
 
 export function formatRefusal(refusal: FileRefusal): string {

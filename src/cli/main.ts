@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import { statSync } from 'node:fs'
 import path from 'node:path'
-import { ENVIRONMENT_TIERS, formatRefusal, formatStatus, installRun, readNativeConfig, readStatus, statusDocument } from '../environ/service.ts'
+import {
+  ENVIRONMENT_TIERS,
+  formatRefusal,
+  formatStatus,
+  installRun,
+  latestRuns,
+  readNativeConfig,
+  readStatus,
+  statusDocument,
+} from '../environ/service.ts'
 import type { EnvironmentTier } from '../environ/service.ts'
 
 const USAGE = `usage: acm <command> [--project-root <dir>]
@@ -105,7 +114,8 @@ function read(rest: string[]): number {
 // Status re-evaluates every Check, so what it prints is this machine's now rather than a remembered
 // answer. A refused environment file makes the command fail: an environment acm could not read is
 // not an environment with nothing in it, and a script that ignored the difference would converge
-// half a machine.
+// half a machine. The run history is the one thing here read from the store: a Run happened, and
+// only the store knows it did.
 function status(input: string[]): number {
   const flag = withoutTier(input)
   if (flag === null) {
@@ -121,7 +131,9 @@ function status(input: string[]): number {
   const answer = readStatus({ tier: flag.tier })
   for (const refusal of answer.refusals) process.stderr.write(`${formatRefusal(refusal)}\n`)
   process.stdout.write(
-    rest.includes('--json') ? `${JSON.stringify(statusDocument(answer), null, 2)}\n` : formatStatus(answer),
+    rest.includes('--json')
+      ? `${JSON.stringify(statusDocument(answer, latestRuns()), null, 2)}\n`
+      : formatStatus(answer),
   )
   return answer.refusals.length === 0 ? 0 : 1
 }

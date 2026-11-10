@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { checkInputsOf, evaluateCheck } from './check.ts'
+import { recordRun } from './history.ts'
 import { loadEnvironment } from './loader.ts'
 import type { Check, EnvironmentTier, FileRefusal, Presence, ResolvedProvision } from './types.ts'
 
@@ -192,10 +193,14 @@ export function installRun(
     const command = spawnInstall(item.provision)
     // The answer after the command, not before and not the command's report of itself: a command
     // that half-worked is present if its Check now passes.
+    const after = presenceOf(item.provision.check)
+    // Recorded now, before the next command starts: the row is committed on its own, so an
+    // interrupted run keeps the history of the commands that had already finished.
+    recordRun(item.provision, command.status, after, config)
     entries.push({
       provision: item.provision,
       before: item.presence,
-      after: presenceOf(item.provision.check),
+      after,
       attempted: true,
       commandExit: command.status,
       failure: command.failure,

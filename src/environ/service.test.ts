@@ -186,7 +186,8 @@ test('the printing is a function of the rows, and the JSON carries the same rows
   const f = fixture()
   installed(f)
   const status = readStatus({}, f.config)
-  assert.deepEqual(statusDocument(status).provisions, status.provisions)
+  // No store was ever written here, so no entry carries history: the document is the rows.
+  assert.deepEqual(statusDocument(status, []).provisions, status.provisions)
   const printed = formatStatus(status)
   assert.match(printed, /^provision .*harness .*presence$/m)
   assert.match(printed, /^serena\s+codex\s+present$/m)
