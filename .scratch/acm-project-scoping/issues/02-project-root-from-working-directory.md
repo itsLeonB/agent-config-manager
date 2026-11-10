@@ -26,20 +26,36 @@ invocation, so the entries it installed earlier pick this up for free.
 **Blocked by:** 01. Until tombstones stop reaching across projects, flipping the default would make
 the first scan of a second project delete the first project's Inventory.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A user-scope MCP entry with no arguments, spawned from a project directory, lists that
+- [x] A user-scope MCP entry with no arguments, spawned from a project directory, lists that
       project's Installations
-- [ ] `acm list` run in a project lists that project's Installations, and the same holds when run
+- [x] `acm list` run in a project lists that project's Installations, and the same holds when run
       from a subdirectory: the subdirectory is the project, matching what the harness would read
-- [ ] `--project-root` and an inherited `ACM_PROJECT_ROOT` still win over the working directory, and
+- [x] `--project-root` and an inherited `ACM_PROJECT_ROOT` still win over the working directory, and
       are themselves canonicalised
-- [ ] `CLAUDE_PROJECT_DIR` is used when the override variables are absent
-- [ ] A symlinked path and its target record one Installation, not two
-- [ ] The listing reports the root it resolved
-- [ ] A project with no harness config yields an empty inventory plus the reported root, never an
+- [x] `CLAUDE_PROJECT_DIR` is used when the override variables are absent
+- [x] A symlinked path and its target record one Installation, not two
+- [x] The listing reports the root it resolved
+- [x] A project with no harness config yields an empty inventory plus the reported root, never an
       error and never another project's rows
-- [ ] None of the five MCP tools takes a project argument, and a tool call cannot reach outside the
+- [x] None of the five MCP tools takes a project argument, and a tool call cannot reach outside the
       root the server was started with
-- [ ] The MCP server module's comment no longer claims the working directory is never consulted
-- [ ] `bun run check` green
+- [x] The MCP server module's comment no longer claims the working directory is never consulted
+- [x] `bun run check` green
+
+## Answer
+
+`resolveProjectRoot(cwd)` in `src/engine/config.ts` is the one statement of the chain:
+`ACM_PROJECT_ROOT ?? CLAUDE_PROJECT_DIR ?? process.cwd()`, through `realpathSync` so a symlinked
+path and its target are one root and therefore one row set. `--project-root` keeps its meaning by
+writing `ACM_PROJECT_ROOT` before the config is resolved, so the CLI and the spawned MCP server
+reach the same rule; the store path still comes from `deriveProjectRoot(MODULE_DIR)` and is
+unchanged.
+
+Scoping is a service-side filter, not a store one: `inProject()` in `src/engine/service.ts` keeps a
+row when its scope is not `project`/`project-local`, or when its `nativeFile` is `under()` the
+resolved root — the same segment-based containment ticket 01 gave tombstones. It wraps
+`listInstallations()` and `findInstallation()`, so `inspect` and `mirror` cannot resolve an id from
+another project either, and `Inventory` now carries `projectRoot` (printed by `acm list`, present in
+its `--json`).

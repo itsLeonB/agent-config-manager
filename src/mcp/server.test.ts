@@ -11,6 +11,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type { ElicitRequest, ElicitResult } from '@modelcontextprotocol/sdk/types.js'
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { EngineConfig } from '../engine/config.ts'
+import { discover, listInstallations } from '../engine/service.ts'
 import type { Json } from '../types/dashboard'
 
 interface PiServerFixture {
@@ -30,6 +31,7 @@ const planFields = z.object({ planId: z.string(), security: z.object({ grade: z.
 type ToolArguments = { [key: string]: Json }
 
 const listingSchema = z.object({
+  projectRoot: z.string(),
   installations: z.array(
     z.object({ id: z.string(), name: z.string(), category: z.string(), nativeFile: z.string() }),
   ),
@@ -141,19 +143,23 @@ interface Connection {
 }
 
 // The spawned face: the bin a harness pins, with the server arguments, a working directory that is
-// neither the home nor the project, and every root handed over by the environment.
+// neither the home nor the project, and every root handed over by the environment. A harness that
+// starts the server in its project passes no root at all, which `spawn` reproduces.
 async function connect(
   config: EngineConfig,
   answer?: (request: ElicitRequest) => ElicitResult | Promise<ElicitResult>,
+  spawn: { cwd: string; env: Record<string, string> } = {
+    cwd: fs.mkdtempSync(path.join(os.tmpdir(), 'acm-mcp-cwd-')),
+    env: childEnv(config),
+  },
 ): Promise<Connection> {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-mcp-cwd-'))
   const transport = new StdioClientTransport({
     // A harness starts the built file on Node, so the smoke test does too: passing under Bun alone
     // would not say the bundle is a Node program.
     command: 'node',
     args: [binPath(), 'mcp', 'serve'],
-    cwd,
-    env: childEnv(config),
+    cwd: spawn.cwd,
+    env: spawn.env,
     stderr: 'pipe',
   })
   const client = new Client(
@@ -394,5 +400,74 @@ test('a client that declared elicitation is asked once, and its answer decides t
     assert.equal(fs.existsSync(path.join(empty.projectRoot, '.pi', 'mcp.json')), false)
   } finally {
     await silent.close()
+  }
+})
+
+// The env a harness that starts its server in the project hands over: no project root at all, and
+// no Claude Code project either, which would outrank the working directory.
+function spawnedHere(config: EngineConfig) {
+  const env = childEnv(config)
+  delete env.ACM_PROJECT_ROOT
+  delete env.CLAUDE_PROJECT_DIR
+  return { cwd: config.projectRoot, env }
+}
+
+// A user-scope entry carries no project path in it, so the project it reads is the one the harness
+// was started in — and no tool argument names it.
+test('a user-scope entry spawned in a project reads that project, and the answer names it', async () => {
+  const config = fixture()
+  piServers(config, { serena: { command: 'serena' } })
+  const projectFile = path.join(config.projectRoot, '.pi', 'mcp.json')
+  fs.writeFileSync(projectFile, JSON.stringify({ mcpServers: { alpha: { command: 'alpha' } } }))
+
+  const { client, close } = await connect(config, undefined, spawnedHere(config))
+  try {
+    const listing = await call(client, 'list_installations', { fresh: true }, listingSchema)
+    assert.equal(listing.projectRoot, fs.realpathSync(config.projectRoot))
+    assert.deepEqual(listing.installations.map((row) => row.name).sort(), ['alpha', 'serena'])
+  } finally {
+    await close()
+  }
+})
+
+// One store holds every project's rows, and the server was started in one of them: an id from
+// another project is not a handle, so neither a read nor a plan reaches across.
+test('a tool call cannot reach a project the server was not started in', async () => {
+  const config = fixture()
+  const other = path.join(path.dirname(config.projectRoot), 'project-b')
+  fs.mkdirSync(path.join(other, '.pi'), { recursive: true })
+  fs.writeFileSync(
+    path.join(other, '.pi', 'mcp.json'),
+    JSON.stringify({ mcpServers: { beta: { command: 'beta' } } }),
+  )
+  discover({ ...config, projectRoot: other })
+  const foreign = listInstallations({ ...config, projectRoot: other }, {}).installations.find(
+    (row) => row.name === 'beta',
+  )
+  assert.ok(foreign, 'the other project must be in the shared store')
+
+  const { client, close } = await connect(config, undefined, spawnedHere(config))
+  try {
+    const listing = await call(client, 'list_installations', {}, listingSchema)
+    assert.deepEqual(listing.installations, [])
+
+    const inspected = await call(
+      client,
+      'inspect_installation',
+      { installationId: foreign.id },
+      z.object({ kind: z.string() }),
+    )
+    assert.equal(inspected.kind, 'notFound')
+
+    const planned = await call(
+      client,
+      'plan_mirror',
+      { installationId: foreign.id, target: { harness: 'pi', tierId: 'pi:project' } },
+      mirrorAnswerSchema,
+    )
+    assert.equal(planned.kind, 'refused')
+    assert.match(String(planned.reason), /no installation matches/)
+  } finally {
+    await close()
   }
 })

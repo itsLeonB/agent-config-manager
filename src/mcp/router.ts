@@ -73,7 +73,7 @@ export function createRouter(config: EngineConfig): McpServer {
     'list_installations',
     {
       description:
-        'List the installations the last scan stored, with the harnesses and tiers a mirror could target. Read-only.',
+        'List the installations the last scan stored for the project this server was started in, with the harnesses and tiers a mirror could target. Read-only.',
       inputSchema: {
         category: z.string().optional(),
         harness: z.string().optional(),

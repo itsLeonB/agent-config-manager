@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { createAdapters } from './adapters/registry.ts'
 import { pointerSegment, pointerSegments } from './adapters/mcp-facts.ts'
 import type { Adapter } from './adapters/types.ts'
-import { declaredReads, HARNESSES } from './adapters/types.ts'
+import { declaredReads, HARNESSES, under } from './adapters/types.ts'
 import type { Category, HarnessId, ScopeBucket, Writability } from './adapters/types.ts'
 import {
   containmentFault,
@@ -104,10 +104,25 @@ export interface ListFilter {
 }
 
 export interface Inventory {
+  // The root the listing answered for. An agent spawned somewhere unexpected sees this instead of
+  // reading an empty list as "this project has no config".
+  projectRoot: string
   scannedAt: string | null
   installations: InstallationRow[]
   tierHealth: TierHealthRow[]
   harnesses: HarnessSummary[]
+}
+
+// One store holds every project's rows, so an answer is scoped to the project the caller is facing:
+// rows whose native file sits inside the resolved root, plus the user and system scopes, which
+// belong to no project. A deleted row is scoped the same way, so a prefix can never reach into
+// another project.
+function inProject(rows: InstallationRow[], projectRoot: string): InstallationRow[] {
+  return rows.filter(
+    (row) =>
+      (row.scope !== 'project' && row.scope !== 'project-local') ||
+      under([projectRoot], row.nativeFile),
+  )
 }
 
 // The harness row a listing carries: which categories that harness is read for, and which tiers
@@ -129,10 +144,11 @@ export function listInstallations(config: EngineConfig, filter: ListFilter): Inv
   if (filter.fresh === true) discover(config)
   const inventory = readInventory(config.storePath, filter)
   return {
+    projectRoot: config.projectRoot,
     // The scan time comes from tier health, not from the rows being listed: a filter that matches
     // nothing still has to report when the last pass ran.
     scannedAt: newestScan(inventory.tierHealth),
-    installations: inventory.installations,
+    installations: inProject(inventory.installations, config.projectRoot),
     // Filtered like the rows, so `--harness codex` does not print another harness's unreadable tier.
     tierHealth: inventory.tierHealth.filter(
       (row) => filter.harness === undefined || row.harness === filter.harness,
@@ -409,7 +425,8 @@ type InstallationLookup =
 function findInstallation(config: EngineConfig, idOrPrefix: string): InstallationLookup {
   const wanted = idOrPrefix.replace(/^sha256:/, '')
   if (wanted === '') return { kind: 'notFound' }
-  const matches = readInventory(config.storePath, { includeRemoved: true }).installations.filter(
+  const stored = readInventory(config.storePath, { includeRemoved: true }).installations
+  const matches = inProject(stored, config.projectRoot).filter(
     (row) => row.id.replace(/^sha256:/, '').startsWith(wanted),
   )
   if (matches.length > 1) return { kind: 'ambiguous', ids: matches.map((row) => row.id) }
