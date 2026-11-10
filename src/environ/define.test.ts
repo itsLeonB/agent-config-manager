@@ -119,7 +119,7 @@ test('a definition is a row status reports, with the Presence its Check answers'
     {
       name: 'rtk',
       tags: [],
-      harnesses: [{ harness: 'pi', tier: 'project-local', presence: 'present', detail: null }],
+      harnesses: [{ harness: 'pi', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'present', detail: null }],
     },
   ])
 })
@@ -195,8 +195,8 @@ install = "pi plugin install zeta"
   assert.deepEqual(
     readStatus({ name: 'serena' }, f.config).provisions.flatMap((row) => row.harnesses),
     [
-      { harness: 'codex', tier: 'project-local', presence: 'present', detail: null },
-      { harness: 'pi', tier: 'project-local', presence: 'absent', detail: null },
+      { harness: 'codex', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'present', detail: null },
+      { harness: 'pi', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'absent', detail: null },
     ],
   )
 })
@@ -475,9 +475,9 @@ install = "opencode mcp add serena"
       name: 'serena',
       tags: ['mcp'],
       harnesses: [
-        { harness: 'pi', tier: 'project', presence: 'present', detail: null },
-        { harness: 'codex', tier: 'project', presence: 'present', detail: null },
-        { harness: 'opencode', tier: 'project-local', presence: 'present', detail: null },
+        { harness: 'pi', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'present', detail: null },
+        { harness: 'codex', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'present', detail: null },
+        { harness: 'opencode', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'present', detail: null },
       ],
     },
   ])

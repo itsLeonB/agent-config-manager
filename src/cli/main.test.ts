@@ -100,10 +100,10 @@ test('acm status prints Provision by harness, and --json prints the same rows as
 
   const printed = run(binPath(), home, ['status'], { ACM_STORE: store })
   assert.equal(printed.status, 0, printed.stderr)
-  assert.match(printed.stdout, /^opencode-no-claude\s+opencode\s+present$/m)
-  assert.match(printed.stdout, /^i-have-adhd\s+pi\s+present$/m)
+  assert.match(printed.stdout, /^opencode-no-claude\s+opencode\s+~\/agents_environ\.toml\s+present$/m)
+  assert.match(printed.stdout, /^i-have-adhd\s+pi\s+~\/agents_environ\.toml\s+present$/m)
   // No entry for a harness is no row for it, and no file at the check's path is an absence.
-  assert.match(printed.stdout, /^serena\s+pi\s+absent$/m)
+  assert.match(printed.stdout, /^serena\s+pi\s+~\/agents_environ\.toml\s+absent$/m)
   assert.doesNotMatch(printed.stdout, /^serena\s+(codex|opencode)/m)
 
   const asJson = run(binPath(), home, ['status', '--json'], { ACM_STORE: store })
@@ -113,12 +113,12 @@ test('acm status prints Provision by harness, and --json prints the same rows as
       {
         name: 'opencode-no-claude',
         tags: [],
-        harnesses: [{ harness: 'opencode', tier: 'user', presence: 'present', detail: null }],
+        harnesses: [{ harness: 'opencode', tier: 'user', source: path.join(home, 'agents_environ.toml'), presence: 'present', detail: null }],
       },
       {
         name: 'i-have-adhd',
         tags: [],
-        harnesses: [{ harness: 'pi', tier: 'user', presence: 'present', detail: null }],
+        harnesses: [{ harness: 'pi', tier: 'user', source: path.join(home, 'agents_environ.toml'), presence: 'present', detail: null }],
       },
       {
         name: 'serena',
@@ -127,6 +127,7 @@ test('acm status prints Provision by harness, and --json prints the same rows as
           {
             harness: 'pi',
             tier: 'user',
+            source: path.join(home, 'agents_environ.toml'),
             presence: 'absent',
             detail: null,
             latestRun: {
