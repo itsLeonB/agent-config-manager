@@ -12,6 +12,7 @@ import { openStore } from '../server/store.cjs'
 import type { EngineConfig } from './config.ts'
 import { stripJsonc } from './adapters/opencode/read.ts'
 import { discover, inspectInstallation, listInstallations } from './service.ts'
+import { recordDiscovery } from './repo.ts'
 
 interface PiServerFixture {
   command?: string
@@ -262,6 +263,72 @@ test('an unreadable tier tombstones nothing and reports itself unreadable', () =
 
   assert.equal(scan.tierHealth.find((health) => health.tierId === 'pi:user')?.status, 'unreadable')
   assert.equal(rowsByName(config).get('serena')?.removedAt, null)
+})
+
+test('a pass in another project leaves the first project’s project-tier rows live', () => {
+  const config = fixture()
+  const projectA = config.projectRoot
+  const projectB = path.join(path.dirname(projectA), 'project-b')
+  fs.mkdirSync(path.join(projectB, '.pi'), { recursive: true })
+  writeMcp(path.join(projectA, '.pi', 'mcp.json'), { alpha: { command: 'alpha' } })
+  discover({ ...config, projectRoot: projectA })
+
+  writeMcp(path.join(projectB, '.pi', 'mcp.json'), { beta: { command: 'beta' } })
+  discover({ ...config, projectRoot: projectB })
+
+  // Project B's pass read its own file and never touched A's, so A's row is not a removal.
+  const rows = new Map(
+    listInstallations(config, { scope: 'project' }).installations.map((row) => [row.name, row]),
+  )
+  assert.ok(rows.get('alpha'))
+  assert.ok(rows.get('beta'))
+})
+
+test('an entry removed from a file the pass read is still tombstoned', () => {
+  const config = fixture()
+  const file = path.join(config.projectRoot, '.pi', 'mcp.json')
+  writeMcp(file, { alpha: { command: 'alpha' }, beta: { command: 'beta' } })
+  discover(config)
+
+  writeMcp(file, { beta: { command: 'beta' } })
+  discover(config)
+
+  assert.equal(rowsByName(config).get('alpha'), undefined)
+  const removed = listInstallations(config, { includeRemoved: true }).installations.find(
+    (row) => row.name === 'alpha',
+  )
+  assert.ok(removed?.removedAt)
+})
+
+test('a live row under a path that only shares a string prefix with a declared read survives', () => {
+  const config = fixture()
+  const declared = path.join(config.projectRoot, '.agents', 'skills')
+  const inside = path.join(declared, 'kept', 'SKILL.md')
+  const sibling = path.join(config.projectRoot, '.agents', 'skills-extra', 'kept', 'SKILL.md')
+  const skill = (file: string, name: string) => ({
+    category: 'skills' as const,
+    name,
+    scope: 'project' as const,
+    tierId: 'pi:project',
+    nativeFile: file,
+    nativePointer: 'SKILL.md',
+    knownFieldsJson: '{}',
+    contentDigest: `sha256:${'d'.repeat(64)}`,
+  })
+  const report = (installations: ReturnType<typeof skill>[]) => [
+    { harness: 'pi', tierId: 'pi:project', health: 'ok' as const, detail: null, declaredReads: [declared], installations },
+  ]
+
+  recordDiscovery(config.storePath, report([skill(inside, 'kept'), skill(sibling, 'sibling')]), '2026-01-01T00:00:00.000Z')
+  // The next pass read the declared root only, so the sibling that merely shares its string prefix
+  // is outside this tier's reads and stays live.
+  recordDiscovery(config.storePath, report([]), '2026-01-02T00:00:00.000Z')
+
+  const rows = new Map(
+    listInstallations(config, { includeRemoved: true }).installations.map((row) => [row.name, row]),
+  )
+  assert.ok(rows.get('kept')?.removedAt)
+  assert.equal(rows.get('sibling')?.removedAt, null)
 })
 
 test('one listing call returns installations from all three harnesses, filterable by harness and scope', () => {

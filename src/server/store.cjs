@@ -152,8 +152,8 @@ function openStore(filePath) {
       detail = excluded.detail,
       at = excluded.at
   `);
-  const liveIdsForTier = db.prepare(`
-    SELECT i.id FROM installations i
+  const liveRowsForTier = db.prepare(`
+    SELECT i.id, i.native_file FROM installations i
     JOIN bindings b ON b.installation_id = i.id
     WHERE b.harness = ? AND b.tier_id = ? AND i.removed_at IS NULL
   `);
@@ -282,8 +282,11 @@ function openStore(filePath) {
       }
       return [...byId.values()];
     },
-    listLiveInstallationIdsForTier(harness, tierId) {
-      return liveIdsForTier.all(harness, tierId).map((row) => row.id);
+    listLiveInstallationsForTier(harness, tierId) {
+      return liveRowsForTier.all(harness, tierId).map((row) => ({
+        id: row.id,
+        nativeFile: row.native_file,
+      }));
     },
     readTierHealth() {
       return readTierHealth.all().map((row) => ({

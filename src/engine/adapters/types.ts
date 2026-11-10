@@ -76,13 +76,19 @@ export function writePaths(tier: Tier, category: Category): readonly string[] {
 // A write may reach a declared path itself or anything beneath it: a mirrored skill is
 // `<root>/<name>` and a generated hook module is `<root>/<name>.ts`, and the root is what the tier
 // declares. Both sides are resolved before the comparison, so a `..` segment cannot walk out of a
-// declared root on paper.
-function under(declared: readonly string[], file: string): boolean {
+// declared root on paper. Containment is by path segment, so `/a/bc` is not under `/a/b`.
+export function under(declared: readonly string[], file: string): boolean {
   const lexical = path.resolve(file)
   return declared.some((entry) => {
     const root = path.resolve(entry)
     return lexical === root || lexical.startsWith(`${root}${path.sep}`)
   })
+}
+
+// Every location the tier loads, across every category. This is the tier's single statement of what
+// it reads, so it bounds a tombstone the same way it bounds a write.
+export function declaredReads(tier: Tier): readonly string[] {
+  return CATEGORIES.flatMap((category) => declaredPaths(tier, category))
 }
 
 export function declaresWritePath(tier: Tier, category: Category, file: string): boolean {
