@@ -17,6 +17,10 @@ import type { FileRefusal, ProvisionRow } from './types.ts'
 // into the engine to spell it.
 export { HARNESSES } from '../engine/adapters/types.ts'
 
+// A native read reuses the harness readers and answers live: nothing is stored, and no Install
+// command is read or run. Re-exported so both faces ask the service, never an adapter.
+export { readNativeConfig } from './native-read.ts'
+
 export interface StatusFilter {
   harness?: HarnessId
   name?: string
