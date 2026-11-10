@@ -277,13 +277,12 @@ test('a pass in another project leaves the first project’s project-tier rows l
   writeMcp(path.join(projectB, '.pi', 'mcp.json'), { beta: { command: 'beta' } })
   discover({ ...config, projectRoot: projectB })
 
-  // Project B's pass read its own file and never touched A's, so A's row is not a removal.
-  const rows = new Map(
-    listInstallations(config, { scope: 'project' }).installations.map((row) => [row.name, row]),
-  )
-  assert.ok(rows.get('alpha'))
-  assert.ok(rows.get('review'))
-  assert.ok(rows.get('beta'))
+  // Project B's pass read its own file and never touched A's, so A's row is not a removal — and
+  // each project's listing shows its own rows, with B's rows never reaching A's view.
+  const names = (config: EngineConfig) =>
+    listInstallations(config, { scope: 'project' }).installations.map((row) => row.name).sort()
+  assert.deepEqual(names({ ...config, projectRoot: projectA }), ['alpha', 'review'])
+  assert.deepEqual(names({ ...config, projectRoot: projectB }), ['beta'])
 })
 
 // A skill root is a directory, so a live row's path can carry a declared read as a plain string

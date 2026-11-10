@@ -18,8 +18,8 @@ import type { Json } from '../types/dashboard'
 
 const USAGE = `usage: acm <command> [--project-root <dir>]
 
-  --project-root <dir>  read that project's config instead of the project acm is installed in;
-                        the store stays where acm is, so both projects share one inventory
+  --project-root <dir>  read that project's config instead of the working directory's; the store
+                        stays where acm is, so both projects share one inventory
 
   list     report the inventory the store holds
            [--category <category>] [--harness <harness>] [--scope <scope>] [--all] [--json]
@@ -44,7 +44,7 @@ interface ListOptions {
   json: boolean
 }
 
-// The project a pass reads defaults to where acm is installed, so a caller names another one here.
+// The project a pass reads is the working directory, so a caller aiming elsewhere names it here.
 // The flag is stripped before dispatch: each subcommand's own parser rejects what it does not know.
 function withoutProjectRoot(argv: string[]): string[] | null {
   const at = argv.findIndex((arg) => arg === '--project-root' || arg.startsWith('--project-root='))
@@ -115,7 +115,9 @@ function list(argv: string[]): number {  const options = parseListOptions(argv)
     process.stdout.write(`${formatRow(row, config.home)}\n`)
   }
   const counted = `${inventory.installations.length} installation${inventory.installations.length === 1 ? '' : 's'}`
-  process.stdout.write(`\n${counted} · scanned ${scan.scannedAt}\n`)
+  // The root is in the answer, not implied by it: a harness that spawned acm somewhere unexpected
+  // then reads why the list is empty instead of guessing.
+  process.stdout.write(`\n${counted} · ${inventory.projectRoot} · scanned ${scan.scannedAt}\n`)
   // The tier legend is the answer to "may I propose a write here": one line per harness, each tier
   // with the scope bucket it maps to and whether it is a mirror target.
   for (const harness of inventory.harnesses) {
