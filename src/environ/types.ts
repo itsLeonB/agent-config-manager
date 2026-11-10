@@ -67,6 +67,10 @@ export interface ResolvedProvision {
   tags: string[]
   harness: HarnessId
   tier: EnvironmentTier
+  // The Tier's root, which is what a relative path in this entry means and where its Install
+  // command starts. The loader is the only module that knows it, so it travels with the entry
+  // instead of being derived a second time.
+  root: string
   source: string
   check: Check
   install: string
