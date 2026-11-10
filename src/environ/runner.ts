@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process'
+import { accessSync, constants } from 'node:fs'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { evaluateChecks } from './check.ts'
 import { recordRun } from './history.ts'
-import { loadEnvironment } from './loader.ts'
+import { installCommand, isPayloadInstall, loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
 import type { EnvironmentTier, FileRefusal, Presence, ResolvedProvision } from './types.ts'
 
@@ -78,7 +79,7 @@ function previewText(previewed: Previewed[], dryRun: boolean): string {
     lines.push(
       `  ${printable(item.provision.name).padEnd(nameWidth)}  ${item.provision.harness.padEnd(harnessWidth)}  ${item.provision.tier.padEnd(tierWidth)}  ${action}`,
     )
-    lines.push(`    $ ${printable(item.provision.install)}`)
+    lines.push(`    $ ${printable(installCommand(item.provision.install))}`)
   }
   return `${lines.join('\n')}\n`
 }
@@ -118,7 +119,18 @@ function notRun(provision: ResolvedProvision, presence: Presence): InstallEntry 
 // shell with the command text as a single argument, which is the text that was printed.
 // shortcut: no per-command timeout; add one when a real command hangs.
 function spawnInstall(provision: ResolvedProvision): CommandResult {
-  const result = spawnSync(provision.install, {
+  const command = installCommand(provision.install)
+  // A Payload that cannot be read fails its entry here, before the shell starts: `sh` would report
+  // the same fault, but only after a spawn the preview said nothing about.
+  if (isPayloadInstall(provision.install)) {
+    try {
+      accessSync(provision.install.payload, constants.R_OK)
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error)
+      return { status: null, failure: `${provision.install.payload} could not be read: ${cause}` }
+    }
+  }
+  const result = spawnSync(command, {
     cwd: provision.root,
     stdio: ['ignore', 'inherit', 'inherit'],
     shell: true,

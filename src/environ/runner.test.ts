@@ -6,7 +6,7 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { EngineConfig } from '../engine/config.ts'
-import { installRun } from './service.ts'
+import { installRun, latestRuns } from './service.ts'
 import type { InstallOptions, InstallOutcome } from './service.ts'
 
 // Seam A: one run against a fixture. A temp home, a temp project root, a hand-written environment
@@ -67,6 +67,10 @@ function logLines(f: Fixture): string[] {
 
 function sawDirectory(f: Fixture, marker: string): string {
   return fs.readFileSync(`${f.log}.${marker}.cwd`, 'utf8').trim()
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 interface Observation {
@@ -389,4 +393,74 @@ install = "./reads.sh"
   assert.match(out, /failed: asks \(pi\) exit 3/)
   // The command saw end of input rather than a question it could ask.
   assert.deepEqual(logLines(f), ['eof'])
+})
+
+// A Payload is read at run time and runs as `sh <payload> <args…>`: the declared path resolves
+// against the tier root, the arguments arrive as argv and are never part of the text, and no
+// executable bit is needed.
+test('a Payload runs as sh payload args, and its arguments arrive as argv', () => {
+  const f = fixture()
+  // No chmod anywhere in this test: the shell reads the text, so the executable bit is not part of
+  // the contract.
+  file(
+    path.join(f.home, 'payloads', 'with-args.sh'),
+    '#!/bin/sh\nprintf "%s\\n" "$@" > argv.dump\ntouch payload.marker\n',
+  )
+  environment(f, `version = 1
+
+[provision.payloaded.pi]
+check   = { file = "~/payload.marker" }
+install = { payload = "payloads/with-args.sh", args = ["one", "two"] }
+`)
+  const { printed, outcome } = run(f)
+  const resolved = path.join(f.home, 'payloads', 'with-args.sh')
+  // The preview is the command that will run, spelled: the payload path followed by its arguments.
+  assert.match(printed, new RegExp(`^    \\$ sh ${escapeRegex(resolved)} one two$`, 'm'))
+  // The payload's text reached the shell, and its arguments reached the payload as argv.
+  assert.equal(fs.readFileSync(path.join(f.home, 'argv.dump'), 'utf8'), 'one\ntwo\n')
+  assert.equal(outcome.entries[0].after, 'present')
+  assert.equal(outcome.exitCode, 0)
+  // The record holds the same spelling — the path followed by its arguments — never the bytes the
+  // file held.
+  const recorded = latestRuns(f.config)
+  assert.equal(recorded.length, 1)
+  assert.equal(recorded[0].command, `sh ${resolved} one two`)
+  assert.equal(recorded[0].command.includes('printf'), false)
+  assert.equal(recorded[0].exitCode, 0)
+  assert.equal(recorded[0].presence, 'present')
+})
+
+// A Payload that cannot be read fails its entry without spawning anything, and the run goes on: the
+// Presence is still re-evaluated afterwards, and the row records the spelling with no exit code
+// because nothing ran.
+test('a Payload that cannot be read fails its entry and spawns nothing', () => {
+  const f = fixture()
+  environment(f, `version = 1
+
+[provision.gone.pi]
+check   = { file = "~/gone.marker" }
+install = { payload = "~/gone.sh" }
+
+[provision.after.pi]
+check   = { file = "~/after.marker" }
+install = "echo yes > after.marker"
+`)
+  const { printed, outcome } = run(f)
+  const resolved = path.join(f.home, 'gone.sh')
+  assert.match(printed, new RegExp(`^    \\$ sh ${escapeRegex(resolved)}$`, 'm'))
+  assert.match(printed, new RegExp(`failed: gone \\(pi\\) ${escapeRegex(resolved)} could not be read: `))
+  // The next entry still ran: a missing Payload is one broken entry, not a stopped run.
+  assert.equal(fs.readFileSync(path.join(f.home, 'after.marker'), 'utf8'), 'yes\n')
+  const gone = outcome.entries.find((entry) => entry.provision.name === 'gone')
+  assert.ok(gone !== undefined)
+  assert.equal(gone.attempted, true)
+  assert.equal(gone.commandExit, null)
+  assert.equal(gone.after, 'absent')
+  assert.equal(outcome.exitCode, 1)
+  const recorded = latestRuns(f.config)
+  const goneRun = recorded.find((entry) => entry.provision === 'gone')
+  assert.ok(goneRun !== undefined)
+  assert.equal(goneRun.command, `sh ${resolved}`)
+  assert.equal(goneRun.exitCode, null)
+  assert.equal(goneRun.presence, 'absent')
 })

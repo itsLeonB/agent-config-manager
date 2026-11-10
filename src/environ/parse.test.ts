@@ -278,3 +278,62 @@ test('a value outside the schema refuses the file', () => {
     reason: 'only strings, numbers, booleans, arrays, and tables are read',
   })
 })
+
+// `install` is a string or a Payload: the path the declared text lives in, and optionally the
+// arguments that reach it as argv. Both forms are one Install command.
+test('a payload install loads as its path and arguments, and a string install stays a string', () => {
+  const declarations = provisionsOf(`version = 1
+
+[provision.serena.codex]
+check   = { file = "~/.codex/config.toml", contains = "serena" }
+install = { payload = "install/codex-mcp.sh", args = ["serena", "--quiet"] }
+
+[provision.serena.pi]
+check   = { file = "~/.pi/agent/mcp.json" }
+install = { payload = "~/install/serena.sh" }
+
+[provision.rtk.pi]
+check   = { onPath = "rtk" }
+install = "npx rtk init"
+`)
+  assert.deepEqual(
+    declarations.map((provision) => provision.entries.map((entry) => entry.install)),
+    [
+      [{ payload: 'install/codex-mcp.sh', args: ['serena', '--quiet'] }, { payload: '~/install/serena.sh' }],
+      ['npx rtk init'],
+    ],
+  )
+})
+
+// Anything else in an install table is a typo rather than a shape the parser half-reads: an unknown
+// key refuses the file, as does a Payload that is missing, not a string, or empty, and arguments
+// that are not a list of strings.
+test('a malformed payload install refuses the file at the offending key', () => {
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = { file = "x", section = "z" }\n')
+      .reason,
+    "unknown install key 'file'",
+  )
+  assert.deepEqual(refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = { args = ["a"] }\n'), {
+    line: 5,
+    column: 1,
+    reason: 'install has no payload',
+  })
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = { payload = 1 }\n').reason,
+    'payload must be a string',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = { payload = "" }\n').reason,
+    'payload is empty',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = { payload = "x", args = ["a", 1] }\n')
+      .reason,
+    'args must be an array of strings',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = 3\n').reason,
+    'install must be a string or a table',
+  )
+})
