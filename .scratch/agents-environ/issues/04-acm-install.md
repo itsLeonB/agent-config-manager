@@ -4,15 +4,20 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Every Provision, harness, tier, and exact command is printed before the first command starts.
-- [ ] A Provision whose Presence is `present` is skipped; `--force` runs it anyway.
-- [ ] Each command starts in its tier's root, with stdin closed. A command that reads stdin fails instead of hanging the run.
-- [ ] ACM passes no extra environment variables: the command inherits the parent environment unchanged.
-- [ ] A failing command is reported and the run continues. The exit status is non-zero when any command failed or any Presence is still not `present` afterwards.
-- [ ] Commands run in file order, user file first.
-- [ ] `--dry-run` prints and stops, and is the default when stdin is not a TTY.
-- [ ] `--only <name>` restricts the run to the named Provisions.
-- [ ] The summary names what was already present, what ran, what failed, and what is still absent.
-- [ ] A run never writes an environment file.
+- [x] Every Provision, harness, tier, and exact command is printed before the first command starts.
+- [x] A Provision whose Presence is `present` is skipped; `--force` runs it anyway.
+- [x] Each command starts in its tier's root, with stdin closed. A command that reads stdin fails instead of hanging the run.
+- [x] ACM passes no extra environment variables: the command inherits the parent environment unchanged.
+- [x] A failing command is reported and the run continues. The exit status is non-zero when any command failed or any Presence is still not `present` afterwards.
+- [x] Commands run in file order, user file first.
+- [x] `--dry-run` prints and stops, and is the default when stdin is not a TTY.
+- [x] `--only <name>` restricts the run to the named Provisions.
+- [x] The summary names what was already present, what ran, what failed, and what is still absent.
+- [x] A run never writes an environment file.
+
+## Comments
+
+Implemented in `500b8dc` on the integration branch `feat/agents-environ`; the two-axis
+code review of that branch is recorded in the merge commit for the review fixes.

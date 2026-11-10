@@ -4,11 +4,16 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A file with `version = 1` and Provision tables loads. An unknown version, an unknown key, a missing Install command, an unknown harness id, an unknown predicate kind, or an empty `contains` refuses the whole file with line and column, and contributes nothing.
-- [ ] `acm status` prints Provision by harness with `present` or `absent`, and `--json` prints the same as data.
-- [ ] The MCP tool `list_provisions` returns the same rows, declares `readOnlyHint: true`, and accepts `harness` and `name` filters.
-- [ ] Fixtures prove a `.zshrc`-style export and an `AGENTS.md`-style heading report `present`, and a Provision whose pattern is absent reports `absent`.
-- [ ] Evaluating a Check spawns no process, reads no network, and writes nothing.
-- [ ] A Provision with no entry for some harness appears without a row for that harness.
+- [x] A file with `version = 1` and Provision tables loads. An unknown version, an unknown key, a missing Install command, an unknown harness id, an unknown predicate kind, or an empty `contains` refuses the whole file with line and column, and contributes nothing.
+- [x] `acm status` prints Provision by harness with `present` or `absent`, and `--json` prints the same as data.
+- [x] The MCP tool `list_provisions` returns the same rows, declares `readOnlyHint: true`, and accepts `harness` and `name` filters.
+- [x] Fixtures prove a `.zshrc`-style export and an `AGENTS.md`-style heading report `present`, and a Provision whose pattern is absent reports `absent`.
+- [x] Evaluating a Check spawns no process, reads no network, and writes nothing.
+- [x] A Provision with no entry for some harness appears without a row for that harness.
+
+## Comments
+
+Implemented in `6103d05` on the integration branch `feat/agents-environ`; the two-axis
+code review of that branch is recorded in the merge commit for the review fixes.

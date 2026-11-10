@@ -4,11 +4,16 @@
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] All three files are read when the Project root has the two project files; the user file is always read.
-- [ ] For one `(provision, harness)`, `project-local` shadows `project`, which shadows `user`. A shadowing entry replaces that whole entry, tags included.
-- [ ] A relative path in a Check or an Install command resolves against its tier's root: `$HOME` for `user`, the Project root otherwise. A leading `~\` or `/\` stays absolute.
-- [ ] A fixture proves the same Provision text at two tiers reads two different files.
-- [ ] `--tier` restricts both `status` and `install`.
-- [ ] A malformed project file contributes nothing while the user tier still loads.
+- [x] All three files are read when the Project root has the two project files; the user file is always read.
+- [x] For one `(provision, harness)`, `project-local` shadows `project`, which shadows `user`. A shadowing entry replaces that whole entry, tags included.
+- [x] A relative path in a Check or an Install command resolves against its tier's root: `$HOME` for `user`, the Project root otherwise. A leading `~\` or `/\` stays absolute.
+- [x] A fixture proves the same Provision text at two tiers reads two different files.
+- [x] `--tier` restricts both `status` and `install`.
+- [x] A malformed project file contributes nothing while the user tier still loads.
+
+## Comments
+
+Implemented in `db3bd92` on the integration branch `feat/agents-environ`; the two-axis
+code review of that branch is recorded in the merge commit for the review fixes.

@@ -4,11 +4,16 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `{ file, pointer }` reports `present` when a value exists at that address, in a JSON, JSONC, or TOML file, with the address written the same way in both.
-- [ ] `{ file, pointer, equals }` requires the value to match by deep equality, so `disabled = true` reports `absent`.
-- [ ] `{ onPath }` reports `present` only for a regular executable file, and `absent` when the name is missing or not executable.
-- [ ] A file that does not parse, a missing directory, and an invalid pattern each report `unknown` with a detail that explains it. `unknown` is never folded into `absent`.
-- [ ] A `{ file }` Check on a file that does not exist reports `absent`, not `unknown`.
-- [ ] `acm install` runs a Provision whose Presence is `unknown`.
+- [x] `{ file, pointer }` reports `present` when a value exists at that address, in a JSON, JSONC, or TOML file, with the address written the same way in both.
+- [x] `{ file, pointer, equals }` requires the value to match by deep equality, so `disabled = true` reports `absent`.
+- [x] `{ onPath }` reports `present` only for a regular executable file, and `absent` when the name is missing or not executable.
+- [x] A file that does not parse, a missing directory, and an invalid pattern each report `unknown` with a detail that explains it. `unknown` is never folded into `absent`.
+- [x] A `{ file }` Check on a file that does not exist reports `absent`, not `unknown`.
+- [x] `acm install` runs a Provision whose Presence is `unknown`.
+
+## Comments
+
+Implemented in `a3d4b7d` on the integration branch `feat/agents-environ`; the two-axis
+code review of that branch is recorded in the merge commit for the review fixes.
