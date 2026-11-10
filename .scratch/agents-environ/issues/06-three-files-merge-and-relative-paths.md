@@ -8,7 +8,7 @@
 
 - [x] All three files are read when the Project root has the two project files; the user file is always read.
 - [x] For one `(provision, harness)`, `project-local` shadows `project`, which shadows `user`. A shadowing entry replaces that whole entry, tags included.
-- [x] A relative path in a Check or an Install command resolves against its tier's root: `$HOME` for `user`, the Project root otherwise. A leading `~\` or `/\` stays absolute.
+- [x] A relative path in a Check or an Install command resolves against its tier's root: `$HOME` for `user`, the Project root otherwise. A leading `~/` or `/` stays absolute.
 - [x] A fixture proves the same Provision text at two tiers reads two different files.
 - [x] `--tier` restricts both `status` and `install`.
 - [x] A malformed project file contributes nothing while the user tier still loads.

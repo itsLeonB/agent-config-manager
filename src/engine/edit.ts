@@ -172,6 +172,12 @@ function parseJsonDocument(text: string): JsonNode {
       skip()
       if (text[at] === ',') {
         at += 1
+        // JSONC allows a trailing comma, with whitespace or a comment before the bracket.
+        skip()
+        if (text[at] === ']') {
+          at += 1
+          return { kind: 'array', start, end: at, value }
+        }
         continue
       }
       if (text[at] === ']') {
@@ -208,6 +214,13 @@ function parseJsonDocument(text: string): JsonNode {
       skip()
       if (text[at] === ',') {
         at += 1
+        // JSONC allows a trailing comma, with whitespace or a comment before the brace. `insertAt`
+        // stays on the last member's value, so a new member lands before the trailing comma.
+        skip()
+        if (text[at] === '}') {
+          at += 1
+          return { kind: 'object', start, end: at, insertAt, members, value }
+        }
         continue
       }
       if (text[at] === '}') {

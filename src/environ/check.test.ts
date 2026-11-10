@@ -66,10 +66,13 @@ test('a pattern that does not compile is unknown with the reason', () => {
 const ADDRESS = 'mcp_servers.serena'
 const TOML_CONFIG = '[mcp_servers.serena]\ncommand = "uvx"\nargs = ["--from", "serena"]\n'
 const JSON_CONFIG = '{"mcp_servers": {"serena": {"command": "uvx", "args": ["--from", "serena"]}}}\n'
+// Trailing commas are legal in JSONC and OpenCode writes them, so the fixture carries one in an
+// array and one in an object, the second with a comment between the comma and the brace.
 const JSONC_CONFIG = `{
   // the serena server
   "mcp_servers": {
-    "serena": { /* pinned */ "command": "uvx", "args": ["--from", "serena"] }
+    "serena": { /* pinned */ "command": "uvx", "args": ["--from", "serena",] },
+    // the last member, and a comma after it
   }
 }
 `
