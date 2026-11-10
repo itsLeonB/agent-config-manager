@@ -42,7 +42,7 @@ Re-run `make install` after pulling, since the bundle is built, not read from so
 
 `list`, `inspect`, and `setup` take `--json`. `mirror`, `apply`, and `verify` print JSON and nothing else.
 
-Every subcommand takes `--project-root <dir>`: the project config a pass reads defaults to the project `acm` is installed in (the `acm mcp serve` process is spawned by a harness at a working directory it does not control), and this names another one. The store stays beside `acm`, so the flag does not drop a second database into the project you name. One consequence: `--scope project` rows describe the root the last scan read — a later pass over another root retires them (`--all` still shows them).
+Every subcommand takes `--project-root <dir>`: the project config a pass reads defaults to the working directory the harness or shell opened `acm` in, taken as given and never walked up to a repository marker, and this names another one. The store stays beside `acm`, so the flag does not drop a second database into the project you name. The listing is that root's view: another project's rows are not in the answer, and a pass over one root retires only rows under a location its tiers declared they read, so projects sit side by side in the one store (`--all` shows that root's removed rows too).
 
 | Command | What it does | Writes |
 | --- | --- | --- |
@@ -102,11 +102,12 @@ acm verify plan.json
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ACM_HOME` | `os.homedir()` | Home directory the engine reads harness tiers from |
-| `ACM_PROJECT_ROOT` | nearest `package.json` above the entry | Project root the engine reads project tiers from. The store does not follow it: `ACM_PROJECT_ROOT` names what to read, never where to write |
+| `ACM_PROJECT_ROOT` | the working directory | The project root: which project-tier locations the engine reads, and where a project-tier mirror writes. The store does not follow it — its path is fixed beside the install, so this names what to read and write, never where the inventory lives |
+| `CLAUDE_PROJECT_DIR` | — | Read when `ACM_PROJECT_ROOT` is absent. Claude Code starts a user-scope MCP server in its own config directory, so the harness names the project instead |
 | `ACM_STORE` | `<installation>/database/dashboard.db` | Store the engine opens. If you pointed `ACM_PROJECT_ROOT` elsewhere before, your old rows are in `<that root>/database/dashboard.db` — set `ACM_STORE` to it |
 | `CODEX_HOME` | `~/.codex` | Codex config root, when relocated |
 
-Point all four at fixtures: `ACM_HOME` at a fixture home, `ACM_PROJECT_ROOT` at a fixture project, `ACM_STORE` at a temporary database, and `CODEX_HOME` at the fixture's Codex directory. `CODEX_HOME` decides where Codex tiers are read, so leaving it set reads the machine's real Codex config while the other three point at the fixture.
+Point the four fixture overrides at fixtures: `ACM_HOME` at a fixture home, `ACM_PROJECT_ROOT` at a fixture project, `ACM_STORE` at a temporary database, and `CODEX_HOME` at the fixture's Codex directory. `CODEX_HOME` decides where Codex tiers are read, so leaving it set reads the machine's real Codex config while the other three point at the fixture.
 
 ## State
 

@@ -36,9 +36,10 @@ stdout channel a grandchild can corrupt.
   --outfile=dist/acm.mjs`. Runs on Node ≥ 22.5 (`node:sqlite` arrived there) and on Bun in dev.
 - **Spawn.** A harness entry is the absolute path to the installed bin plus `["mcp", "serve"]`,
   resolved once at `acm setup` and pinned. No `cwd`: an absolute entry needs no pin, and pinning it
-  would silently change what the server resolves relative to. The project root therefore comes from
-  the module's own location, not `process.cwd()` — the store, `scan.cjs`, and `database/` are
-  resolved from the install root.
+  would silently change what the server resolves relative to. The **store** therefore comes from the
+  module's own location, not `process.cwd()` — the store, `scan.cjs`, and `database/` are resolved
+  from the install root. The **project root** does not: it is the working directory the harness or
+  shell opened `acm` in, amended by [ADR 0006](0006-project-root-is-the-working-directory.md).
 - **Store.** `BEGIN IMMEDIATE` on writes and the `user_version` guard are load-bearing, not
   defensive; WAL and `busy_timeout` were already there (amends ADR 0003). Ticket 15 records an
   unverified claim that `node:sqlite` needs Node ≥ 24.15 for a *sleeping* busy timeout — verify
