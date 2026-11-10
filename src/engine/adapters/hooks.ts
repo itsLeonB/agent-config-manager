@@ -96,7 +96,7 @@ export function readHookTier(tier: Tier, source: HookSource): TierRead {
         tierId: tier.id,
         nativeFile: file,
         nativePointer: entry.pointer,
-        knownFieldsJson: JSON.stringify(cleanFacts(entry.facts)),
+        factsJson: JSON.stringify(cleanFacts(entry.facts)),
         contentDigest: digest,
       })
     }

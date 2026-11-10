@@ -13,6 +13,11 @@ const { DatabaseSync } = require('node:sqlite');
 // previous engine's inventory tables: recreating the file instead would cost more code and lose
 // those saved settings. Migration 3 adds `runs`, the only history the environment keeps, and
 // touches neither table the dashboard reads.
+//
+// The `installations`, `bindings`, `operations`, and `tier_health` tables in migration 1 are the
+// pre-ADR-0007 inventory: created by migration 1 and dropped by migration 2 one statement later.
+// The dead DDL stays because a migration already applied cannot be rewritten — a database written by
+// the old code runs these statements in order, and nothing else ever creates these tables.
 const MIGRATIONS = [
   `
   CREATE TABLE IF NOT EXISTS snapshots (
@@ -96,24 +101,34 @@ const MIGRATIONS = [
 `,
 ];
 
+// Every write opens with BEGIN IMMEDIATE and lands as one unit. The CLI, the MCP server, and the
+// scanner all open this file, so a writer takes the write lock before it reads what it is about to
+// change instead of discovering the conflict halfway. `busy_timeout` is set on open, so a writer
+// that finds the lock held waits for it rather than failing the statement.
+function writeTransaction(db, write) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = write();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 function migrate(db) {
   for (;;) {
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      // Read the version under the lock: another opener may have applied this step while the
-      // transaction waited, and running a step from a stale read is what the guard prevents.
+    // Read the version under the lock: another opener may have applied this step while the
+    // transaction waited, and running a step from a stale read is what the guard prevents.
+    const migrated = writeTransaction(db, () => {
       const version = db.prepare('PRAGMA user_version').get().user_version;
-      if (version >= MIGRATIONS.length) {
-        db.exec('COMMIT');
-        return;
-      }
+      if (version >= MIGRATIONS.length) return false;
       db.exec(MIGRATIONS[version]);
       db.exec(`PRAGMA user_version = ${version + 1}`);
-      db.exec('COMMIT');
-    } catch (error) {
-      db.exec('ROLLBACK');
-      throw error;
-    }
+      return true;
+    });
+    if (!migrated) return;
   }
 }
 
@@ -158,23 +173,25 @@ function openStore(filePath) {
 
   return {
     saveSnapshot(kind, data) {
-      insertSnapshot.run(new Date().toISOString(), kind, JSON.stringify(data));
+      writeTransaction(db, () => insertSnapshot.run(new Date().toISOString(), kind, JSON.stringify(data)));
     },
     readLatestSnapshot(kind) {
       const row = latestSnapshot.get(kind);
       return row === undefined ? null : JSON.parse(row.data);
     },
     writeConfig(key, value) {
-      upsertConfig.run(key, JSON.stringify(value));
+      writeTransaction(db, () => upsertConfig.run(key, JSON.stringify(value)));
     },
     readConfig(key) {
       const row = selectConfig.get(key);
       return row === undefined ? null : JSON.parse(row.value);
     },
     recordRun(run) {
-      // One INSERT, autocommitted on its own: a run that is interrupted keeps the rows of the
-      // commands that had already finished, and nothing has to write them afterwards.
-      insertRun.run(run.at, run.provision, run.harness, run.tier, run.command, run.exitCode, run.presence);
+      // One INSERT, one transaction, committed as the command ends: a run that is interrupted keeps
+      // the rows of the commands that had already finished, and nothing has to write them afterwards.
+      writeTransaction(db, () =>
+        insertRun.run(run.at, run.provision, run.harness, run.tier, run.command, run.exitCode, run.presence),
+      );
     },
     readLatestRuns() {
       return latestRuns.all().map(runRow);
@@ -185,4 +202,4 @@ function openStore(filePath) {
   };
 }
 
-module.exports = { openStore };
+module.exports = { openStore, writeTransaction };

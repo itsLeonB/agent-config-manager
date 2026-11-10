@@ -182,6 +182,29 @@ check = { file = "~/.config/opencode/opencode.json", contains = "serena" }
 install = "opencode mcp add serena"
 `
 
+// `install` is required in the tool's own schema, not only in the loader: a definition that named
+// only the Check would land a subtree the loader refuses and, on an existing entry, would silently
+// keep the old command while its answer said the entry had been replaced.
+test('define_provision refuses a definition with no Install command, before writing anything', async () => {
+  const project = somewhere()
+  const client = await connect({ ACM_PROJECT_ROOT: project })
+  try {
+    const result = await client.callTool({
+      name: 'define_provision',
+      arguments: {
+        name: 'serena',
+        harness: 'opencode',
+        check: { file: '~/.config/opencode/opencode.json', contains: 'serena' },
+      },
+    })
+    assert.equal(CallToolResultSchema.parse(result).isError, true)
+    assert.match(answered(result), /install/i)
+    assert.equal(fs.existsSync(path.join(project, 'agents_environ.local.toml')), false, 'the refusal wrote the file')
+  } finally {
+    await client.close()
+  }
+})
+
 test('define_provision writes the entry into the project-local file and answers its pointer', async () => {
   const project = somewhere()
   const client = await connect({ ACM_PROJECT_ROOT: project })

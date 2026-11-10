@@ -201,6 +201,32 @@ install = "pi plugin install zeta"
   )
 })
 
+// The other half of "a same-key write replaces that Provision's harness subtree only": the command
+// the entry already carries is part of that subtree, so a definition that names a new one replaces it
+// rather than leaving the old text in force beside the new Check.
+test('a same-key definition replaces the Install command the entry already carried', () => {
+  const f = fixture()
+  write(localFile(f), REVIEWED)
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        check: { file: '~/.pi/agent/mcp.json', contains: 'serena' },
+        install: 'pi plugin add serena --pinned',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.serena.pi')
+  const written = read(localFile(f))
+  assert.match(written, /^install = "pi plugin add serena --pinned"$/m)
+  assert.equal(written.includes('pi plugin install serena'), false, 'the command the entry carried survived')
+  // The sibling harness entry and every other Provision are the bytes the human wrote.
+  assert.match(written, /^install = "python3 scripts\/merge-codex-mcp\.py serena"$/m)
+  assert.match(written, /^install = "pi plugin install zeta"$/m)
+})
+
 test('an unreviewed definition lands in the gitignored file, and an explicit tier writes that file', () => {
   const f = fixture()
   const user = `version = 1\n\n[provision.rtk.pi]\ncheck = { file = "~/AGENTS.md" }\ninstall = "npx rtk init"\n`
@@ -271,11 +297,6 @@ const REFUSAL_CASES: readonly RefusalCase[] = [
     what: 'an empty contains',
     request: { name: 'delta', harness: 'codex', check: { file: '~/.codex/config.toml', contains: '' }, install: 'x' },
     handWritten: `version = 1\n\n[provision.delta.codex]\ncheck = { file = "~/.codex/config.toml", contains = "" }\ninstall = "x"\n`,
-  },
-  {
-    what: 'a missing install',
-    request: { name: 'delta', harness: 'codex', check: { file: '~/.codex/config.toml' } },
-    handWritten: `version = 1\n\n[provision.delta.codex]\ncheck = { file = "~/.codex/config.toml" }\n`,
   },
   {
     what: 'an unknown predicate',

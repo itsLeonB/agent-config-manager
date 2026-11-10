@@ -20,7 +20,10 @@ export interface DefineRequest {
   // The Check as the file spells it, passed through rather than re-shaped here: the parser owns the
   // closed predicate set, so an unknown one is refused with the reason the loader would give.
   check: Record<string, NativeValue>
-  install?: string
+  // Required, and never optional: an entry is a Check and an Install command, so a definition that
+  // named only the Check would write a subtree the loader refuses and an existing command would
+  // survive a write that said it replaced the entry.
+  install: string
   tags?: string[]
 }
 
@@ -72,14 +75,9 @@ export function defineProvision(
   const check = writePointer(written, 'toml', [...entry, 'check'], request.check)
   if (check.kind === 'failed') return check
   written = check.text
-  if (request.install !== undefined) {
-    const install = writePointer(written, 'toml', [...entry, 'install'], request.install)
-    if (install.kind === 'failed') return install
-    written = install.text
-  }
-  // An entry that already carries an install keeps it when the caller names no new one: this writes
-  // the fields it is given and leaves the rest of the file to its owner. A brand-new entry with no
-  // install is refused by the parser below, which is exactly the file nobody could load.
+  const install = writePointer(written, 'toml', [...entry, 'install'], request.install)
+  if (install.kind === 'failed') return install
+  written = install.text
 
   // The same parser the loader runs, over the bytes that would land: a definition the loader would
   // refuse is refused here, with that reason, and the file is left as it was.

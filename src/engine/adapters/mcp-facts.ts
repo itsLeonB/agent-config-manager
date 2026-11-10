@@ -49,7 +49,7 @@ export const MCP_CREDENTIAL_POINTERS: readonly CredentialPointer[] = [
 
 // Every leaf of the canonical vocabulary. A fact added above must be projected here, or its value
 // would reach the store verbatim.
-export function knownFieldsForStorage(facts: McpFacts): McpFacts {
+export function factsForStorage(facts: McpFacts): McpFacts {
   return {
     // An inferred transport is `stdio` or `http`, never a credential.
     transport: facts.transport,
@@ -171,7 +171,7 @@ export function mcpDeclaration(
     tierId: tier.id,
     nativeFile: file,
     nativePointer: `${server.pointerPrefix}.${pointerSegment(server.name)}`,
-    knownFieldsJson: JSON.stringify(knownFieldsForStorage(server.facts)),
+    factsJson: JSON.stringify(factsForStorage(server.facts)),
     contentDigest: factsDigest(server.facts),
   }
 }

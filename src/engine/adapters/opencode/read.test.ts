@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert'
 import { readOpenCodeMcpJsonc } from './read.ts'
-import { knownFieldsForStorage } from '../mcp-facts.ts'
+import { factsForStorage } from '../mcp-facts.ts'
 import type { McpFacts } from '../mcp-facts.ts'
 
 function factsOf(text: string, name: string): McpFacts {
@@ -67,7 +67,7 @@ test('a remote server carries its url and headers, and an OAuth secret is not a 
   assert.deepEqual(facts.headers, { Authorization: 'Bearer sk-fixturetoken' })
   assert.equal(JSON.stringify(facts).includes('fixtureclientsecret'), false)
 
-  const stored = JSON.stringify(knownFieldsForStorage(facts))
+  const stored = JSON.stringify(factsForStorage(facts))
   assert.equal(stored.includes('sk-fixturetoken'), false)
   assert.equal(stored.includes('user:pass'), false)
 })
