@@ -24,6 +24,7 @@ const POINTER_KEY = 'pointer'
 const EQUALS_KEY = 'equals'
 const INCLUDES_KEY = 'includes'
 const ON_PATH_KEY = 'onPath'
+const SECTION_KEY = 'section'
 // The closed predicate set: the keys a Check may carry besides `file`. Anything else is a typo and
 // refuses the file, so a Check ACM does not understand is never silently ignored.
 const PREDICATE_KEYS: ReadonlySet<string> = new Set([
@@ -32,6 +33,7 @@ const PREDICATE_KEYS: ReadonlySet<string> = new Set([
   POINTER_KEY,
   EQUALS_KEY,
   INCLUDES_KEY,
+  SECTION_KEY,
   ON_PATH_KEY,
 ])
 
@@ -146,10 +148,11 @@ function decodeCheck(table: EnvironmentTable, block: readonly string[], at: Sour
   const file = stringValue(table[FILE_KEY])
   if (file === null) return refused(place(checkAt(FILE_KEY), 'file must be a string'))
   if (file === '') return refused(place(checkAt(FILE_KEY), 'file is empty'))
-  // A Check is one of the five predicates, never two: `contains` and `pointer` answer the same
+  // A Check is one of the six predicates, never two: `contains` and `pointer` answer the same
   // question in two ways, so both spelled at once refuses rather than picking one. `equals` and
   // `includes` are the two answers a pointer Check may give, so one Check holds one of them, and
-  // neither sits beside `contains` for the same reason.
+  // neither sits beside `contains` for the same reason. `section` names a Payload, so it stands
+  // alone with its `file`.
   if (has(table, CONTAINS_KEY) && has(table, POINTER_KEY)) {
     return refused(place(checkAt(POINTER_KEY), 'a check holds contains or pointer, not both'))
   }
@@ -158,6 +161,14 @@ function decodeCheck(table: EnvironmentTable, block: readonly string[], at: Sour
   }
   if (has(table, INCLUDES_KEY) && has(table, CONTAINS_KEY)) {
     return refused(place(checkAt(INCLUDES_KEY), 'a check holds contains or includes, not both'))
+  }
+  if (has(table, SECTION_KEY)) {
+    const beside = Object.keys(table).find((key) => key !== FILE_KEY && key !== SECTION_KEY)
+    if (beside !== undefined) return refused(place(checkAt(beside), `a check holds section or ${beside}, not both`))
+    const section = stringValue(table[SECTION_KEY])
+    if (section === null) return refused(place(checkAt(SECTION_KEY), 'section must be a string'))
+    if (section === '') return refused(place(checkAt(SECTION_KEY), 'section is empty'))
+    return { ok: true, value: { file, section } }
   }
   if (has(table, POINTER_KEY)) {
     const pointer = stringValue(table[POINTER_KEY])
@@ -231,8 +242,9 @@ function decodeEntry(
   return { ok: true, value: { harness, checks, install: install.value } }
 }
 
-// `install` is the one command ACM ever executes, and it is either spelled in the file or a
-// Payload: `{ payload = "<path>" [, args = [ … ]] }`. The set of keys is closed the way a Check's
+// `install` is the one command ACM ever executes, and it is either spelled in the file, a
+// Payload, or a Section write: `{ payload = "<path>" [, args = [ … ]] }` or
+// `{ file = "<native file>", section = "<payload>" }`. The set of keys is closed the way a Check's
 // predicates are, so a shape the parser does not understand refuses the file rather than being
 // half-read.
 function decodeInstall(
@@ -245,10 +257,27 @@ function decodeInstall(
   const table = tableValue(value)
   if (table === null) return refused(place(at.declaration(block, INSTALL_KEY), 'install must be a string or a table'))
   for (const key of Object.keys(table)) {
-    if (key !== PAYLOAD_KEY && key !== ARGS_KEY) {
+    if (key !== PAYLOAD_KEY && key !== ARGS_KEY && key !== FILE_KEY && key !== SECTION_KEY) {
       return refused(place(at.declaration(block, key), `unknown install key '${key}'`))
     }
   }
+  // The Section shape is `{ file, section }`, nothing beside it: a Payload beside it contradicts,
+  // and arguments have no Payload to reach.
+  if (has(table, FILE_KEY)) {
+    const beside = Object.keys(table).find((key) => key !== FILE_KEY && key !== SECTION_KEY)
+    if (beside !== undefined) {
+      return refused(place(at.declaration(block, beside), `a section install holds file and section, not ${beside}`))
+    }
+    if (!has(table, SECTION_KEY)) return refused(place(at.declaration(block, INSTALL_KEY), 'install has no section'))
+    const file = stringValue(table[FILE_KEY])
+    if (file === null) return refused(place(at.declaration(block, FILE_KEY), 'file must be a string'))
+    if (file === '') return refused(place(at.declaration(block, FILE_KEY), 'file is empty'))
+    const section = stringValue(table[SECTION_KEY])
+    if (section === null) return refused(place(at.declaration(block, SECTION_KEY), 'section must be a string'))
+    if (section === '') return refused(place(at.declaration(block, SECTION_KEY), 'section is empty'))
+    return { ok: true, value: { file, section } }
+  }
+  if (has(table, SECTION_KEY)) return refused(place(at.declaration(block, SECTION_KEY), 'section needs a file'))
   if (!has(table, PAYLOAD_KEY)) return refused(place(at.declaration(block, INSTALL_KEY), 'install has no payload'))
   const payload = stringValue(table[PAYLOAD_KEY])
   if (payload === null) return refused(place(at.declaration(block, PAYLOAD_KEY), 'payload must be a string'))

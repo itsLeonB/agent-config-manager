@@ -1,12 +1,14 @@
 import { spawnSync } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { evaluateChecks } from './check.ts'
 import { recordRun } from './history.ts'
-import { installCommand, isPayloadInstall, loadEnvironment } from './loader.ts'
+import { installCommand, isPayloadInstall, isSectionInstall, loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
-import type { EnvironmentTier, FileRefusal, Presence, ResolvedProvision } from './types.ts'
+import { headingOf, rewriteSection } from './section.ts'
+import type { EnvironmentTier, FileRefusal, Presence, ResolvedProvision, SectionInstall } from './types.ts'
 
 // The run is the only place ACM executes anything. `install` is the single field that reaches a
 // shell, and the text printed is the text run: nothing is interpolated, re-quoted, or evaluated on
@@ -122,6 +124,8 @@ function notRun(provision: ResolvedProvision, presence: Presence): InstallEntry 
 // shell with the command text as a single argument, which is the text that was printed.
 // shortcut: no per-command timeout; add one when a real command hangs.
 function spawnInstall(provision: ResolvedProvision): CommandResult {
+  // A Section install writes bytes itself, so it never reaches a shell.
+  if (isSectionInstall(provision.install)) return sectionInstall(provision.install)
   const command = installCommand(provision.install)
   // A Payload that cannot be read fails its entry here, before the shell starts: `sh` would report
   // the same fault, but only after a spawn the preview said nothing about.
@@ -143,6 +147,42 @@ function spawnInstall(provision: ResolvedProvision): CommandResult {
   // A signal, or a shell that never started at all: either way there is no status of its own.
   if (result.signal !== null) return { status: null, failure: `signal ${result.signal}` }
   return { status: null, failure: result.error === undefined ? 'did not start' : result.error.message }
+}
+
+// The one install that is a write rather than a spawn: the Payload's text replaces the Section its
+// heading names, appends it when the Section is missing, and creates the file when the file itself
+// is missing. Nothing outside the Section is touched.
+function sectionInstall(install: SectionInstall): CommandResult {
+  let payload: string
+  try {
+    payload = readFileSync(install.section, 'utf8')
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error)
+    return { status: null, failure: `${install.section} could not be read: ${cause}` }
+  }
+  const heading = headingOf(payload)
+  if (heading === null) return { status: null, failure: `${install.section} has no '## ' heading` }
+  let existing: string
+  try {
+    existing = readFileSync(install.file, 'utf8')
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+      const cause = error instanceof Error ? error.message : String(error)
+      return { status: null, failure: `${install.file} could not be read: ${cause}` }
+    }
+    // A missing file is the one read failure that is not a failure: the Section is missing too.
+    existing = ''
+  }
+  const written = rewriteSection(existing, payload, heading)
+  if (!written.ok) return { status: null, failure: `${install.file}: ${written.reason}` }
+  try {
+    mkdirSync(dirname(install.file), { recursive: true })
+    writeFileSync(install.file, written.text)
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error)
+    return { status: null, failure: `${install.file} could not be written: ${cause}` }
+  }
+  return { status: 0, failure: null }
 }
 
 export function installRun(

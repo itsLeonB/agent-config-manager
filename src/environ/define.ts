@@ -27,8 +27,9 @@ export interface DefineRequest {
   checks?: Record<string, NativeValue>[]
   // Required, and never optional: an entry is a Check and an Install command, so a definition that
   // named only the Check would write a subtree the loader refuses and an existing command would
-  // survive a write that said it replaced the entry. A Payload form `{ payload [, args] }` is
-  // written as the table the file spells, and the validator after the write owns both shapes.
+  // survive a write that said it replaced the entry. A Payload form `{ payload [, args] }` or a
+  // Section form `{ file, section }` is written as the table the file spells, and the validator
+  // after the write owns both shapes.
   install: InstallCommand
   tags?: string[]
 }

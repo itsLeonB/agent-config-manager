@@ -2,7 +2,8 @@ import { readFileSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { formatOf, readPointer } from '../engine/edit.ts'
-import type { Check, CheckAnswer, Presence } from './types.ts'
+import { headingOf, readSection, stripTrailingBlankLines } from './section.ts'
+import type { Check, CheckAnswer, FileSectionCheck, Presence } from './types.ts'
 
 // A Check reads and answers. It never spawns a process, touches the network, or writes: an agent may
 // define a Check, so evaluating one has to be inert by construction rather than by convention — the
@@ -21,16 +22,21 @@ export type FileInput =
 export interface CheckInputs {
   // What the Check's file answered. A Check that names no file (`onPath`) never looks at it.
   file: FileInput
+  // What the Check's Payload answered, for a Section Check: the Payload holds the Section's text.
+  // No other predicate reads it.
+  payload: FileInput
   // The directories `PATH` names, in order.
   pathDirs: readonly string[]
 }
 
-// The inputs a running acm hands its own evaluator: the bytes the file has on this machine, and this
-// process's `PATH`. Reading that file is the whole I/O a Check causes, besides the `PATH` walk a
-// name lookup makes; a caller that has the bytes already passes its own inputs instead.
+// The inputs a running acm hands its own evaluator: the bytes the file has on this machine, the
+// bytes a Section Check's Payload has, and this process's `PATH`. Reading those files is the whole
+// I/O a Check causes, besides the `PATH` walk a name lookup makes; a caller that has the bytes
+// already passes its own inputs instead.
 export function checkInputsOf(check: Check): CheckInputs {
   return {
     file: 'file' in check ? readDeclaredFile(check.file) : { kind: 'absent' },
+    payload: 'section' in check ? readDeclaredFile(check.section) : { kind: 'absent' },
     pathDirs: (process.env.PATH ?? '').split(delimiter),
   }
 }
@@ -66,6 +72,7 @@ export function evaluateCheck(check: Check, inputs: CheckInputs): CheckAnswer {
   if (file.kind === 'absent') return { presence: 'absent', detail: `${check.file} is not there` }
   const { bytes } = file
   if ('contains' in check) return containsAnswer(check.contains, check.file, bytes)
+  if ('section' in check) return sectionAnswer(check, bytes, inputs)
   if (!('pointer' in check)) return { presence: 'present', detail: null }
   const read = readPointer(bytes, formatOf(check.file), check.pointer)
   if (read.kind === 'invalid') return { presence: 'unknown', detail: `${check.file} could not be read: ${read.reason}` }
@@ -103,6 +110,29 @@ export function foldAnswers(answers: CheckAnswer[]): CheckAnswer {
     if (answer.detail !== null) details.push(answer.detail)
   }
   return { presence, detail: details.length === 0 ? null : details.join('; ') }
+}
+
+// The Section Check compares two texts: the Payload's is the Section's, heading included, byte for
+// byte after trailing blank lines are stripped from both sides. A Payload that cannot be read, or
+// whose first `## ` line is missing, and a heading two Sections share are questions without an
+// answer, so they report `unknown` with the reason rather than an absence.
+function sectionAnswer(check: FileSectionCheck, bytes: string, inputs: CheckInputs): CheckAnswer {
+  const { payload } = inputs
+  if (payload.kind !== 'read') {
+    const detail =
+      payload.kind === 'absent'
+        ? `${check.section} could not be read: it is not there`
+        : payload.detail
+    return { presence: 'unknown', detail }
+  }
+  const heading = headingOf(payload.bytes)
+  if (heading === null) return { presence: 'unknown', detail: `${check.section} has no '## ' heading` }
+  const read = readSection(bytes, heading)
+  if (read.kind === 'ambiguous') return { presence: 'unknown', detail: `${check.file} has two Sections headed ${heading}` }
+  if (read.kind === 'missing') return { presence: 'absent', detail: `${check.file} has no ${heading} Section` }
+  return stripTrailingBlankLines(read.text) === stripTrailingBlankLines(payload.bytes)
+    ? { presence: 'present', detail: null }
+    : { presence: 'absent', detail: `${check.file}'s ${heading} Section is not the declared text` }
 }
 
 function containsAnswer(pattern: string, file: string, bytes: string): CheckAnswer {

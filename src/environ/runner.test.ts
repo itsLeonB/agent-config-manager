@@ -551,3 +551,142 @@ install = "echo yes > after.marker"
   assert.equal(goneRun.exitCode, null)
   assert.equal(goneRun.presence, 'absent')
 })
+
+// A Section install writes the Payload's text where its `## ` heading names: the Section is
+// replaced in place, appended when it is missing, and the file created when that file is missing.
+// It never spawns, and every byte outside the Section is the byte it was.
+test('a Section install rewrites the drifted Section and leaves every other byte alone', () => {
+  const f = fixture()
+  const agents = path.join(f.home, '.pi', 'agent', 'AGENTS.md')
+  file(
+    agents,
+    '# AGENTS.md\n\n## Output style\n\nOld text that drifted.\n\n## Next section\n\nKeep me.\n\n```\n## Fenced heading stays\n```\n',
+  )
+  file(path.join(f.home, 'instructions', 'output-style.md'), '## Output style\n\nBe terse.\n')
+  environment(f, `version = 1
+
+[provision.i-have-adhd.pi]
+check   = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+`)
+  const { printed, outcome } = run(f)
+  assert.equal(
+    fs.readFileSync(agents, 'utf8'),
+    '# AGENTS.md\n\n## Output style\n\nBe terse.\n## Next section\n\nKeep me.\n\n```\n## Fenced heading stays\n```\n',
+  )
+  const resolved = path.join(f.home, 'instructions', 'output-style.md')
+  // The preview and the record spell the path pair, never the bytes the Payload holds.
+  assert.match(printed, new RegExp(`^    \\$ write ${escapeRegex(agents)} from ${escapeRegex(resolved)}$`, 'm'))
+  assert.match(printed, /^  ran: i-have-adhd \(pi\) exit 0$/m)
+  assert.equal(outcome.exitCode, 0)
+  assert.equal(outcome.entries[0].after, 'present')
+  const recorded = latestRuns(f.config)
+  assert.equal(recorded.length, 1)
+  assert.equal(recorded[0].command, `write ${agents} from ${resolved}`)
+  assert.equal(recorded[0].command.includes('Be terse'), false)
+  assert.equal(recorded[0].exitCode, 0)
+  assert.equal(recorded[0].presence, 'present')
+})
+
+test('a Section install appends the Section when it is missing and creates the file when that file is missing', () => {
+  const f = fixture()
+  file(path.join(f.home, 'style.md'), '## Output style\n\nBe terse.\n')
+  file(path.join(f.home, '.pi', 'agent', 'AGENTS.md'), '# AGENTS.md\n\n## Other\n\nKept.\n')
+  environment(f, `version = 1
+
+[provision.append.pi]
+check   = { file = "~/.pi/agent/AGENTS.md", section = "style.md" }
+install = { file = "~/.pi/agent/AGENTS.md", section = "style.md" }
+
+[provision.create.codex]
+check   = { file = "~/.codex/AGENTS.md", section = "style.md" }
+install = { file = "~/.codex/AGENTS.md", section = "style.md" }
+`)
+  const { outcome } = run(f)
+  assert.equal(
+    fs.readFileSync(path.join(f.home, '.pi', 'agent', 'AGENTS.md'), 'utf8'),
+    '# AGENTS.md\n\n## Other\n\nKept.\n## Output style\n\nBe terse.\n',
+  )
+  assert.equal(fs.readFileSync(path.join(f.home, '.codex', 'AGENTS.md'), 'utf8'), '## Output style\n\nBe terse.\n')
+  assert.deepEqual(
+    outcome.entries.map((entry) => entry.after),
+    ['present', 'present'],
+  )
+  assert.equal(outcome.exitCode, 0)
+})
+
+// The write is a function of the two files only, so the second write is byte-identical to the
+// first: no re-serialisation and nothing accumulated.
+test('a Section install is idempotent: writing twice leaves the same bytes', () => {
+  const f = fixture()
+  const agents = path.join(f.home, 'AGENTS.md')
+  file(agents, '# AGENTS.md\n\n## Output style\n\nOld.\n\n## Next\n\nTail.\n')
+  file(path.join(f.home, 'style.md'), '## Output style\n\nBe terse.\n')
+  environment(f, `version = 1
+
+[provision.idem.pi]
+check   = { file = "~/AGENTS.md", section = "style.md" }
+install = { file = "~/AGENTS.md", section = "style.md" }
+`)
+  const first = run(f)
+  const once = fs.readFileSync(agents, 'utf8')
+  const second = run(f, { force: true })
+  assert.equal(fs.readFileSync(agents, 'utf8'), once)
+  assert.equal(first.outcome.exitCode, 0)
+  assert.equal(second.outcome.exitCode, 0)
+})
+
+test('a Section install restores a hand-edited Section and leaves the rest of the edit alone', () => {
+  const f = fixture()
+  const agents = path.join(f.home, 'AGENTS.md')
+  file(agents, '# AGENTS.md\n\n## Output style\n\nOld.\n\n## Next\n\nTail.\n')
+  file(path.join(f.home, 'style.md'), '## Output style\n\nBe terse.\n')
+  environment(f, `version = 1
+
+[provision.hand.pi]
+check   = { file = "~/AGENTS.md", section = "style.md" }
+install = { file = "~/AGENTS.md", section = "style.md" }
+`)
+  run(f)
+  // A human edits the Section and adds a sibling heading afterwards: the next run replaces only the
+  // Section and keeps the added heading byte for byte.
+  fs.writeFileSync(agents, '# AGENTS.md\n\n## Output style\n\nHuman words.\n\n## Hand added\n\nMine.\n')
+  const { outcome } = run(f)
+  assert.equal(fs.readFileSync(agents, 'utf8'), '# AGENTS.md\n\n## Output style\n\nBe terse.\n## Hand added\n\nMine.\n')
+  assert.equal(outcome.entries[0].after, 'present')
+  assert.equal(outcome.exitCode, 0)
+})
+
+test('a Section install whose Payload cannot be read fails its entry, records the failure, and the run goes on', () => {
+  const f = fixture()
+  environment(f, `version = 1
+
+[provision.gone.pi]
+check   = { file = "~/AGENTS.md", section = "~/gone-style.md" }
+install = { file = "~/AGENTS.md", section = "~/gone-style.md" }
+
+[provision.after.codex]
+check   = { file = "~/after.marker" }
+install = "echo yes > after.marker"
+`)
+  const { printed, outcome } = run(f)
+  const agents = path.join(f.home, 'AGENTS.md')
+  const resolved = path.join(f.home, 'gone-style.md')
+  assert.match(printed, new RegExp(`^    \\$ write ${escapeRegex(agents)} from ${escapeRegex(resolved)}$`, 'm'))
+  assert.match(printed, new RegExp(`failed: gone \\(pi\\) ${escapeRegex(resolved)} could not be read: `))
+  // The next entry still ran: a missing Payload is one broken entry, not a stopped run.
+  assert.equal(fs.readFileSync(path.join(f.home, 'after.marker'), 'utf8'), 'yes\n')
+  assert.equal(fs.existsSync(agents), false, 'the failed write created the file')
+  const gone = outcome.entries.find((entry) => entry.provision.name === 'gone')
+  assert.ok(gone !== undefined)
+  assert.equal(gone.attempted, true)
+  assert.equal(gone.commandExit, null)
+  assert.equal(gone.after, 'absent')
+  assert.equal(outcome.exitCode, 1)
+  const recorded = latestRuns(f.config)
+  const goneRun = recorded.find((entry) => entry.provision === 'gone')
+  assert.ok(goneRun !== undefined)
+  assert.equal(goneRun.command, `write ${agents} from ${resolved}`)
+  assert.equal(goneRun.exitCode, null)
+  assert.equal(goneRun.presence, 'absent')
+})
