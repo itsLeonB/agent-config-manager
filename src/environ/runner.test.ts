@@ -497,6 +497,26 @@ install = { payload = "payloads/with-args.sh", args = ["one", "two"] }
   assert.equal(recorded[0].presence, 'present')
 })
 
+// One argument that holds a space or a quote is still one argv word: the spelling is quoted the way
+// a shell reads it back, so the preview stays the command that runs.
+test('a Payload argument with a space or a quote arrives as one argv word', () => {
+  const f = fixture()
+  file(
+    path.join(f.home, 'payloads', 'argv.sh'),
+    '#!/bin/sh\nprintf "%s\\n" "$@" > argv.dump\ntouch payload.marker\n',
+  )
+  environment(f, `version = 1
+
+[provision.payloaded.pi]
+check   = { file = "~/payload.marker" }
+install = { payload = "payloads/argv.sh", args = ["a b", "it's"] }
+`)
+  const { printed } = run(f)
+  // The preview is the same quoted spelling the shell is handed.
+  assert.match(printed, /'a b' 'it'\\''s'$/m)
+  assert.equal(fs.readFileSync(path.join(f.home, 'argv.dump'), 'utf8'), "a b\nit's\n")
+})
+
 // A Payload that cannot be read fails its entry without spawning anything, and the run goes on: the
 // Presence is still re-evaluated afterwards, and the row records the spelling with no exit code
 // because nothing ran.
