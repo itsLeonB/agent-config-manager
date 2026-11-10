@@ -44,11 +44,12 @@ export function createRouter(): McpServer {
       inputSchema: {
         harness: z.enum(HARNESSES).optional().describe('only the entries declared for this harness'),
         name: z.string().min(1).optional().describe('only the Provision with this name'),
+        tier: z.enum(ENVIRONMENT_TIERS).optional().describe('only the entries this tier owns'),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ harness, name }) =>
-      answer(JSON.stringify(statusDocument(readStatus({ harness, name })), null, 2)),
+    async ({ harness, name, tier }) =>
+      answer(JSON.stringify(statusDocument(readStatus({ harness, name, tier })), null, 2)),
   )
 
   server.registerTool(

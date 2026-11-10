@@ -101,14 +101,84 @@ test('a missing install command refuses the file at the entry table', () => {
   })
 })
 
-// The predicate set is closed: 07 widens it, and until then a `pointer` check is a typo rather than
-// a predicate the parser silently ignores.
+// The predicate set is closed: a fifth kind of Check is a schema change, so any other key is a typo
+// rather than a predicate the parser silently ignores.
 test('an unknown predicate refuses the file at that predicate', () => {
   assert.deepEqual(
     refusalOf(
-      'version = 1\n\n[provision.serena.codex]\ncheck = { file = "~/.codex/config.toml", pointer = "mcp_servers.serena" }\ninstall = "x"\n',
+      'version = 1\n\n[provision.serena.codex]\ncheck = { file = "~/.codex/config.toml", conatins = "x" }\ninstall = "x"\n',
     ),
-    { line: 4, column: 42, reason: "unknown predicate 'pointer'" },
+    { line: 4, column: 42, reason: "unknown predicate 'conatins'" },
+  )
+})
+
+// The other three predicates: an address inside a file, an address with the value it must hold, and
+// a name on PATH. `equals` is any TOML value, so a table with a list in it is spelled as one.
+test('pointer, equals, and onPath load as the Checks they spell', () => {
+  const declarations = provisionsOf(`version = 1
+
+[provision.serena.codex]
+check   = { file = "~/.codex/config.toml", pointer = "mcp_servers.serena", equals = { command = "uvx", args = ["--from", "serena"] } }
+install = "true"
+
+[provision.serena.pi]
+check   = { file = "~/.pi/mcp.json", pointer = "mcpServers.serena" }
+install = "true"
+
+[provision.rtk.pi]
+check   = { onPath = "rtk" }
+install = "true"
+`)
+  assert.deepEqual(
+    declarations.map((provision) => provision.entries.map((entry) => entry.check)),
+    [
+      [
+        {
+          file: '~/.codex/config.toml',
+          pointer: 'mcp_servers.serena',
+          equals: { command: 'uvx', args: ['--from', 'serena'] },
+        },
+        { file: '~/.pi/mcp.json', pointer: 'mcpServers.serena' },
+      ],
+      [{ onPath: 'rtk' }],
+    ],
+  )
+})
+
+// A Check is one of the four, never two written to look like one: `equals` without an address has
+// nothing to compare, and `onPath` beside `file` is a predicate nobody could answer.
+test('a predicate that contradicts itself refuses the file at the offending key', () => {
+  const withoutPointer = refusalOf(
+    'version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", equals = true }\ninstall = "x"\n',
+  )
+  assert.equal(withoutPointer.line, 4)
+  assert.equal(withoutPointer.reason, 'equals needs a pointer')
+
+  const both = refusalOf(
+    'version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", contains = "y", pointer = "z" }\ninstall = "x"\n',
+  )
+  assert.equal(both.line, 4)
+  assert.equal(both.reason, 'a check holds contains or pointer, not both')
+
+  const onPathAndFile = refusalOf(
+    'version = 1\n\n[provision.rtk.pi]\ncheck = { onPath = "rtk", file = "x" }\ninstall = "x"\n',
+  )
+  assert.equal(onPathAndFile.line, 4)
+  assert.equal(onPathAndFile.reason, "onPath takes no other key, and 'file' is one")
+})
+
+test('a pointer that is not a string or is empty refuses the file at it', () => {
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", pointer = 1 }\ninstall = "x"\n').reason,
+    'pointer must be a string',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", pointer = "" }\ninstall = "x"\n').reason,
+    'pointer is empty',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.rtk.pi]\ncheck = { onPath = "" }\ninstall = "x"\n').reason,
+    'onPath is empty',
   )
 })
 

@@ -42,6 +42,51 @@ export function parses(text: string, format: NativeFormat): boolean {
   }
 }
 
+// One address read by the same reader a write walks: the format comes from the extension, a JSON
+// member and a TOML key are both one segment, and an address the writer could not create is missing
+// here too. `invalid` is a document nothing could be read from, which is never an absence.
+export type PointerRead =
+  | { kind: 'found'; value: NativeValue }
+  | { kind: 'missing' }
+  | { kind: 'invalid'; reason: string }
+
+export function readPointer(text: string, format: NativeFormat, segments: string[]): PointerRead {
+  try {
+    return format === 'toml' ? readToml(text, segments) : readJson(text, segments)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    // One line: this reason is printed beside a status row, and a TOML parser's message is not.
+    return { kind: 'invalid', reason: reason.split('\n', 1)[0] ?? reason }
+  }
+}
+
+function readJson(text: string, segments: string[]): PointerRead {
+  let node: JsonNode = parseJsonDocument(text)
+  for (const segment of segments) {
+    if (node.kind !== 'object') return { kind: 'missing' }
+    const member = node.members.get(segment)
+    if (member === undefined) return { kind: 'missing' }
+    node = member.value
+  }
+  return { kind: 'found', value: node.value }
+}
+
+function readToml(text: string, segments: string[]): PointerRead {
+  const document = nativeObjectSchema.safeParse(parseToml(text))
+  if (!document.success) {
+    return { kind: 'invalid', reason: 'a value outside strings, numbers, booleans, arrays, and tables' }
+  }
+  let node: NativeValue = document.data
+  for (const segment of segments) {
+    const object = nativeObjectSchema.safeParse(node)
+    if (!object.success) return { kind: 'missing' }
+    const next = object.data[segment]
+    if (next === undefined) return { kind: 'missing' }
+    node = next
+  }
+  return { kind: 'found', value: node }
+}
+
 interface JsonObject {
   kind: 'object'
   start: number
@@ -49,15 +94,17 @@ interface JsonObject {
   // Where a new member goes: right after the last member's value, or after `{` when there is none.
   insertAt: number
   members: Map<string, { keyStart: number; value: JsonNode }>
+  value: { [key: string]: NativeValue }
 }
 
 type JsonNode =
   | JsonObject
-  | { kind: 'array'; start: number; end: number }
-  | { kind: 'scalar'; start: number; end: number }
+  | { kind: 'array'; start: number; end: number; value: NativeValue[] }
+  | { kind: 'scalar'; start: number; end: number; value: NativeValue }
 
-// A JSONC-aware scanner that records spans. Only two questions are ever asked of it — where a value
-// sits, and where a missing member would go — so it keeps no tree beyond the members of an object.
+// A JSONC-aware scanner that records spans and the values they hold. Only three questions are ever
+// asked of it — where a value sits, where a missing member would go, and what the value at an address
+// is — so it builds no tree beyond the members of an object.
 function parseJsonDocument(text: string): JsonNode {
   let at = 0
 
@@ -91,32 +138,37 @@ function parseJsonDocument(text: string): JsonNode {
     return JSON.parse(text.slice(start, at))
   }
 
+  // A scalar is decoded here as well as spanned, because a Check reads the value at an address: a
+  // token JSON cannot decode is a file that does not parse, not a value nothing tests.
+  function parseScalar(): NativeValue {
+    if (text[at] === '"') return parseString()
+    const start = at
+    while (at < text.length && !/[\s,\]}/]/.test(text[at] ?? '')) at += 1
+    if (at === start) throw new Error('a value was expected')
+    return JSON.parse(text.slice(start, at))
+  }
+
   function parseValue(): JsonNode {
     skip()
     const char = text[at]
     if (char === '{') return parseObject()
     if (char === '[') return parseArray()
-    if (char === '"') {
-      const start = at
-      parseString()
-      return { kind: 'scalar', start, end: at }
-    }
     const start = at
-    while (at < text.length && !/[\s,\]}/]/.test(text[at] ?? '')) at += 1
-    if (at === start) throw new Error('a value was expected')
-    return { kind: 'scalar', start, end: at }
+    const value = parseScalar()
+    return { kind: 'scalar', start, end: at, value }
   }
 
   function parseArray(): JsonNode {
     const start = at
     at += 1
     skip()
+    const value: NativeValue[] = []
     if (text[at] === ']') {
       at += 1
-      return { kind: 'array', start, end: at }
+      return { kind: 'array', start, end: at, value }
     }
     for (;;) {
-      parseValue()
+      value.push(parseValue().value)
       skip()
       if (text[at] === ',') {
         at += 1
@@ -124,7 +176,7 @@ function parseJsonDocument(text: string): JsonNode {
       }
       if (text[at] === ']') {
         at += 1
-        return { kind: 'array', start, end: at }
+        return { kind: 'array', start, end: at, value }
       }
       throw new Error('a comma or a closing bracket was expected')
     }
@@ -134,10 +186,11 @@ function parseJsonDocument(text: string): JsonNode {
     const start = at
     at += 1
     const members = new Map<string, { keyStart: number; value: JsonNode }>()
+    const value: { [key: string]: NativeValue } = {}
     skip()
     if (text[at] === '}') {
       at += 1
-      return { kind: 'object', start, end: at, insertAt: start + 1, members }
+      return { kind: 'object', start, end: at, insertAt: start + 1, members, value }
     }
     let insertAt = start + 1
     for (;;) {
@@ -148,9 +201,10 @@ function parseJsonDocument(text: string): JsonNode {
       skip()
       if (text[at] !== ':') throw new Error('a colon was expected after a key')
       at += 1
-      const value = parseValue()
-      members.set(key, { keyStart, value })
-      insertAt = value.end
+      const member = parseValue()
+      members.set(key, { keyStart, value: member })
+      value[key] = member.value
+      insertAt = member.end
       skip()
       if (text[at] === ',') {
         at += 1
@@ -158,7 +212,7 @@ function parseJsonDocument(text: string): JsonNode {
       }
       if (text[at] === '}') {
         at += 1
-        return { kind: 'object', start, end: at, insertAt, members }
+        return { kind: 'object', start, end: at, insertAt, members, value }
       }
       throw new Error('a comma or a closing brace was expected')
     }

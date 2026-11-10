@@ -14,16 +14,21 @@ export interface EnvironmentFileLocation {
   root: string
 }
 
-// The one place that knows where a tier's environment file lives and what its root is, and it is
-// the table a writer asks too: a definition lands in the file this function names for its tier, so
-// the tool that writes and the loader that reads cannot disagree about where a tier is.
+// The committed file's name, and the `.local` suffix that tells the gitignored one apart in a
+// directory listing and in the ignore rule.
+const ENVIRONMENT_FILE = 'agents_environ.toml'
+const ENVIRONMENT_LOCAL_FILE = 'agents_environ.local.toml'
+
+// The one place that knows where a tier's environment file lives and what its root is. The order is
+// the precedence order: a later location shadows an earlier one, so nothing else learns that a
+// third file exists.
 export function environmentFiles(config: EngineConfig): EnvironmentFileLocation[] {
   return [
-    { tier: 'user', file: path.join(config.home, 'agents_environ.toml'), root: config.home },
-    { tier: 'project', file: path.join(config.projectRoot, 'agents_environ.toml'), root: config.projectRoot },
+    { tier: 'user', file: path.join(config.home, ENVIRONMENT_FILE), root: config.home },
+    { tier: 'project', file: path.join(config.projectRoot, ENVIRONMENT_FILE), root: config.projectRoot },
     {
       tier: 'project-local',
-      file: path.join(config.projectRoot, 'agents_environ.local.toml'),
+      file: path.join(config.projectRoot, ENVIRONMENT_LOCAL_FILE),
       root: config.projectRoot,
     },
   ]
@@ -39,18 +44,43 @@ export function resolveDeclaredPath(declared: string, root: string, home: string
   return path.resolve(root, declared)
 }
 
+// A Check's file is declared against the tier's root and every other part of the predicate is a
+// value, so re-pointing a Check is replacing the one path it holds; `onPath` names no file at all.
+function resolveCheck(check: Check, root: string, home: string): Check {
+  if (!('file' in check)) return check
+  return { ...check, file: resolveDeclaredPath(check.file, root, home) }
+}
+
 export interface Environment {
   provisions: ResolvedProvision[]
   refusals: FileRefusal[]
 }
 
+// One entry where the file that won it declared it: the precedence of that file, and the entry's
+// position in it, so a run keeps the winning file's order instead of the order the tiers were read.
+interface PlacedProvision {
+  provision: ResolvedProvision
+  precedence: number
+  position: number
+}
+
+function keyOf(provision: ResolvedProvision): string {
+  // NUL cannot appear in a Provision name or a harness id, so two keys cannot collide.
+  return `${provision.name}\u0000${provision.harness}`
+}
+
 // The user file is read always; a tier with no file declares nothing. A file that cannot be read or
 // does not parse contributes nothing and leaves the other tiers loading, with the fault reported
 // rather than swallowed.
+//
+// Merge is per `(provision, harness)` key with `project-local` > `project` > `user`. The nearer file
+// replaces the entry whole, tags included: every field below is built from the winning declaration,
+// so nothing is inherited field by field from the entry it shadowed and no entry is half one tier
+// and half another.
 export function loadEnvironment(config: EngineConfig): Environment {
-  const provisions: ResolvedProvision[] = []
+  const won = new Map<string, PlacedProvision>()
   const refusals: FileRefusal[] = []
-  for (const location of environmentFiles(config)) {
+  for (const [precedence, location] of environmentFiles(config).entries()) {
     if (!existsSync(location.file)) continue
     let text: string
     try {
@@ -65,22 +95,28 @@ export function loadEnvironment(config: EngineConfig): Environment {
       refusals.push({ source: location.file, ...parsed.refusal })
       continue
     }
+    let position = 0
     for (const declaration of parsed.provisions) {
       for (const entry of declaration.entries) {
-        const file = resolveDeclaredPath(entry.check.file, location.root, config.home)
-        const check: Check = 'contains' in entry.check ? { file, contains: entry.check.contains } : { file }
-        provisions.push({
+        const provision: ResolvedProvision = {
           name: declaration.name,
           tags: declaration.tags,
           harness: entry.harness,
           tier: location.tier,
+          // What a relative `install` path means: the runner starts every command here, so the text
+          // of one command reads the same at two tiers.
           root: location.root,
           source: location.file,
-          check,
+          check: resolveCheck(entry.check, location.root, config.home),
           install: entry.install,
-        })
+        }
+        won.set(keyOf(provision), { provision, precedence, position })
+        position += 1
       }
     }
   }
-  return { provisions, refusals }
+  const ordered = [...won.values()].sort(
+    (left, right) => left.precedence - right.precedence || left.position - right.position,
+  )
+  return { provisions: ordered.map((placed) => placed.provision), refusals }
 }

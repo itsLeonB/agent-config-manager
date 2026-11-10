@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
-import { evaluateCheck } from './check.ts'
+import { checkInputsOf, evaluateCheck } from './check.ts'
+import { recordRun } from './history.ts'
 import { loadEnvironment } from './loader.ts'
-import type { Check, FileRefusal, Presence, ResolvedProvision } from './types.ts'
+import type { Check, EnvironmentTier, FileRefusal, Presence, ResolvedProvision } from './types.ts'
 
 // The run is the only place ACM executes anything. `install` is the single field that reaches a
 // shell, and the text printed is the text run: nothing is interpolated, re-quoted, or evaluated on
@@ -22,6 +22,8 @@ export interface InstallOptions {
   force?: boolean
   // Provision names to restrict the run to. Empty means the whole environment.
   only?: string[]
+  // Only the entries one tier owns after the merge. `--tier` restricts a run the way `--only` does.
+  tier?: EnvironmentTier
 }
 
 export interface InstallEntry {
@@ -55,16 +57,10 @@ interface CommandResult {
   failure: string | null
 }
 
-// The one I/O a Check causes. `null` is a file that is not there, which the evaluator answers as an
-// absence, exactly as `acm status` reads it.
+// The answer a Check gives this run, read the same way `acm status` reads it: one evaluator, one
+// reader, so a run never disagrees with the status that started it.
 function presenceOf(check: Check): Presence {
-  let bytes: string | null
-  try {
-    bytes = readFileSync(check.file, 'utf8')
-  } catch {
-    bytes = null
-  }
-  return evaluateCheck(check, bytes).presence
+  return evaluateCheck(check, checkInputsOf(check)).presence
 }
 
 // A name and a command come from a file, so control characters in them would forge or corrupt the
@@ -160,15 +156,20 @@ export function installRun(
     dryRun: isDryRun,
     exitCode,
   })
+  // The tier narrows the environment before anything else reads it, so a name it leaves out is a
+  // name this run cannot reach and says so instead of running nothing quietly.
+  const scoped =
+    options.tier === undefined
+      ? environment.provisions
+      : environment.provisions.filter((entry) => entry.tier === options.tier)
   // A name that matches no Provision is a typo, not an empty environment: running the rest would
   // look like the named fix succeeded.
-  const missing = only.filter((name) => !environment.provisions.some((entry) => entry.name === name))
+  const missing = only.filter((name) => !scoped.some((entry) => entry.name === name))
   if (missing.length > 0) {
     write(`no Provision named ${missing.join(', ')}\n`)
     return outcome([], 1, dryRun)
   }
-  const selected =
-    only.length === 0 ? environment.provisions : environment.provisions.filter((entry) => only.includes(entry.name))
+  const selected = only.length === 0 ? scoped : scoped.filter((entry) => only.includes(entry.name))
   const planned: Planned[] = selected.map((provision) => {
     const presence = presenceOf(provision.check)
     return { provision, presence, skip: presence === 'present' && options.force !== true }
@@ -192,10 +193,14 @@ export function installRun(
     const command = spawnInstall(item.provision)
     // The answer after the command, not before and not the command's report of itself: a command
     // that half-worked is present if its Check now passes.
+    const after = presenceOf(item.provision.check)
+    // Recorded now, before the next command starts: the row is committed on its own, so an
+    // interrupted run keeps the history of the commands that had already finished.
+    recordRun(item.provision, command.status, after, config)
     entries.push({
       provision: item.provision,
       before: item.presence,
-      after: presenceOf(item.provision.check),
+      after,
       attempted: true,
       commandExit: command.status,
       failure: command.failure,

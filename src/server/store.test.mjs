@@ -106,10 +106,123 @@ test('a version 1 database keeps its snapshots and settings, and loses the inven
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all()
       .map((row) => row.name)
-    assert.deepEqual(tables, ['config', 'snapshots'])
-    assert.strictEqual(migrated.prepare('PRAGMA user_version').get().user_version, 2)
+    assert.deepEqual(tables, ['config', 'runs', 'snapshots'])
+    assert.strictEqual(migrated.prepare('PRAGMA user_version').get().user_version, 3)
   } finally {
     migrated.close()
+  }
+})
+
+test('a version 2 database gains runs and keeps its dashboard rows', () => {
+  const file = tempDb()
+  // The database as migration 2 left it: snapshots and config holding rows, no runs yet.
+  const previous = new DatabaseSync(file)
+  previous.exec(`
+    CREATE TABLE snapshots (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    PRAGMA user_version = 2;
+    INSERT INTO snapshots (created_at, kind, data) VALUES ('2024-01-01T00:00:00.000Z', 'local', '{"n":2}');
+    INSERT INTO config (key, value) VALUES ('skipPaths', '["/tmp"]');
+  `)
+  previous.close()
+
+  const store = openStore(file)
+  try {
+    assert.deepStrictEqual(store.readLatestSnapshot('local'), { n: 2 })
+    assert.deepStrictEqual(store.readConfig('skipPaths'), ['/tmp'])
+    assert.deepEqual(store.readLatestRuns(), [])
+    store.recordRun({
+      at: '2024-01-02T00:00:00.000Z',
+      provision: 'serena',
+      harness: 'pi',
+      tier: 'user',
+      command: 'pi plugin install serena',
+      exitCode: 0,
+      presence: 'present',
+    })
+  } finally {
+    store.close()
+  }
+
+  const migrated = new DatabaseSync(file)
+  try {
+    assert.strictEqual(migrated.prepare('PRAGMA user_version').get().user_version, 3)
+    const tables = migrated
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all()
+      .map((row) => row.name)
+    assert.deepEqual(tables, ['config', 'runs', 'snapshots'])
+  } finally {
+    migrated.close()
+  }
+})
+
+test('a run reads back whole, and only the newest run per entry is the latest', () => {
+  const file = tempDb()
+  const store = openStore(file)
+  try {
+    assert.deepEqual(store.readLatestRuns(), [])
+
+    store.recordRun({
+      at: '2024-01-01T00:00:00.000Z',
+      provision: 'serena',
+      harness: 'pi',
+      tier: 'user',
+      command: 'pi plugin install serena',
+      exitCode: 1,
+      presence: 'absent',
+    })
+    store.recordRun({
+      at: '2024-01-02T00:00:00.000Z',
+      provision: 'serena',
+      harness: 'codex',
+      tier: 'project',
+      command: 'python3 merge-codex-mcp.py serena',
+      exitCode: null,
+      presence: 'unknown',
+    })
+    store.recordRun({
+      at: '2024-01-03T00:00:00.000Z',
+      provision: 'serena',
+      harness: 'pi',
+      tier: 'user',
+      command: 'pi plugin install serena',
+      exitCode: 0,
+      presence: 'present',
+    })
+
+    // `exitCode` null is a command a signal ended, and it comes back as null rather than as 0.
+    assert.deepEqual(store.readLatestRuns(), [
+      {
+        at: '2024-01-03T00:00:00.000Z',
+        provision: 'serena',
+        harness: 'pi',
+        tier: 'user',
+        command: 'pi plugin install serena',
+        exitCode: 0,
+        presence: 'present',
+      },
+      {
+        at: '2024-01-02T00:00:00.000Z',
+        provision: 'serena',
+        harness: 'codex',
+        tier: 'project',
+        command: 'python3 merge-codex-mcp.py serena',
+        exitCode: null,
+        presence: 'unknown',
+      },
+    ])
+  } finally {
+    store.close()
+  }
+
+  // History is the point: a reopen still answers with the run, and the newest is the one read.
+  const reopened = openStore(file)
+  try {
+    assert.equal(reopened.readLatestRuns().length, 2)
+    assert.equal(reopened.readLatestRuns()[0].at, '2024-01-03T00:00:00.000Z')
+  } finally {
+    reopened.close()
   }
 })
 

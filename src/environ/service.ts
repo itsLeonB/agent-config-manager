@@ -1,10 +1,15 @@
-import { readFileSync } from 'node:fs'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
-import { evaluateCheck } from './check.ts'
+import { checkInputsOf, evaluateCheck } from './check.ts'
 import { loadEnvironment } from './loader.ts'
-import type { FileRefusal, ProvisionRow } from './types.ts'
+import type {
+  EnvironmentTier,
+  FileRefusal,
+  ProvisionDocumentRow,
+  ProvisionRow,
+  Run,
+} from './types.ts'
 
 // The environment's whole public surface. The CLI and the MCP face import this module and nothing
 // below it: the parser, the evaluator, and the loader are implementation, and a face that reached
@@ -14,8 +19,10 @@ import type { FileRefusal, ProvisionRow } from './types.ts'
 // machine's now rather than a remembered one.
 
 // The closed harness list, re-exported because it is the filter's domain and a face may not reach
-// into the engine to spell it.
+// into the engine to spell it. The tier list is re-exported for the same reason.
 export { HARNESSES } from '../engine/adapters/types.ts'
+export { ENVIRONMENT_TIERS } from './types.ts'
+export type { EnvironmentTier } from './types.ts'
 
 // A native read reuses the harness readers and answers live: nothing is stored, and no Install
 // command is read or run. Re-exported so both faces ask the service, never an adapter.
@@ -26,19 +33,20 @@ export { readNativeConfig } from './native-read.ts'
 export { defineProvision } from './define.ts'
 export type { DefineOutcome, DefineRequest } from './define.ts'
 
-// The tier names are the file's own vocabulary, re-exported for the same reason as the harness list:
-// a face filters on them and may not spell the domain itself.
-export { ENVIRONMENT_TIERS } from './types.ts'
-
 // The run is the one command that executes anything, and it answers through this module like every
 // other part of the environment. It is a CLI surface only: nothing the MCP face registers can start
 // one.
 export { installRun } from './runner.ts'
 export type { InstallEntry, InstallOptions, InstallOutcome } from './runner.ts'
 
+// The history a run leaves. It is read through this module so a face never opens the store itself.
+export { latestRuns } from './history.ts'
+
 export interface StatusFilter {
   harness?: HarnessId
   name?: string
+  // Only the entries a tier owns after the merge, which is what `--tier` asks for.
+  tier?: EnvironmentTier
 }
 
 export interface Status {
@@ -52,17 +60,7 @@ export interface Status {
 }
 
 export interface StatusDocument {
-  provisions: ProvisionRow[]
-}
-
-// A Check names one file and this is its only I/O: no process, no network, no write. A file that is
-// not there is `null`, which the evaluator answers as an absence.
-function checkBytes(file: string): string | null {
-  try {
-    return readFileSync(file, 'utf8')
-  } catch {
-    return null
-  }
+  provisions: ProvisionDocumentRow[]
 }
 
 export function readStatus(filter: StatusFilter = {}, config: EngineConfig = resolveDefaultConfig()): Status {
@@ -71,11 +69,12 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
   for (const provision of environment.provisions) {
     if (filter.name !== undefined && filter.name !== provision.name) continue
     if (filter.harness !== undefined && filter.harness !== provision.harness) continue
+    if (filter.tier !== undefined && filter.tier !== provision.tier) continue
     // Grouping keeps file order: a Provision's entries are the ones the file declares for it, in the
     // order it declares them, and a repeated harness would be a duplicate key the file cannot hold.
     const row = rows.get(provision.name) ?? { name: provision.name, tags: provision.tags, harnesses: [] }
     rows.set(provision.name, row)
-    const answer = evaluateCheck(provision.check, checkBytes(provision.check.file))
+    const answer = evaluateCheck(provision.check, checkInputsOf(provision.check))
     row.harnesses.push({
       harness: provision.harness,
       tier: provision.tier,
@@ -93,9 +92,28 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
 }
 
 // The same rows as data, for `--json` and for the MCP tool: one document, so a script and an agent
-// read the answer a human reads.
-export function statusDocument(status: Status): StatusDocument {
-  return { provisions: status.provisions }
+// read the answer a human reads. `runs` is the most recent Run per (Provision, harness) — the caller
+// passes the history it wants shown, so the printed status stays Presence alone.
+function runKey(provision: string, harness: string): string {
+  // A space is legal in neither a Provision name nor a harness id, so it cannot make two entries
+  // collide.
+  return `${provision} ${harness}`
+}
+
+export function statusDocument(status: Status, runs: Run[] = []): StatusDocument {
+  const latest = new Map(runs.map((run) => [runKey(run.provision, run.harness), run]))
+  return {
+    provisions: status.provisions.map((row) => ({
+      name: row.name,
+      tags: row.tags,
+      harnesses: row.harnesses.map((entry) => {
+        const run = latest.get(runKey(row.name, entry.harness))
+        // An entry with no Run has no key, not a null one: the tool answer the spec declares is
+        // Presence and detail, and a caller that asked for no history gets exactly that.
+        return run === undefined ? entry : { ...entry, latestRun: run }
+      }),
+    })),
+  }
 }
 
 export function formatRefusal(refusal: FileRefusal): string {

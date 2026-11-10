@@ -40,13 +40,14 @@ decisions.
 
 - **`src/server/store.cjs` is the only module that touches `node:sqlite`.** It stays plain
   CJS so the TypeScript app can load it and `scan.cjs` can require it, and it holds
-  everything the app persists: scan snapshots and the `config` rows behind `/settings`.
+  everything the app persists: scan snapshots, the `config` rows behind `/settings`, and the `runs`
+  history of Install commands.
   `PRAGMA user_version` gates an ordered migration list run on every
   open, so a fresh database and an existing one reach the same schema; migration 1 is pure
-  `CREATE TABLE IF NOT EXISTS` next to `snapshots` / `config`, which therefore keep their rows, and
+  `CREATE TABLE IF NOT EXISTS` next to `snapshots` / `config`, which therefore keep their rows,
   migration 2 drops the previous engine's inventory tables in four `DROP TABLE IF EXISTS`
-  statements. Every write transaction opens with `BEGIN IMMEDIATE`, because the CLI, the MCP
-  server, and the scanner all open the file.
+  statements, and migration 3 adds `runs` without naming either dashboard table. Every write opens
+  with `BEGIN IMMEDIATE`, because the CLI, the MCP server, and the scanner all open the file.
 - **The engine is a library of readers, and the environment is what runs on it.**
   `src/engine/config.ts` resolves the roots an adapter never reads itself (home, project root,
   store path, `CODEX_HOME`); `src/engine/adapters/` holds one directory per harness (Pi, Codex,
@@ -72,7 +73,10 @@ decisions.
   declared environment: `parse.ts` validates one environment file totally against a closed schema
   and refuses the whole file with a line and column, `check.ts` evaluates a Check over the bytes it
   names (a Check reads and never spawns), `loader.ts` is the only module that knows where a tier's
-  file lives and what its root is, and `service.ts` is everything a face may call — the rows, one
+  file lives and what its root is — `~/agents_environ.toml`, the committed
+  `<project>/agents_environ.toml`, and the gitignored `<project>/agents_environ.local.toml`, merged
+  per `(provision, harness)` so the nearer file replaces the farther one whole, `tags` included —
+  and `service.ts` is everything a face may call — the rows, one
   Presence per harness, the printing, and the JSON. `src/mcp/router.ts` is the MCP face and
   `src/mcp/server.ts` puts it on a stdio transport behind `acm mcp serve`; the router registers
   `list_provisions`, which answers from that service, and neither face imports an adapter, a store
