@@ -1,5 +1,5 @@
-import { statSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, statSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { formatOf, readPointer } from '../engine/edit.ts'
 import type { Check, CheckAnswer } from './types.ts'
@@ -15,6 +15,21 @@ export interface CheckInputs {
   bytes: string | null
   // The directories `PATH` names, in order.
   pathDirs: readonly string[]
+}
+
+// The inputs a running acm hands its own evaluator: the bytes the file has on this machine, and this
+// process's `PATH`. Reading that file is the whole I/O a Check causes, besides the `PATH` walk a
+// name lookup makes; a caller that has the bytes already passes its own inputs instead.
+export function checkInputsOf(check: Check): CheckInputs {
+  let bytes: string | null = null
+  if ('file' in check) {
+    try {
+      bytes = readFileSync(check.file, 'utf8')
+    } catch {
+      bytes = null
+    }
+  }
+  return { bytes, pathDirs: (process.env.PATH ?? '').split(delimiter) }
 }
 
 export function evaluateCheck(check: Check, inputs: CheckInputs): CheckAnswer {
