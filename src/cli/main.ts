@@ -1,22 +1,46 @@
 #!/usr/bin/env node
 import { statSync } from 'node:fs'
 import path from 'node:path'
-import { formatRefusal, formatStatus, installRun, readStatus, statusDocument } from '../environ/service.ts'
+import { ENVIRONMENT_TIERS, formatRefusal, formatStatus, installRun, readStatus, statusDocument } from '../environ/service.ts'
+import type { EnvironmentTier } from '../environ/service.ts'
 
 const USAGE = `usage: acm <command> [--project-root <dir>]
 
   --project-root <dir>  read that project's config instead of the working directory's
 
-  status [--json]  print every Provision and the Presence of each harness's entry
+  status [--json] [--tier <tier>]
+                    print every Provision and the Presence of each harness's entry
+                    --tier  only the entries this tier owns: ${ENVIRONMENT_TIERS.join(', ')}
 
-  install [--dry-run] [--force] [--only <name>]...
+  install [--dry-run] [--force] [--only <name>]... [--tier <tier>]
                     run every Install command whose Presence is not present
                     --dry-run  print the plan and stop (the default when stdin is not a TTY)
                     --force    run even what is already present
                     --only     restrict the run to the named Provision; repeatable
+                    --tier     restrict the run to one tier
 
   mcp serve  speak the MCP protocol over stdin/stdout
 `
+
+interface TierFlag {
+  argv: string[]
+  tier?: EnvironmentTier
+}
+
+// `--tier` names one of the closed list. A name outside it is refused rather than ignored: a filter
+// that silently matched nothing would print an empty environment and read as "nothing declared".
+function withoutTier(argv: string[]): TierFlag | null {
+  const at = argv.findIndex((arg) => arg === '--tier' || arg.startsWith('--tier='))
+  if (at === -1) return { argv }
+  const arg = argv[at]
+  const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[at + 1]
+  const tier = ENVIRONMENT_TIERS.find((candidate) => candidate === value)
+  if (tier === undefined) return null
+  return {
+    argv: arg.includes('=') ? [...argv.slice(0, at), ...argv.slice(at + 1)] : [...argv.slice(0, at), ...argv.slice(at + 2)],
+    tier,
+  }
+}
 
 // The project a pass reads is the working directory, so a caller aiming elsewhere names it here.
 // The flag is stripped before dispatch: the engine reads the override from the environment.
@@ -60,13 +84,19 @@ function main(input: string[]): number | Promise<number> {
 // answer. A refused environment file makes the command fail: an environment acm could not read is
 // not an environment with nothing in it, and a script that ignored the difference would converge
 // half a machine.
-function status(rest: string[]): number {
+function status(input: string[]): number {
+  const flag = withoutTier(input)
+  if (flag === null) {
+    process.stderr.write(`--tier takes one of ${ENVIRONMENT_TIERS.join(', ')}\n`)
+    return 1
+  }
+  const rest = flag.argv
   const unknown = rest.find((arg) => arg !== '--json')
   if (unknown !== undefined) {
     process.stderr.write(`status takes --json, not ${unknown}\n`)
     return 1
   }
-  const answer = readStatus()
+  const answer = readStatus({ tier: flag.tier })
   for (const refusal of answer.refusals) process.stderr.write(`${formatRefusal(refusal)}\n`)
   process.stdout.write(
     rest.includes('--json') ? `${JSON.stringify(statusDocument(answer), null, 2)}\n` : formatStatus(answer),
@@ -77,7 +107,13 @@ function status(rest: string[]): number {
 // Install runs the environment, so it is the only subcommand that executes anything and the only
 // one a human starts. The flags decide what happens; the runner decides the rest, including that a
 // non-TTY stdin means a dry run.
-function install(rest: string[]): number {
+function install(input: string[]): number {
+  const flag = withoutTier(input)
+  if (flag === null) {
+    process.stderr.write(`--tier takes one of ${ENVIRONMENT_TIERS.join(', ')}\n`)
+    return 1
+  }
+  const rest = flag.argv
   let dryRun: boolean | undefined
   let force = false
   const only: string[] = []
@@ -101,10 +137,10 @@ function install(rest: string[]): number {
       at += 1
       continue
     }
-    process.stderr.write(`install takes --dry-run, --force and --only, not ${arg}\n`)
+    process.stderr.write(`install takes --dry-run, --force, --only and --tier, not ${arg}\n`)
     return 1
   }
-  const outcome = installRun((text) => process.stdout.write(text), { dryRun, force, only })
+  const outcome = installRun((text) => process.stdout.write(text), { dryRun, force, only, tier: flag.tier })
   // A refused file contributed nothing, so the run it produced was not the one the machine declares.
   for (const refusal of outcome.refusals) process.stderr.write(`${formatRefusal(refusal)}\n`)
   return outcome.exitCode

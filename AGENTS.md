@@ -72,7 +72,10 @@ decisions.
   declared environment: `parse.ts` validates one environment file totally against a closed schema
   and refuses the whole file with a line and column, `check.ts` evaluates a Check over the bytes it
   names (a Check reads and never spawns), `loader.ts` is the only module that knows where a tier's
-  file lives and what its root is, and `service.ts` is everything a face may call — the rows, one
+  file lives and what its root is — `~/agents_environ.toml`, the committed
+  `<project>/agents_environ.toml`, and the gitignored `<project>/agents_environ.local.toml`, merged
+  per `(provision, harness)` so the nearer file replaces the farther one whole, `tags` included —
+  and `service.ts` is everything a face may call — the rows, one
   Presence per harness, the printing, and the JSON. `src/mcp/router.ts` is the MCP face and
   `src/mcp/server.ts` puts it on a stdio transport behind `acm mcp serve`; the router registers
   `list_provisions`, which answers from that service, and neither face imports an adapter, a store

@@ -4,7 +4,7 @@ import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { evaluateCheck } from './check.ts'
 import { loadEnvironment } from './loader.ts'
-import type { Check, FileRefusal, Presence, ResolvedProvision } from './types.ts'
+import type { Check, EnvironmentTier, FileRefusal, Presence, ResolvedProvision } from './types.ts'
 
 // The run is the only place ACM executes anything. `install` is the single field that reaches a
 // shell, and the text printed is the text run: nothing is interpolated, re-quoted, or evaluated on
@@ -22,6 +22,8 @@ export interface InstallOptions {
   force?: boolean
   // Provision names to restrict the run to. Empty means the whole environment.
   only?: string[]
+  // Only the entries one tier owns after the merge. `--tier` restricts a run the way `--only` does.
+  tier?: EnvironmentTier
 }
 
 export interface InstallEntry {
@@ -160,15 +162,20 @@ export function installRun(
     dryRun: isDryRun,
     exitCode,
   })
+  // The tier narrows the environment before anything else reads it, so a name it leaves out is a
+  // name this run cannot reach and says so instead of running nothing quietly.
+  const scoped =
+    options.tier === undefined
+      ? environment.provisions
+      : environment.provisions.filter((entry) => entry.tier === options.tier)
   // A name that matches no Provision is a typo, not an empty environment: running the rest would
   // look like the named fix succeeded.
-  const missing = only.filter((name) => !environment.provisions.some((entry) => entry.name === name))
+  const missing = only.filter((name) => !scoped.some((entry) => entry.name === name))
   if (missing.length > 0) {
     write(`no Provision named ${missing.join(', ')}\n`)
     return outcome([], 1, dryRun)
   }
-  const selected =
-    only.length === 0 ? environment.provisions : environment.provisions.filter((entry) => only.includes(entry.name))
+  const selected = only.length === 0 ? scoped : scoped.filter((entry) => only.includes(entry.name))
   const planned: Planned[] = selected.map((provision) => {
     const presence = presenceOf(provision.check)
     return { provision, presence, skip: presence === 'present' && options.force !== true }
