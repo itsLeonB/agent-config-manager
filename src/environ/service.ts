@@ -1,8 +1,9 @@
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
-import { checkInputsOf, evaluateCheck } from './check.ts'
-import { loadEnvironment } from './loader.ts'
+import { evaluate } from './check.ts'
+import { entryKey, loadEnvironment } from './loader.ts'
+import { counted, printable } from './print.ts'
 import type {
   EnvironmentTier,
   FileRefusal,
@@ -74,7 +75,7 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
     // order it declares them, and a repeated harness would be a duplicate key the file cannot hold.
     const row = rows.get(provision.name) ?? { name: provision.name, tags: provision.tags, harnesses: [] }
     rows.set(provision.name, row)
-    const answer = evaluateCheck(provision.check, checkInputsOf(provision.check))
+    const answer = evaluate(provision.check)
     row.harnesses.push({
       harness: provision.harness,
       tier: provision.tier,
@@ -94,20 +95,14 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
 // The same rows as data, for `--json` and for the MCP tool: one document, so a script and an agent
 // read the answer a human reads. `runs` is the most recent Run per (Provision, harness) — the caller
 // passes the history it wants shown, so the printed status stays Presence alone.
-function runKey(provision: string, harness: string): string {
-  // A space is legal in neither a Provision name nor a harness id, so it cannot make two entries
-  // collide.
-  return `${provision} ${harness}`
-}
-
 export function statusDocument(status: Status, runs: Run[] = []): StatusDocument {
-  const latest = new Map(runs.map((run) => [runKey(run.provision, run.harness), run]))
+  const latest = new Map(runs.map((run) => [entryKey(run.provision, run.harness), run]))
   return {
     provisions: status.provisions.map((row) => ({
       name: row.name,
       tags: row.tags,
       harnesses: row.harnesses.map((entry) => {
-        const run = latest.get(runKey(row.name, entry.harness))
+        const run = latest.get(entryKey(row.name, entry.harness))
         // An entry with no Run has no key, not a null one: the tool answer the spec declares is
         // Presence and detail, and a caller that asked for no history gets exactly that.
         return run === undefined ? entry : { ...entry, latestRun: run }
@@ -127,20 +122,9 @@ function footer(status: Status): string {
   return `${counted(entries, 'entry', 'entries')} over ${counted(status.provisions.length, 'provision', 'provisions')} · project ${shorten(status.projectRoot, status.home)} · store ${shorten(status.storePath, status.home)}`
 }
 
-function counted(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`
-}
-
 function shorten(file: string, home: string): string {
   // The separator matters: `/home/ann` is not the home directory of `/home/anna`.
   return file === home || file.startsWith(`${home}/`) ? `~${file.slice(home.length)}` : file
-}
-
-// A Provision name and a Check's detail come from a file, so control characters in them would forge
-// or corrupt the row they are printed in.
-function printable(value: string): string {
-  // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?')
 }
 
 // A pure function of the rows and the paths they were read from: tickets 04 to 06 reuse it rather

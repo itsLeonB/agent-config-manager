@@ -24,7 +24,7 @@ export function readInstructionTier(tier: Tier): TierRead {
       tierId: tier.id,
       nativeFile: file,
       nativePointer: '',
-      knownFieldsJson: JSON.stringify({
+      factsJson: JSON.stringify({
         body: verdict === 'clean' ? text : withheldMarker(verdict),
       }),
       contentDigest: digestOfPath(file) ?? '',

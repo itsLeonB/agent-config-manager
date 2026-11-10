@@ -25,7 +25,7 @@ const USAGE = `usage: acm <command> [--project-root <dir>]
 
   install [--dry-run] [--force] [--only <name>]... [--tier <tier>]
                     run every Install command whose Presence is not present
-                    --dry-run  print the plan and stop (the default when stdin is not a TTY)
+                    --dry-run  print the preview and stop (the default when stdin is not a TTY)
                     --force    run even what is already present
                     --only     restrict the run to the named Provision; repeatable
                     --tier     restrict the run to one tier

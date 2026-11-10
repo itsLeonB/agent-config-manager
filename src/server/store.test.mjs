@@ -4,13 +4,87 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { openStore } from './store.cjs'
+import { openStore, writeTransaction } from './store.cjs'
 import { DatabaseSync } from 'node:sqlite'
 
 function tempDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-store-test-'))
   return path.join(dir, 'dashboard.db')
 }
+
+const RUN = {
+  at: '2024-01-01T00:00:00.000Z',
+  provision: 'serena',
+  harness: 'pi',
+  tier: 'user',
+  command: 'pi plugin install serena',
+  exitCode: 0,
+  presence: 'present',
+}
+
+test('a write that throws rolls back every row it opened with', () => {
+  const db = new DatabaseSync(tempDb())
+  try {
+    db.exec('CREATE TABLE probe (value TEXT NOT NULL)')
+    const insert = db.prepare('INSERT INTO probe (value) VALUES (?)')
+    // Two statements, one helper call: the first must not survive the second failing, or the
+    // "transaction" is autocommit under another name.
+    assert.throws(() =>
+      writeTransaction(db, () => {
+        insert.run('landed')
+        insert.run(null)
+      }),
+    )
+    assert.deepStrictEqual(db.prepare('SELECT value FROM probe').all(), [])
+    // And the connection is usable afterwards, which is what the rollback is for.
+    writeTransaction(db, () => insert.run('after'))
+    assert.deepStrictEqual(
+      db.prepare('SELECT value FROM probe').all().map((row) => row.value),
+      ['after'],
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('a write that fails leaves no run behind, and the next run still lands', () => {
+  const store = openStore(tempDb())
+  try {
+    // `presence` is NOT NULL, so this INSERT fails inside the transaction the store opened. A
+    // transaction left open by a missing rollback fails the next write instead of this one.
+    assert.throws(() => store.recordRun({ ...RUN, presence: null }))
+    assert.deepStrictEqual(store.readLatestRuns(), [])
+    store.recordRun(RUN)
+    assert.strictEqual(store.readLatestRuns().length, 1)
+  } finally {
+    store.close()
+  }
+})
+
+test('two openers both write the same file without SQLITE_BUSY', () => {
+  const file = tempDb()
+  const one = openStore(file)
+  const two = openStore(file)
+  try {
+    for (let index = 0; index < 20; index++) {
+      one.saveSnapshot('local', { from: 'one', index })
+      two.saveSnapshot('local', { from: 'two', index })
+      one.writeConfig('scanIntervalMinutes', index)
+      two.writeConfig('skipPaths', [String(index)])
+      one.recordRun({ ...RUN, exitCode: index })
+      two.recordRun({ ...RUN, command: 'other', exitCode: index })
+    }
+    assert.deepStrictEqual(one.readLatestSnapshot('local'), { from: 'two', index: 19 })
+    assert.strictEqual(two.readConfig('scanIntervalMinutes'), 19)
+    assert.deepStrictEqual(one.readConfig('skipPaths'), ['19'])
+    const runs = two.readLatestRuns()
+    assert.strictEqual(runs.length, 1)
+    assert.strictEqual(runs[0].exitCode, 19)
+  } finally {
+    one.close()
+    two.close()
+  }
+})
 
 test('a saved snapshot reads back', () => {
   const store = openStore(tempDb())

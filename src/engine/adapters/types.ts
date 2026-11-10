@@ -46,7 +46,7 @@ export interface DiscoveredDeclaration {
   tierId: string
   nativeFile: string
   nativePointer: string
-  knownFieldsJson: string
+  factsJson: string
   contentDigest: string
 }
 

@@ -8,11 +8,19 @@ import type { Check, CheckAnswer } from './types.ts'
 // define a Check, so evaluating one has to be inert by construction rather than by convention — the
 // `PATH` walk below is `stat`, never `which`.
 
+// What a Check's own file answered: the bytes it read, nothing at all because no file is there, or
+// the reason it could not be read. `unreadable` is an answer in its own right, so a file this process
+// could not look at never reaches `absent`.
+export type FileInput =
+  | { kind: 'read'; bytes: string }
+  | { kind: 'absent' }
+  | { kind: 'unreadable'; detail: string }
+
 // Everything a Check may consult, handed in rather than read here: a test supplies fixture bytes and
 // a temp directory standing in for `PATH`, and no part of this module reaches for a real one.
 export interface CheckInputs {
-  // `null` means the file was not there, which is an absence and not an unanswered question.
-  bytes: string | null
+  // What the Check's file answered. A Check that names no file (`onPath`) never looks at it.
+  file: FileInput
   // The directories `PATH` names, in order.
   pathDirs: readonly string[]
 }
@@ -21,21 +29,42 @@ export interface CheckInputs {
 // process's `PATH`. Reading that file is the whole I/O a Check causes, besides the `PATH` walk a
 // name lookup makes; a caller that has the bytes already passes its own inputs instead.
 export function checkInputsOf(check: Check): CheckInputs {
-  let bytes: string | null = null
-  if ('file' in check) {
-    try {
-      bytes = readFileSync(check.file, 'utf8')
-    } catch {
-      bytes = null
-    }
+  return {
+    file: 'file' in check ? readDeclaredFile(check.file) : { kind: 'absent' },
+    pathDirs: (process.env.PATH ?? '').split(delimiter),
   }
-  return { bytes, pathDirs: (process.env.PATH ?? '').split(delimiter) }
+}
+
+// One Check's answer on this machine. The status and the run both ask here, so two faces cannot
+// disagree about what the same Check says.
+export function evaluate(check: Check): CheckAnswer {
+  return evaluateCheck(check, checkInputsOf(check))
+}
+
+// The one read a Check causes. A file that is not there is an answer — nothing is installed — while
+// every other failure means the file may hold what the Check asks about and this process could not
+// look: a directory where a file was named, a permission bit, an I/O error. Answering `absent` for
+// those is the inversion the third Presence value exists to prevent.
+function readDeclaredFile(file: string): FileInput {
+  try {
+    return { kind: 'read', bytes: readFileSync(file, 'utf8') }
+  } catch (error) {
+    if (error instanceof Error && isNotFound(error)) return { kind: 'absent' }
+    const cause = error instanceof Error ? error.message : String(error)
+    return { kind: 'unreadable', detail: `${file} could not be read: ${cause}` }
+  }
+}
+
+function isNotFound(error: Error): boolean {
+  return 'code' in error && error.code === 'ENOENT'
 }
 
 export function evaluateCheck(check: Check, inputs: CheckInputs): CheckAnswer {
   if ('onPath' in check) return onPath(check.onPath, inputs.pathDirs)
-  const { bytes } = inputs
-  if (bytes === null) return { presence: 'absent', detail: null }
+  const { file } = inputs
+  if (file.kind === 'unreadable') return { presence: 'unknown', detail: file.detail }
+  if (file.kind === 'absent') return { presence: 'absent', detail: null }
+  const { bytes } = file
   if ('contains' in check) return containsAnswer(check.contains, bytes)
   if (!('pointer' in check)) return { presence: 'present', detail: null }
   const read = readPointer(bytes, formatOf(check.file), check.pointer.split('.'))

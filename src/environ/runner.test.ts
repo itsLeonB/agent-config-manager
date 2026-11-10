@@ -11,7 +11,7 @@ import type { InstallOptions, InstallOutcome } from './service.ts'
 
 // Seam A: one run against a fixture. A temp home, a temp project root, a hand-written environment
 // file, and shell scripts that record what happened — the order they ran in, the directory they ran
-// in, and whether they were reached at all. The assertions are the printed plan and summary, the
+// in, and whether they were reached at all. The assertions are the printed preview and summary, the
 // bytes a command left, and the exit status; nothing here inspects how the runner got there.
 
 interface Fixture {
@@ -72,7 +72,7 @@ function sawDirectory(f: Fixture, marker: string): string {
 interface Observation {
   outcome: InstallOutcome
   printed: string
-  // What the log held when the runner first wrote anything out: the plan, on a run that has not
+  // What the log held when the runner first wrote anything out: the preview, on a run that has not
   // started a command yet.
   logAtFirstWrite: string
 }
@@ -111,7 +111,7 @@ process.stdout.write('EXIT ' + outcome.exitCode + '\\n')
   return target
 }
 
-test('the plan prints every Provision, harness, tier and command before the first command starts', () => {
+test('the preview prints every Provision, harness, tier and command before the first command starts', () => {
   const f = fixture()
   const command = recorder(f)
   file(path.join(f.home, '.zshrc'), 'export ALREADY=1\n')
@@ -130,9 +130,9 @@ check   = { file = "~/.zshrc", contains = "ALREADY" }
 install = "${command} third"
 `)
   const { printed, logAtFirstWrite, outcome } = run(f)
-  // The exact command, not a description of it, and a Present Provision still on the plan: what a
+  // The exact command, not a description of it, and a Present Provision still in the preview: what a
   // run will not do is part of what a human reviews.
-  assert.match(printed, /^plan: 3 planned, 2 to run, 1 already present$/m)
+  assert.match(printed, /^preview: 3 entries, 2 to run, 1 already present$/m)
   assert.match(printed, /^  first\s+pi\s+user\s+absent$/m)
   assert.match(printed, /^    \$ \.\/record\.sh first$/m)
   assert.match(printed, /^  second\s+codex\s+user\s+absent$/m)
@@ -226,7 +226,7 @@ install = "echo two > two.marker"
 `)
   const { printed, outcome } = run(f)
   assert.equal(outcome.exitCode, 0)
-  assert.match(printed, /^summary: 2 planned, 0 already present, 2 ran, 0 failed, 0 still absent$/m)
+  assert.match(printed, /^summary: 2 entries, 0 already present, 2 ran, 0 failed, 0 still absent$/m)
   assert.match(printed, /^  still absent: none$/m)
   assert.deepEqual(
     outcome.entries.map((entry) => entry.after),
@@ -290,7 +290,7 @@ install = "${command} two; echo x > two.marker"
 `)
   const narrowed = run(f, { only: ['one'] })
   assert.deepEqual(logLines(f), ['one'])
-  assert.match(narrowed.printed, /^plan: 1 planned, 1 to run, 0 already present$/m)
+  assert.match(narrowed.printed, /^preview: 1 entry, 1 to run, 0 already present$/m)
   assert.equal(narrowed.outcome.exitCode, 0)
 
   fs.rmSync(f.log)

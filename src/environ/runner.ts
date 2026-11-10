@@ -1,17 +1,18 @@
 import { spawnSync } from 'node:child_process'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
-import { checkInputsOf, evaluateCheck } from './check.ts'
+import { evaluate } from './check.ts'
 import { recordRun } from './history.ts'
 import { loadEnvironment } from './loader.ts'
-import type { Check, EnvironmentTier, FileRefusal, Presence, ResolvedProvision } from './types.ts'
+import { counted, printable } from './print.ts'
+import type { EnvironmentTier, FileRefusal, Presence, ResolvedProvision } from './types.ts'
 
 // The run is the only place ACM executes anything. `install` is the single field that reaches a
 // shell, and the text printed is the text run: nothing is interpolated, re-quoted, or evaluated on
 // the way. A Check still only reads, so the Presence a run reports is the files' answer rather than
 // the command's own word for what it did.
 //
-// A run is a function of the environment plus the filesystem: the plan is read and printed before
+// A run is a function of the environment plus the filesystem: the preview is read and printed before
 // the first command starts, the commands go in loader order, and a Present Provision is left alone
 // unless the caller runs everything.
 
@@ -45,7 +46,7 @@ export interface InstallOutcome {
   exitCode: number
 }
 
-interface Planned {
+interface Previewed {
   provision: ResolvedProvision
   presence: Presence
   skip: boolean
@@ -57,35 +58,22 @@ interface CommandResult {
   failure: string | null
 }
 
-// The answer a Check gives this run, read the same way `acm status` reads it: one evaluator, one
-// reader, so a run never disagrees with the status that started it.
-function presenceOf(check: Check): Presence {
-  return evaluateCheck(check, checkInputsOf(check)).presence
-}
-
-// A name and a command come from a file, so control characters in them would forge or corrupt the
-// line they are printed in.
-function printable(value: string): string {
-  // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?')
-}
-
 function label(provision: ResolvedProvision): string {
   return `${printable(provision.name)} (${provision.harness})`
 }
 
 // Every Provision, harness, tier, and the exact command, all of it before anything runs. A Present
 // Provision is still printed: what a run will not do is part of what a human reviews.
-function planText(planned: Planned[], dryRun: boolean): string {
-  if (planned.length === 0) return 'plan: no Provisions declared\n'
-  const nameWidth = Math.max(...planned.map((item) => printable(item.provision.name).length))
-  const harnessWidth = Math.max(...planned.map((item) => item.provision.harness.length))
-  const tierWidth = Math.max(...planned.map((item) => item.provision.tier.length))
-  const toRun = planned.filter((item) => !item.skip).length
+function previewText(previewed: Previewed[], dryRun: boolean): string {
+  if (previewed.length === 0) return 'preview: no Provisions declared\n'
+  const nameWidth = Math.max(...previewed.map((item) => printable(item.provision.name).length))
+  const harnessWidth = Math.max(...previewed.map((item) => item.provision.harness.length))
+  const tierWidth = Math.max(...previewed.map((item) => item.provision.tier.length))
+  const toRun = previewed.filter((item) => !item.skip).length
   const lines = [
-    `plan: ${planned.length} planned, ${toRun} to run, ${planned.length - toRun} already present${dryRun ? ' · dry run' : ''}`,
+    `preview: ${counted(previewed.length, 'entry', 'entries')}, ${toRun} to run, ${previewed.length - toRun} already present${dryRun ? ' · dry run' : ''}`,
   ]
-  for (const item of planned) {
+  for (const item of previewed) {
     const action = item.skip ? 'present, skipped' : item.presence === 'present' ? 'present, forced' : item.presence
     lines.push(
       `  ${printable(item.provision.name).padEnd(nameWidth)}  ${item.provision.harness.padEnd(harnessWidth)}  ${item.provision.tier.padEnd(tierWidth)}  ${action}`,
@@ -106,7 +94,7 @@ function summaryText(entries: InstallEntry[], refusals: FileRefusal[]): string {
   const absent = entries.filter((entry) => entry.after !== 'present')
   const lines = [
     '',
-    `summary: ${entries.length} planned, ${present.length} already present, ${ran.length} ran, ${failed.length} failed, ${absent.length} still absent`,
+    `summary: ${counted(entries.length, 'entry', 'entries')}, ${present.length} already present, ${ran.length} ran, ${failed.length} failed, ${absent.length} still absent`,
     `  already present: ${joined(present.map((entry) => label(entry.provision)))}`,
     `  ran: ${joined(ran.map((entry) => `${label(entry.provision)} ${entry.failure ?? `exit ${entry.commandExit}`}`))}`,
     `  failed: ${joined(failed.map((entry) => `${label(entry.provision)} ${entry.failure}`))}`,
@@ -158,33 +146,33 @@ export function installRun(
   })
   // The tier narrows the environment before anything else reads it, so a name it leaves out is a
   // name this run cannot reach and says so instead of running nothing quietly.
-  const scoped =
+  const inTier =
     options.tier === undefined
       ? environment.provisions
       : environment.provisions.filter((entry) => entry.tier === options.tier)
   // A name that matches no Provision is a typo, not an empty environment: running the rest would
   // look like the named fix succeeded.
-  const missing = only.filter((name) => !scoped.some((entry) => entry.name === name))
+  const missing = only.filter((name) => !inTier.some((entry) => entry.name === name))
   if (missing.length > 0) {
     write(`no Provision named ${missing.join(', ')}\n`)
     return outcome([], 1, dryRun)
   }
-  const selected = only.length === 0 ? scoped : scoped.filter((entry) => only.includes(entry.name))
-  const planned: Planned[] = selected.map((provision) => {
-    const presence = presenceOf(provision.check)
+  const selected = only.length === 0 ? inTier : inTier.filter((entry) => only.includes(entry.name))
+  const previewed: Previewed[] = selected.map((provision) => {
+    const presence = evaluate(provision.check).presence
     return { provision, presence, skip: presence === 'present' && options.force !== true }
   })
-  write(planText(planned, dryRun))
+  write(previewText(previewed, dryRun))
   if (dryRun) {
     write('\ndry run: nothing was run\n')
     return outcome(
-      planned.map((item) => notRun(item.provision, item.presence)),
+      previewed.map((item) => notRun(item.provision, item.presence)),
       environment.refusals.length === 0 ? 0 : 1,
       true,
     )
   }
   const entries: InstallEntry[] = []
-  for (const item of planned) {
+  for (const item of previewed) {
     if (item.skip) {
       entries.push(notRun(item.provision, item.presence))
       continue
@@ -193,7 +181,7 @@ export function installRun(
     const command = spawnInstall(item.provision)
     // The answer after the command, not before and not the command's report of itself: a command
     // that half-worked is present if its Check now passes.
-    const after = presenceOf(item.provision.check)
+    const after = evaluate(item.provision.check).presence
     // Recorded now, before the next command starts: the row is committed on its own, so an
     // interrupted run keeps the history of the commands that had already finished.
     recordRun(item.provision, command.status, after, config)

@@ -3,7 +3,7 @@ import assert from 'node:assert'
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { evaluateCheck } from './check.ts'
+import { checkInputsOf, evaluateCheck } from './check.ts'
 import type { CheckInputs } from './check.ts'
 import type { Check } from './types.ts'
 
@@ -12,7 +12,7 @@ import type { Check } from './types.ts'
 // own file is read by the caller, and a directory that is not there is a cause of `unknown`.
 
 function over(bytes: string | null, pathDirs: readonly string[] = []): CheckInputs {
-  return { bytes, pathDirs }
+  return { file: bytes === null ? { kind: 'absent' } : { kind: 'read', bytes }, pathDirs }
 }
 
 function presenceOf(check: Check, bytes: string | null) {
@@ -127,6 +127,30 @@ test('a missing file is absent, addressing the file itself or a value inside it'
     detail: null,
   })
   assert.deepEqual(evaluateCheck({ file: '/home/ann/.pi/mcp.json' }, over(null)), { presence: 'absent', detail: null })
+})
+
+// The read error that is not `ENOENT` is the case this pins: a directory passes an existence test and
+// fails the read on every uid, so the fixture does not depend on a permission bit root may ignore.
+// Before this, every error was folded into `null` and answered `absent` — an unanswered question
+// reported as an absence, for all three file predicates.
+test('a file that cannot be read is unknown with the cause, whatever predicate asks', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'acm-check-unreadable-'))
+  for (const check of [
+    { file: directory },
+    { file: directory, contains: 'serena' },
+    { file: directory, pointer: ADDRESS },
+  ] satisfies Check[]) {
+    const answer = evaluateCheck(check, checkInputsOf(check))
+    assert.equal(answer.presence, 'unknown')
+    assert.match(answer.detail ?? '', /could not be read: /)
+    assert.ok((answer.detail ?? '').includes(directory), 'the detail does not name the file')
+  }
+  // The path that is genuinely not there is still an absence, not an unknown.
+  const missing = join(directory, 'not-there.toml')
+  assert.deepEqual(evaluateCheck({ file: missing, pointer: ADDRESS }, checkInputsOf({ file: missing })), {
+    presence: 'absent',
+    detail: null,
+  })
 })
 
 function pathWith(files: { name: string; mode: number }[]): string {

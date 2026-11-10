@@ -55,7 +55,7 @@ function skillDeclaration(
     tierId: tier.id,
     nativeFile: dir,
     nativePointer: '',
-    knownFieldsJson: JSON.stringify(facts),
+    factsJson: JSON.stringify(facts),
     contentDigest: digestOfPath(dir) ?? '',
   }
 }

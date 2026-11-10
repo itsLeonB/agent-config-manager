@@ -56,8 +56,9 @@ Two things live here:
 | Command | What it does |
 | --- | --- |
 | `acm status` | Prints every Provision with the Presence (`present`, `absent`, `unknown`) of each harness it declares, one row per harness entry, then the project and store it read from. `--json` prints the same rows as data, and `--tier <user\|project\|project-local>` keeps only the entries that tier owns. A refused environment file is reported on stderr with a line and column, and makes the command exit non-zero |
-| `acm install` | Runs every Install command whose Presence is not `present`, in file order of the winning entry and from that entry's Tier root. `--dry-run` prints the plan and stops (the default when stdin is not a TTY), `--force` runs even what is present, `--only <name>` narrows to one Provision, and `--tier` narrows to one tier |
-| `acm mcp serve` | Speaks the MCP protocol over stdin/stdout. It registers `list_provisions`, which answers the same rows as `acm status --json`; the other environment tools land as the tickets that own them arrive |
+| `acm read <harness> [tier]` | Prints what one harness declares at the native paths it loads — every declared location at the tier, and each declaration with its file and the address inside it — secret-free: a credentialed value comes back as its verdict marker. Nothing is stored. An omitted tier answers for every tier the harness declares |
+| `acm install` | Runs every Install command whose Presence is not `present`, in file order of the winning entry and from that entry's Tier root. `--dry-run` prints the preview and stops (the default when stdin is not a TTY), `--force` runs even what is present, `--only <name>` narrows to the named Provisions and is repeatable, and `--tier` narrows to one tier |
+| `acm mcp serve` | Speaks the MCP protocol over stdin/stdout. It registers `list_provisions`, which answers the same rows as `acm status --json`, `read_native_config`, which answers the same declarations as `acm read`, and `define_provision`, which writes one Provision's entry into an environment file |
 
 Three environment files are read, one per Tier: `~/agents_environ.toml`, the committed
 `<project>/agents_environ.toml`, and the gitignored `<project>/agents_environ.local.toml`. Each is
@@ -101,9 +102,10 @@ directory.
 
 ## State
 
-One SQLite file holds what the dashboard persists: the latest scan snapshot and the settings rows,
-at `database/dashboard.db` beside the repo, or `ACM_STORE`. Migrations run on open, so an older file
-upgrades in place and keeps its rows.
+One SQLite file holds what ACM persists: the latest scan snapshot, the settings rows, and the `runs`
+history of Install commands, at `database/dashboard.db` beside the repo, or `ACM_STORE`. Command output
+is deliberately not stored. Migrations run on open, so an older file upgrades in place and keeps its
+rows.
 
 ## Checks
 

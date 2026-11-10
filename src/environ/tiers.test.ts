@@ -9,7 +9,7 @@ import type { EnvironmentTier, ProvisionRow } from './types.ts'
 
 // Seam A: three environment files against a fixture, through the environment service. A temp home
 // and a temp project root hold hand-written files, and scripts in both roots record which directory
-// a command ran in. The assertions are the rows `acm status` prints, the plan a run prints, and the
+// a command ran in. The assertions are the rows `acm status` prints, the preview a run prints, and the
 // bytes a command left behind; nothing here inspects how the loader got there.
 
 interface Fixture {

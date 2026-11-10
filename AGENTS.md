@@ -70,17 +70,23 @@ decisions.
   shared by every project — while the **project root** is the working directory the harness or
   shell opened `acm` in (or `ACM_PROJECT_ROOT` / `CLAUDE_PROJECT_DIR`, canonicalised, never walked
   up), so one installed `acm` reads whatever repository it was started in. `src/environ/` holds the
-  declared environment: `parse.ts` validates one environment file totally against a closed schema
-  and refuses the whole file with a line and column, `check.ts` evaluates a Check over the bytes it
-  names (a Check reads and never spawns), `loader.ts` is the only module that knows where a tier's
-  file lives and what its root is — `~/agents_environ.toml`, the committed
-  `<project>/agents_environ.toml`, and the gitignored `<project>/agents_environ.local.toml`, merged
-  per `(provision, harness)` so the nearer file replaces the farther one whole, `tags` included —
-  and `service.ts` is everything a face may call — the rows, one
-  Presence per harness, the printing, and the JSON. `src/mcp/router.ts` is the MCP face and
-  `src/mcp/server.ts` puts it on a stdio transport behind `acm mcp serve`; the router registers
-  `list_provisions`, which answers from that service, and neither face imports an adapter, a store
-  module, or a loader internal. Nothing under `src/routes/` or `src/components/` imports either.
+  declared environment: `types.ts` is its vocabulary — the closed Tier and Presence lists, the four
+  Check predicates, the rows, and one Run — `parse.ts` validates one environment file totally against
+  a closed schema and refuses the whole file with a line and column, `check.ts` evaluates a Check over
+  the bytes it names (a Check reads and never spawns; an unreadable file answers `unknown`, never
+  `absent`), `loader.ts` is the only module that knows where a tier's file lives and what its root is
+  — `~/agents_environ.toml`, the committed `<project>/agents_environ.toml`, and the gitignored
+  `<project>/agents_environ.local.toml`, merged per `(provision, harness)` so the nearer file replaces
+  the farther one whole, `tags` included — `runner.ts` is the install run, the only place a command is
+  spawned and the only place a Run is recorded, `history.ts` is the environment's one caller of the store,
+  `native-read.ts` is a Native read over the three harness readers, `define.ts` is `define_provision`
+  writing one entry through the pointer editor, `print.ts` is how a value from a file reaches a printed
+  line, and `service.ts` is everything a face may call — the rows, one Presence per harness, the
+  printing, the JSON, and the re-exports a face asks for. `src/mcp/router.ts` is the MCP face
+  and `src/mcp/server.ts` puts it on a stdio transport behind `acm mcp serve`; the router registers
+  `list_provisions`, `read_native_config`, and `define_provision`, which answer from that service, and
+  neither face imports an adapter, a store module, or a loader internal. Nothing under `src/routes/` or
+  `src/components/` imports either.
 - **The Claude dashboard is the previous product, kept working unchanged.** It reads the same store;
   its rendering, rescan, settings, scanner, and container notes are in
   [docs/dashboard.md](docs/dashboard.md). Read that before touching `src/routes/`,

@@ -56,6 +56,13 @@ export interface Environment {
   refusals: FileRefusal[]
 }
 
+// The identity of one entry in the environment: `(provision, harness)`, which is the key the merge
+// shadows by and the key a Run is read by. NUL cannot appear in a Provision name or a harness id, so
+// two keys cannot collide.
+export function entryKey(provision: string, harness: string): string {
+  return `${provision}\u0000${harness}`
+}
+
 // One entry where the file that won it declared it: the precedence of that file, and the entry's
 // position in it, so a run keeps the winning file's order instead of the order the tiers were read.
 interface PlacedProvision {
@@ -65,8 +72,7 @@ interface PlacedProvision {
 }
 
 function keyOf(provision: ResolvedProvision): string {
-  // NUL cannot appear in a Provision name or a harness id, so two keys cannot collide.
-  return `${provision.name}\u0000${provision.harness}`
+  return entryKey(provision.name, provision.harness)
 }
 
 // The user file is read always; a tier with no file declares nothing. A file that cannot be read or

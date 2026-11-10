@@ -122,7 +122,7 @@ function nativeDeclaration(declaration: DiscoveredDeclaration): NativeDeclaratio
     name: declaration.name,
     file: declaration.nativeFile,
     pointer: declaration.nativePointer,
-    fields: fieldsOf(declaration.knownFieldsJson),
+    fields: fieldsOf(declaration.factsJson),
   }
 }
 
@@ -130,9 +130,9 @@ function nativeDeclaration(declaration: DiscoveredDeclaration): NativeDeclaratio
 // it parses back to a value an agent can read without a second decode. A string that does not is
 // answered as absent instead of thrown, because an error message is where a fragment of the file
 // would otherwise escape.
-function fieldsOf(knownFieldsJson: string): NativeValue {
+function fieldsOf(factsJson: string): NativeValue {
   try {
-    const parsed = nativeValueSchema.safeParse(JSON.parse(knownFieldsJson))
+    const parsed = nativeValueSchema.safeParse(JSON.parse(factsJson))
     return parsed.success ? parsed.data : null
   } catch {
     return null
