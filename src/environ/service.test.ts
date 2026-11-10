@@ -97,7 +97,12 @@ test('status answers one row per Provision, one entry per harness it declares', 
         { harness: 'codex', tier: 'user', presence: 'present', detail: null },
         // The file this check names is not on the fixture, so the answer is an absence rather than
         // an invented entry: nothing is added for a harness the file does not mention.
-        { harness: 'pi', tier: 'user', presence: 'absent', detail: null },
+        {
+          harness: 'pi',
+          tier: 'user',
+          presence: 'absent',
+          detail: `${path.join(f.home, '.pi', 'agent', 'mcp.json')} is not there`,
+        },
       ],
     },
   ])
@@ -122,7 +127,12 @@ test('a name filter keeps one Provision and every harness entry it has', () => {
       tags: ['mcp'],
       harnesses: [
         { harness: 'codex', tier: 'user', presence: 'present', detail: null },
-        { harness: 'pi', tier: 'user', presence: 'absent', detail: null },
+        {
+          harness: 'pi',
+          tier: 'user',
+          presence: 'absent',
+          detail: `${path.join(f.home, '.pi', 'agent', 'mcp.json')} is not there`,
+        },
       ],
     },
   ])
@@ -191,7 +201,7 @@ test('the printing is a function of the rows, and the JSON carries the same rows
   const printed = formatStatus(status)
   assert.match(printed, /^provision .*harness .*presence$/m)
   assert.match(printed, /^serena\s+codex\s+present$/m)
-  assert.match(printed, /^serena\s+pi\s+absent$/m)
+  assert.match(printed, /^serena\s+pi\s+absent\s+.*is not there$/m)
   assert.match(printed, /^i-have-adhd\s+pi\s+present$/m)
   // The footer names where acm thinks it is: the project it read and the store it would record in.
   assert.match(printed, new RegExp(`project ${f.projectRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
@@ -209,4 +219,37 @@ test('a machine with no environment file declares nothing, which is not a fault'
     storePath: f.config.storePath,
   })
   assert.match(formatStatus(readStatus({}, f.config)), /^no Provisions declared\n\n0 entries over 0 provisions/)
+})
+
+// One entry, two Checks: the row's Presence is the fold, and its detail names the Check that did
+// not answer `present` with that Check's own reason.
+test('an entry with several Checks folds them into one row, with the failing Check named', () => {
+  const f = fixture()
+  write(
+    path.join(f.home, 'agents_environ.toml'),
+    `version = 1
+
+[provision.serena.pi]
+checks = [
+  { file = "~/.pi/agent/mcp.json", contains = "serena" },
+  { file = "~/.pi/agent/mcp.json", pointer = "mcpServers.serena.pinned" },
+]
+install = "true"
+`,
+  )
+  write(path.join(f.home, '.pi', 'agent', 'mcp.json'), '{"mcpServers": {"serena": {}}}\n')
+  assert.deepEqual(rows(f), [
+    {
+      name: 'serena',
+      tags: [],
+      harnesses: [
+        {
+          harness: 'pi',
+          tier: 'user',
+          presence: 'absent',
+          detail: `${path.join(f.home, '.pi', 'agent', 'mcp.json')} has no mcpServers.serena.pinned`,
+        },
+      ],
+    },
+  ])
 })

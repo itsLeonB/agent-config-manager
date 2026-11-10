@@ -17,9 +17,14 @@ export interface DefineRequest {
   name: string
   harness: string
   tier?: EnvironmentTier
-  // The Check as the file spells it, passed through rather than re-shaped here: the parser owns the
-  // closed predicate set, so an unknown one is refused with the reason the loader would give.
-  check: Record<string, NativeValue>
+  // One Check as the file spells it, written `check = { … }`: the singular spelling stays legal, so
+  // a file with one Check keeps the shape it had. Passed through rather than re-shaped here: the
+  // parser owns the closed predicate set, so an unknown one is refused with the reason the loader
+  // would give.
+  check?: Record<string, NativeValue>
+  // Several Checks, written `checks = [ … ]`. A request names one of the two; the validator after
+  // the write refuses one that names both or neither, with that reason.
+  checks?: Record<string, NativeValue>[]
   // Required, and never optional: an entry is a Check and an Install command, so a definition that
   // named only the Check would write a subtree the loader refuses and an existing command would
   // survive a write that said it replaced the entry.
@@ -69,12 +74,21 @@ export function defineProvision(
     written = tagged.text
   }
 
-  // Two addresses, one entry: `check` is an inline table and `install` a string, so each is written
-  // as the value it is, into the one table that holds them. Both writes read the document the other
-  // produced, and the pair reaches disk as one file write.
-  const check = writePointer(written, 'toml', [...entry, 'check'], request.check)
-  if (check.kind === 'failed') return check
-  written = check.text
+  // Two addresses, one entry: the Checks are tables and `install` a string, so each is written as
+  // the value it is, into the one table that holds them. `check` is the one-Check spelling and
+  // `checks` the list; a request that names both writes both, and the parser below refuses the file
+  // with its own reason rather than this module picking one. All the writes read the document the
+  // previous one produced, and the set reaches disk as one file write.
+  if (request.check !== undefined) {
+    const check = writePointer(written, 'toml', [...entry, 'check'], request.check)
+    if (check.kind === 'failed') return check
+    written = check.text
+  }
+  if (request.checks !== undefined) {
+    const checks = writePointer(written, 'toml', [...entry, 'checks'], request.checks)
+    if (checks.kind === 'failed') return checks
+    written = checks.text
+  }
   const install = writePointer(written, 'toml', [...entry, 'install'], request.install)
   if (install.kind === 'failed') return install
   written = install.text

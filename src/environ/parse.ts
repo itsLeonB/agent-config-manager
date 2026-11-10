@@ -13,6 +13,7 @@ const VERSION_KEY = 'version'
 const PROVISION_KEY = 'provision'
 const TAGS_KEY = 'tags'
 const CHECK_KEY = 'check'
+const CHECKS_KEY = 'checks'
 const INSTALL_KEY = 'install'
 const FILE_KEY = 'file'
 const CONTAINS_KEY = 'contains'
@@ -109,11 +110,14 @@ function indexSource(text: string): SourceIndex {
   }
 }
 
-// A Check is spelled inline (`check = { file = ... }`) or as a table of its own
-// (`[provision.<name>.<harness>.check]`), and the scan indexed its members under one of those two
-// addresses, so both are tried before falling back to the top of the file.
+// A Check is spelled inline (`check = { file = ... }` or a member of `checks = [ … ]`) or as a table
+// of its own (`[provision.<name>.<harness>.check]`), and the scan indexed its members under one of
+// those addresses, so all three are tried before falling back to the top of the file.
 function decodeCheck(table: EnvironmentTable, block: readonly string[], at: SourceIndex): Decoded<Check> {
-  const checkAt = (name: string) => at.declaration(block, name) ?? at.declaration([...block, CHECK_KEY], name)
+  const checkAt = (name: string) =>
+    at.declaration(block, name) ??
+    at.declaration([...block, CHECK_KEY], name) ??
+    at.declaration([...block, CHECKS_KEY], name)
   for (const key of Object.keys(table)) {
     if (!PREDICATE_KEYS.has(key)) return refused(place(checkAt(key), `unknown predicate '${key}'`))
   }
@@ -153,8 +157,9 @@ function decodeCheck(table: EnvironmentTable, block: readonly string[], at: Sour
   return { ok: true, value: { file, contains } }
 }
 
-// One `[provision.<name>.<harness>]` table. `check` and `install` are both required: a Provision is a
-// check and a command, and one without the other cannot be converged.
+// One `[provision.<name>.<harness>]` table. Its Checks — `check = { … }` or `checks = [ … ]`, one or
+// more of them — and `install` are both required: a Provision is a check and a command, and one
+// without the other cannot be converged.
 function decodeEntry(
   harness: HarnessId,
   table: EnvironmentTable,
@@ -162,17 +167,38 @@ function decodeEntry(
   at: SourceIndex,
 ): Decoded<DeclaredEntry> {
   for (const key of Object.keys(table)) {
-    if (key !== CHECK_KEY && key !== INSTALL_KEY) return refused(place(at.declaration(block, key), `unknown key '${key}'`))
+    if (key !== CHECK_KEY && key !== CHECKS_KEY && key !== INSTALL_KEY) {
+      return refused(place(at.declaration(block, key), `unknown key '${key}'`))
+    }
   }
   if (!has(table, INSTALL_KEY)) return refused(place(at.header(block), 'missing install'))
   const install = stringValue(table[INSTALL_KEY])
   if (install === null) return refused(place(at.declaration(block, INSTALL_KEY), 'install must be a string'))
-  if (!has(table, CHECK_KEY)) return refused(place(at.header(block), 'missing check'))
-  const checkTable = tableValue(table[CHECK_KEY])
-  if (checkTable === null) return refused(place(at.declaration(block, CHECK_KEY), 'check must be an inline table'))
-  const check = decodeCheck(checkTable, block, at)
-  if (!check.ok) return check
-  return { ok: true, value: { harness, check: check.value, install } }
+  if (has(table, CHECK_KEY) && has(table, CHECKS_KEY)) {
+    return refused(place(at.declaration(block, CHECKS_KEY), 'an entry holds check or checks, not both'))
+  }
+  if (has(table, CHECK_KEY)) {
+    // `check` is the one-element spelling: an older file keeps loading, and the parser reads the
+    // same list either way.
+    const checkTable = tableValue(table[CHECK_KEY])
+    if (checkTable === null) return refused(place(at.declaration(block, CHECK_KEY), 'check must be an inline table'))
+    const check = decodeCheck(checkTable, block, at)
+    if (!check.ok) return check
+    return { ok: true, value: { harness, checks: [check.value], install } }
+  }
+  if (!has(table, CHECKS_KEY)) return refused(place(at.header(block), 'missing check'))
+  const checksList = z.array(TOML_TABLE).safeParse(table[CHECKS_KEY])
+  if (!checksList.success) {
+    return refused(place(at.declaration(block, CHECKS_KEY), 'checks must be an array of tables'))
+  }
+  if (checksList.data.length === 0) return refused(place(at.declaration(block, CHECKS_KEY), 'checks is empty'))
+  const checks: Check[] = []
+  for (const checkTable of checksList.data) {
+    const check = decodeCheck(checkTable, block, at)
+    if (!check.ok) return check
+    checks.push(check.value)
+  }
+  return { ok: true, value: { harness, checks, install } }
 }
 
 function decodeProvision(name: string, table: EnvironmentTable, at: SourceIndex): Decoded<ProvisionDeclaration> {

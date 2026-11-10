@@ -2,7 +2,7 @@ import { readFileSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { formatOf, readPointer } from '../engine/edit.ts'
-import type { Check, CheckAnswer } from './types.ts'
+import type { Check, CheckAnswer, Presence } from './types.ts'
 
 // A Check reads and answers. It never spawns a process, touches the network, or writes: an agent may
 // define a Check, so evaluating one has to be inert by construction rather than by convention — the
@@ -35,10 +35,10 @@ export function checkInputsOf(check: Check): CheckInputs {
   }
 }
 
-// One Check's answer on this machine. The status and the run both ask here, so two faces cannot
-// disagree about what the same Check says.
-export function evaluate(check: Check): CheckAnswer {
-  return evaluateCheck(check, checkInputsOf(check))
+// One entry's answer on this machine: every Check evaluated and folded. The status and the run
+// both ask here, so two faces cannot disagree about what the same entry's Checks say.
+export function evaluateChecks(checks: Check[]): CheckAnswer {
+  return foldAnswers(checks.map((check) => evaluateCheck(check, checkInputsOf(check))))
 }
 
 // The one read a Check causes. A file that is not there is an answer — nothing is installed — while
@@ -63,20 +63,37 @@ export function evaluateCheck(check: Check, inputs: CheckInputs): CheckAnswer {
   if ('onPath' in check) return onPath(check.onPath, inputs.pathDirs)
   const { file } = inputs
   if (file.kind === 'unreadable') return { presence: 'unknown', detail: file.detail }
-  if (file.kind === 'absent') return { presence: 'absent', detail: null }
+  if (file.kind === 'absent') return { presence: 'absent', detail: `${check.file} is not there` }
   const { bytes } = file
-  if ('contains' in check) return containsAnswer(check.contains, bytes)
+  if ('contains' in check) return containsAnswer(check.contains, check.file, bytes)
   if (!('pointer' in check)) return { presence: 'present', detail: null }
   const read = readPointer(bytes, formatOf(check.file), check.pointer.split('.'))
   if (read.kind === 'invalid') return { presence: 'unknown', detail: `${check.file} could not be read: ${read.reason}` }
-  if (read.kind === 'missing') return { presence: 'absent', detail: null }
+  if (read.kind === 'missing') return { presence: 'absent', detail: `${check.file} has no ${check.pointer}` }
   // `equals` is why an entry that is present but switched off is not an installed one: the address
   // exists, and its value still has to be the value the Provision means.
-  if ('equals' in check && !isDeepStrictEqual(read.value, check.equals)) return { presence: 'absent', detail: null }
+  if ('equals' in check && !isDeepStrictEqual(read.value, check.equals)) {
+    return { presence: 'absent', detail: `${check.file}'s ${check.pointer} is not the declared value` }
+  }
   return { presence: 'present', detail: null }
 }
 
-function containsAnswer(pattern: string, bytes: string): CheckAnswer {
+// An entry's answer is the fold of its Checks' answers: any `absent` answers `absent`, otherwise
+// any `unknown` answers `unknown`, otherwise `present` — an unanswered question is never reported
+// as an absence, and one absence is never hidden by a later answer. The detail names every Check
+// that did not answer `present`, each with its own reason.
+export function foldAnswers(answers: CheckAnswer[]): CheckAnswer {
+  let presence: Presence = 'present'
+  const details: string[] = []
+  for (const answer of answers) {
+    if (answer.presence === 'absent') presence = 'absent'
+    else if (answer.presence === 'unknown' && presence === 'present') presence = 'unknown'
+    if (answer.detail !== null) details.push(answer.detail)
+  }
+  return { presence, detail: details.length === 0 ? null : details.join('; ') }
+}
+
+function containsAnswer(pattern: string, file: string, bytes: string): CheckAnswer {
   let expression: RegExp
   try {
     // Multiline, so `^` anchors at the start of a line: an export in a profile and a heading in a
@@ -86,7 +103,9 @@ function containsAnswer(pattern: string, bytes: string): CheckAnswer {
     const reason = error instanceof Error ? error.message : String(error)
     return { presence: 'unknown', detail: `invalid pattern ${pattern}: ${reason}` }
   }
-  return { presence: expression.test(bytes) ? 'present' : 'absent', detail: null }
+  return expression.test(bytes)
+    ? { presence: 'present', detail: null }
+    : { presence: 'absent', detail: `${file} does not contain ${pattern}` }
 }
 
 // A name is present only as a regular executable file, which is the test a shell's own lookup makes.
@@ -114,6 +133,6 @@ function onPath(name: string, pathDirs: readonly string[]): CheckAnswer {
       // The name is not in this directory, and a later one may hold it.
     }
   }
-  if (unsearchable === null) return { presence: 'absent', detail: null }
+  if (unsearchable === null) return { presence: 'absent', detail: `${name} is not on PATH` }
   return { presence: 'unknown', detail: `PATH could not be searched: ${unsearchable}` }
 }

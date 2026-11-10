@@ -234,6 +234,28 @@ install = "echo two > two.marker"
   )
 })
 
+// Several Checks: one failing Check is enough to run the entry, and afterwards every Check has to
+// pass for the entry to be present — the run reads the fold, not one Check of its choosing.
+test('an entry with several Checks runs when any Check fails, and is present when all of them pass', () => {
+  const f = fixture()
+  file(path.join(f.home, 'first.marker'), 'one\n')
+  environment(f, `version = 1
+
+[provision.two-things.pi]
+checks = [
+  { file = "~/first.marker", contains = "one" },
+  { file = "~/second.marker", contains = "two" },
+]
+install = "echo one > first.marker; echo two > second.marker"
+`)
+  const { printed, outcome } = run(f)
+  assert.match(printed, /^  two-things\s+pi\s+user\s+absent$/m)
+  assert.equal(fs.readFileSync(path.join(f.home, 'second.marker'), 'utf8'), 'two\n')
+  assert.equal(outcome.entries[0].after, 'present')
+  assert.match(printed, /^summary: 1 entry, 0 already present, 1 ran, 0 failed, 0 still absent$/m)
+  assert.equal(outcome.exitCode, 0)
+})
+
 test('Presence is re-evaluated after the command, so a half-worked command that passes its Check is present', () => {
   const f = fixture()
   environment(f, `version = 1

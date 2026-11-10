@@ -1,7 +1,7 @@
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
-import { evaluate } from './check.ts'
+import { evaluateChecks } from './check.ts'
 import { entryKey, loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
 import type {
@@ -75,7 +75,7 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
     // order it declares them, and a repeated harness would be a duplicate key the file cannot hold.
     const row = rows.get(provision.name) ?? { name: provision.name, tags: provision.tags, harnesses: [] }
     rows.set(provision.name, row)
-    const answer = evaluate(provision.check)
+    const answer = evaluateChecks(provision.checks)
     row.harnesses.push({
       harness: provision.harness,
       tier: provision.tier,

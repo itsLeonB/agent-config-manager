@@ -131,7 +131,8 @@ test('read_native_config answers a native location with a credential withheld', 
 })
 
 test('list_provisions answers the Presence rows, filtered by harness', async () => {
-  const client = await connect({ ACM_HOME: installed() })
+  const home = installed()
+  const client = await connect({ ACM_HOME: home })
   try {
     const all: unknown = JSON.parse(answered(await client.callTool({ name: 'list_provisions', arguments: {} })))
     assert.deepEqual(all, {
@@ -144,7 +145,14 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
         {
           name: 'serena',
           tags: [],
-          harnesses: [{ harness: 'pi', tier: 'user', presence: 'absent', detail: null }],
+          harnesses: [
+            {
+              harness: 'pi',
+              tier: 'user',
+              presence: 'absent',
+              detail: `${path.join(home, '.pi', 'agent', 'mcp.json')} is not there`,
+            },
+          ],
         },
       ],
     })
@@ -156,7 +164,14 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
         {
           name: 'serena',
           tags: [],
-          harnesses: [{ harness: 'pi', tier: 'user', presence: 'absent', detail: null }],
+          harnesses: [
+            {
+              harness: 'pi',
+              tier: 'user',
+              presence: 'absent',
+              detail: `${path.join(home, '.pi', 'agent', 'mcp.json')} is not there`,
+            },
+          ],
         },
       ],
     })

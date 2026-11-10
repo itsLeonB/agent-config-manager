@@ -196,7 +196,12 @@ install = "pi plugin install zeta"
     readStatus({ name: 'serena' }, f.config).provisions.flatMap((row) => row.harnesses),
     [
       { harness: 'codex', tier: 'project-local', presence: 'present', detail: null },
-      { harness: 'pi', tier: 'project-local', presence: 'absent', detail: null },
+      {
+        harness: 'pi',
+        tier: 'project-local',
+        presence: 'absent',
+        detail: `${path.join(f.home, '.pi', 'agent', 'mcp.json')} is not there`,
+      },
     ],
   )
 })
@@ -357,6 +362,51 @@ test('a definition never evaluates its Check: no Presence is computed and nothin
   const [entry] = row?.harnesses ?? []
   assert.equal(entry?.presence, 'unknown')
   assert.match(entry?.detail ?? '', /invalid pattern \(/)
+})
+
+// A definition that declares several Checks writes the list spelling, and status reads the fold of
+// what landed rather than the request's own word for it.
+test('a definition with a checks list writes checks, and status folds the Checks', () => {
+  const f = fixture()
+  write(path.join(f.home, 'AGENTS.md'), '# AGENTS\n\n@RTK\n')
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'rtk',
+        harness: 'pi',
+        checks: [
+          { file: '~/AGENTS.md', contains: '^@RTK' },
+          { file: '~/AGENTS.md', contains: '^## Output style' },
+        ],
+        install: 'npx rtk init --quiet',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.rtk.pi')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.rtk.pi]
+checks = [{ file = "~/AGENTS.md", contains = "^@RTK" }, { file = "~/AGENTS.md", contains = "^## Output style" }]
+install = "npx rtk init --quiet"
+`,
+  )
+  assert.deepEqual(readStatus({}, f.config).provisions, [
+    {
+      name: 'rtk',
+      tags: [],
+      harnesses: [
+        {
+          harness: 'pi',
+          tier: 'project-local',
+          presence: 'absent',
+          detail: `${path.join(f.home, 'AGENTS.md')} does not contain ^## Output style`,
+        },
+      ],
+    },
+  ])
 })
 
 test('a definition adds tags to a Provision it creates, and leaves a declared list alone', () => {

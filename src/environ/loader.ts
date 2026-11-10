@@ -113,7 +113,7 @@ export function loadEnvironment(config: EngineConfig): Environment {
           // of one command reads the same at two tiers.
           root: location.root,
           source: location.file,
-          check: resolveCheck(entry.check, location.root, config.home),
+          checks: entry.checks.map((check) => resolveCheck(check, location.root, config.home)),
           install: entry.install,
         }
         won.set(keyOf(provision), { provision, precedence, position })
