@@ -99,7 +99,7 @@ install = "./install.sh ${marker} installed.txt"
     {
       name: 'serena',
       tags: ['project-local'],
-      harnesses: [{ harness: 'codex', tier: 'project-local', presence: 'absent', detail: null }],
+      harnesses: [{ harness: 'codex', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'absent', detail: null }],
     },
   ])
 
@@ -148,12 +148,12 @@ install = "echo project"
     {
       name: 'i-have-adhd',
       tags: ['prompt'],
-      harnesses: [{ harness: 'pi', tier: 'user', presence: 'absent', detail: null }],
+      harnesses: [{ harness: 'pi', tier: 'user', source: path.join(f.home, 'agents_environ.toml'), presence: 'absent', detail: null }],
     },
     {
       name: 'serena',
       tags: ['local'],
-      harnesses: [{ harness: 'codex', tier: 'project', presence: 'absent', detail: null }],
+      harnesses: [{ harness: 'codex', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'absent', detail: null }],
     },
   ])
 })

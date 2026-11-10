@@ -282,5 +282,5 @@ install = "${command}"
   const entry = document.provisions[0].harnesses[0]
   assert.equal(entry.presence, 'absent')
   // No run happened, so there is no key to mistake for a run that recorded nothing.
-  assert.deepEqual(Object.keys(entry), ['harness', 'tier', 'presence', 'detail'])
+  assert.deepEqual(Object.keys(entry), ['harness', 'tier', 'source', 'presence', 'detail'])
 })

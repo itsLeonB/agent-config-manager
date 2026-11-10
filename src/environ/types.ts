@@ -97,6 +97,7 @@ export type ParseResult =
 export interface HarnessPresence {
   harness: HarnessId
   tier: EnvironmentTier
+  source: string
   presence: Presence
   detail: string | null
 }

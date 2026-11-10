@@ -54,6 +54,9 @@ function resolveCheck(check: Check, root: string, home: string): Check {
 export interface Environment {
   provisions: ResolvedProvision[]
   refusals: FileRefusal[]
+  // The files this load read, in the order it read them: what a status with no matching rows names,
+  // so an empty answer is never mistaken for an empty environment.
+  readFiles: { tier: EnvironmentTier; file: string }[]
 }
 
 // The identity of one entry in the environment: `(provision, harness)`, which is the key the merge
@@ -86,8 +89,17 @@ function keyOf(provision: ResolvedProvision): string {
 export function loadEnvironment(config: EngineConfig): Environment {
   const won = new Map<string, PlacedProvision>()
   const refusals: FileRefusal[] = []
+  // The user file is read first, so when two tiers resolve to one path — a Project root that is
+  // `$HOME`, possibly reached through a path spelled differently — the file loads once under the
+  // nearer tier's name and the later tier contributes nothing.
+  const readFiles: { tier: EnvironmentTier; file: string }[] = []
+  const seen = new Set<string>()
   for (const [precedence, location] of environmentFiles(config).entries()) {
+    const resolvedFile = path.resolve(location.file)
+    if (seen.has(resolvedFile)) continue
+    seen.add(resolvedFile)
     if (!existsSync(location.file)) continue
+    readFiles.push({ tier: location.tier, file: location.file })
     let text: string
     try {
       text = readFileSync(location.file, 'utf8')
@@ -124,5 +136,5 @@ export function loadEnvironment(config: EngineConfig): Environment {
   const ordered = [...won.values()].sort(
     (left, right) => left.precedence - right.precedence || left.position - right.position,
   )
-  return { provisions: ordered.map((placed) => placed.provision), refusals }
+  return { provisions: ordered.map((placed) => placed.provision), refusals, readFiles }
 }
