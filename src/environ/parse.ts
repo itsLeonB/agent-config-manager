@@ -16,9 +16,12 @@ const CHECK_KEY = 'check'
 const INSTALL_KEY = 'install'
 const FILE_KEY = 'file'
 const CONTAINS_KEY = 'contains'
-// The two predicates 03 ships, spelled as the keys a Check may carry besides `file`. 07 adds
-// `pointer`, `equals` and `onPath`; until then any other key is a typo and refuses the file.
-const PREDICATE_KEYS: ReadonlySet<string> = new Set([FILE_KEY, CONTAINS_KEY])
+const POINTER_KEY = 'pointer'
+const EQUALS_KEY = 'equals'
+const ON_PATH_KEY = 'onPath'
+// The closed predicate set: the keys a Check may carry besides `file`. Anything else is a typo and
+// refuses the file, so a Check ACM does not understand is never silently ignored.
+const PREDICATE_KEYS: ReadonlySet<string> = new Set([FILE_KEY, CONTAINS_KEY, POINTER_KEY, EQUALS_KEY, ON_PATH_KEY])
 
 // TOML can hold dates and big integers; this schema describes strings, numbers, booleans, arrays, and
 // tables, which is every value an environment file is allowed to write.
@@ -114,10 +117,35 @@ function decodeCheck(table: EnvironmentTable, block: readonly string[], at: Sour
   for (const key of Object.keys(table)) {
     if (!PREDICATE_KEYS.has(key)) return refused(place(checkAt(key), `unknown predicate '${key}'`))
   }
+  // `onPath` names no file, so it is the whole table: written beside `file` it would be two
+  // predicates in one and there would be no answer either of them owns.
+  if (has(table, ON_PATH_KEY)) {
+    const beside = Object.keys(table).find((key) => key !== ON_PATH_KEY)
+    if (beside !== undefined) return refused(place(checkAt(beside), `onPath takes no other key, and '${beside}' is one`))
+    const onPath = stringValue(table[ON_PATH_KEY])
+    if (onPath === null) return refused(place(checkAt(ON_PATH_KEY), 'onPath must be a string'))
+    if (onPath === '') return refused(place(checkAt(ON_PATH_KEY), 'onPath is empty'))
+    return { ok: true, value: { onPath } }
+  }
   if (!has(table, FILE_KEY)) return refused(place(checkAt(FILE_KEY), 'check has no file'))
   const file = stringValue(table[FILE_KEY])
   if (file === null) return refused(place(checkAt(FILE_KEY), 'file must be a string'))
   if (file === '') return refused(place(checkAt(FILE_KEY), 'file is empty'))
+  // A Check is one of the four predicates, never two: `contains` and `pointer` answer the same
+  // question in two ways, so both spelled at once refuses rather than picking one.
+  if (has(table, CONTAINS_KEY) && has(table, POINTER_KEY)) {
+    return refused(place(checkAt(POINTER_KEY), 'a check holds contains or pointer, not both'))
+  }
+  if (has(table, POINTER_KEY)) {
+    const pointer = stringValue(table[POINTER_KEY])
+    if (pointer === null) return refused(place(checkAt(POINTER_KEY), 'pointer must be a string'))
+    if (pointer === '') return refused(place(checkAt(POINTER_KEY), 'pointer is empty'))
+    return has(table, EQUALS_KEY)
+      ? { ok: true, value: { file, pointer, equals: table[EQUALS_KEY] } }
+      : { ok: true, value: { file, pointer } }
+  }
+  // `equals` compares a value at an address, so on its own it names nothing to compare.
+  if (has(table, EQUALS_KEY)) return refused(place(checkAt(EQUALS_KEY), 'equals needs a pointer'))
   if (!has(table, CONTAINS_KEY)) return { ok: true, value: { file } }
   const contains = stringValue(table[CONTAINS_KEY])
   if (contains === null) return refused(place(checkAt(CONTAINS_KEY), 'contains must be a string'))

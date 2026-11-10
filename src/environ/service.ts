@@ -1,8 +1,7 @@
-import { readFileSync } from 'node:fs'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
-import { evaluateCheck } from './check.ts'
+import { checkInputsOf, evaluateCheck } from './check.ts'
 import { loadEnvironment } from './loader.ts'
 import type { FileRefusal, ProvisionRow } from './types.ts'
 
@@ -46,16 +45,6 @@ export interface StatusDocument {
   provisions: ProvisionRow[]
 }
 
-// A Check names one file and this is its only I/O: no process, no network, no write. A file that is
-// not there is `null`, which the evaluator answers as an absence.
-function checkBytes(file: string): string | null {
-  try {
-    return readFileSync(file, 'utf8')
-  } catch {
-    return null
-  }
-}
-
 export function readStatus(filter: StatusFilter = {}, config: EngineConfig = resolveDefaultConfig()): Status {
   const environment = loadEnvironment(config)
   const rows = new Map<string, ProvisionRow>()
@@ -66,7 +55,7 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
     // order it declares them, and a repeated harness would be a duplicate key the file cannot hold.
     const row = rows.get(provision.name) ?? { name: provision.name, tags: provision.tags, harnesses: [] }
     rows.set(provision.name, row)
-    const answer = evaluateCheck(provision.check, checkBytes(provision.check.file))
+    const answer = evaluateCheck(provision.check, checkInputsOf(provision.check))
     row.harnesses.push({
       harness: provision.harness,
       tier: provision.tier,
