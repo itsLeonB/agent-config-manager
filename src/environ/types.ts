@@ -1,4 +1,5 @@
 import type { HarnessId } from '../engine/adapters/types.ts'
+import type { NativeValue } from '../engine/native-value.ts'
 
 // The environment file is the source of truth, so the types below follow it: what one file
 // declares, what the loader resolves it to, and the rows the CLI and MCP faces print. The words are
@@ -9,15 +10,16 @@ import type { HarnessId } from '../engine/adapters/types.ts'
 export const ENVIRONMENT_TIERS = ['user', 'project', 'project-local'] as const
 export type EnvironmentTier = (typeof ENVIRONMENT_TIERS)[number]
 
-// An unanswered question is never reported as an absence, so the third value exists from the start.
-// The two predicates 03 ships answer `present` or `absent`; 07 derives `unknown` for the rest.
+// An unanswered question is never reported as an absence, so the third value exists from the start:
+// a Check that could not read or parse what it names answers `unknown` with a detail, never `absent`.
 export const PRESENCES = ['present', 'absent', 'unknown'] as const
 export type Presence = (typeof PRESENCES)[number]
 
 // A Check is the inline table the file spells. `{ file }` asks whether a file exists,
-// `{ file, contains }` whether its text matches a multiline pattern. 07 adds
-// `{ file, pointer [, equals] }` and `{ onPath }` here and in the parser together: the set is closed,
-// so a predicate outside it refuses the file instead of being ignored.
+// `{ file, contains }` whether its text matches a multiline pattern, `{ file, pointer [, equals] }`
+// whether a native config holds a value at an address, and `{ onPath }` whether a name is an
+// executable file on PATH. The set is closed: a predicate outside it refuses the file instead of
+// being ignored, and a fifth one is a schema change.
 export interface FileExistsCheck {
   file: string
 }
@@ -27,7 +29,22 @@ export interface FileContainsCheck {
   contains: string
 }
 
-export type Check = FileExistsCheck | FileContainsCheck
+// `pointer` is the address inside `file`, spelled the same way for a JSON pointer and a TOML dotted
+// key because one reader derives the format from the file's extension. `equals` is any TOML value and
+// compares by deep equality, which is what keeps an entry that is there but switched off (`enabled =
+// false`) from counting as installed.
+export interface FilePointerCheck {
+  file: string
+  pointer: string
+  equals?: NativeValue
+}
+
+// The one predicate that names no file: a name looked up on PATH.
+export interface OnPathCheck {
+  onPath: string
+}
+
+export type Check = FileExistsCheck | FileContainsCheck | FilePointerCheck | OnPathCheck
 
 // One `(provision, harness)` as the file spells it, before any path is resolved against a tier root.
 export interface DeclaredEntry {

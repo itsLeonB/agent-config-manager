@@ -193,6 +193,25 @@ install = "echo yes > landed.marker"
   assert.equal(outcome.exitCode, 1)
 })
 
+// `unknown` is not `present`: a Check that could not answer must not skip its command, and the run
+// prints the value it got rather than folding it into "not installed".
+test('a Provision whose Presence is unknown still runs', () => {
+  const f = fixture()
+  file(path.join(f.home, '.pi', 'mcp.json'), '{ "mcpServers": ')
+  const repair = script(f, 'repair.sh', `printf '{"mcpServers": {"serena": {"command": "uvx"}}}' > .pi/mcp.json`)
+  environment(f, `version = 1
+
+[provision.serena.pi]
+check   = { file = "~/.pi/mcp.json", pointer = "mcpServers.serena" }
+install = "${repair}"
+`)
+  const { printed, outcome } = run(f)
+  assert.match(printed, /^  serena\s+pi\s+user\s+unknown$/m)
+  assert.equal(fs.readFileSync(path.join(f.home, '.pi', 'mcp.json'), 'utf8'), '{"mcpServers": {"serena": {"command": "uvx"}}}')
+  assert.match(printed, /^  ran: serena \(pi\) exit 0$/m)
+  assert.equal(outcome.exitCode, 0)
+})
+
 test('the run is exit zero when every Check passes afterwards', () => {
   const f = fixture()
   environment(f, `version = 1
