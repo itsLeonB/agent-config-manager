@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { statSync } from 'node:fs'
 import path from 'node:path'
-import { ENVIRONMENT_TIERS, formatRefusal, formatStatus, installRun, readStatus, statusDocument } from '../environ/service.ts'
+import { ENVIRONMENT_TIERS, formatRefusal, formatStatus, installRun, readNativeConfig, readStatus, statusDocument } from '../environ/service.ts'
 import type { EnvironmentTier } from '../environ/service.ts'
 
 const USAGE = `usage: acm <command> [--project-root <dir>]
@@ -11,6 +11,8 @@ const USAGE = `usage: acm <command> [--project-root <dir>]
   status [--json] [--tier <tier>]
                     print every Provision and the Presence of each harness's entry
                     --tier  only the entries this tier owns: ${ENVIRONMENT_TIERS.join(', ')}
+
+  read <harness> [tier]  print what that harness declares at its native paths, secret-free
 
   install [--dry-run] [--force] [--only <name>]... [--tier <tier>]
                     run every Install command whose Presence is not present
@@ -75,9 +77,29 @@ function main(input: string[]): number | Promise<number> {
   // The MCP face loads the SDK only when it is asked for it.
   if (command === 'mcp' && rest[0] === 'serve' && rest.length === 1) return mcpServe()
   if (command === 'status') return status(rest)
+  if (command === 'read') return read(rest)
   if (command === 'install') return install(rest)
   process.stderr.write(USAGE)
   return 1
+}
+
+// The same answer the `read_native_config` tool gives, printed as the document it is: a human and an
+// agent read one shape, and neither needs a second format to disagree with.
+function read(rest: string[]): number {
+  const [harness, tier, extra] = rest
+  if (harness === undefined || extra !== undefined) {
+    process.stderr.write('read takes <harness> and an optional <tier>\n')
+    return 1
+  }
+  try {
+    process.stdout.write(`${JSON.stringify(readNativeConfig(harness, tier), null, 2)}\n`)
+  } catch (error) {
+    // A harness or tier the lookup does not declare is the caller's mistake, so it is a message and
+    // an exit status rather than an empty answer.
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    return 1
+  }
+  return 0
 }
 
 // Status re-evaluates every Check, so what it prints is this machine's now rather than a remembered

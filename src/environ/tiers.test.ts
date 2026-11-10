@@ -259,7 +259,7 @@ install = "true"
   declare(f, 'project', `version = 1
 
 [provision.repo-thing.codex]
-check   = { file = "~/.codex/config.toml", pointer = "mcp_servers.serena" }
+check   = { file = "~/.codex/config.toml", smells = "mcp_servers.serena" }
 install = "true"
 `)
   const refused = readStatus({}, f.config)
@@ -270,7 +270,7 @@ install = "true"
   assert.equal(refused.refusals.length, 1)
   assert.equal(refused.refusals[0].source, path.join(f.projectRoot, 'agents_environ.toml'))
   assert.equal(refused.refusals[0].line, 4)
-  assert.match(refused.refusals[0].reason, /unknown predicate 'pointer'/)
+  assert.match(refused.refusals[0].reason, /unknown predicate 'smells'/)
 
   // The gitignored file is read after the refused one, so a refusal does not end the pass.
   declare(f, 'project-local', `version = 1

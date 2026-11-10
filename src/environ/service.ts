@@ -1,8 +1,7 @@
-import { readFileSync } from 'node:fs'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
-import { evaluateCheck } from './check.ts'
+import { checkInputsOf, evaluateCheck } from './check.ts'
 import { loadEnvironment } from './loader.ts'
 import type { EnvironmentTier, FileRefusal, ProvisionRow } from './types.ts'
 
@@ -18,6 +17,10 @@ import type { EnvironmentTier, FileRefusal, ProvisionRow } from './types.ts'
 export { HARNESSES } from '../engine/adapters/types.ts'
 export { ENVIRONMENT_TIERS } from './types.ts'
 export type { EnvironmentTier } from './types.ts'
+
+// A native read reuses the harness readers and answers live: nothing is stored, and no Install
+// command is read or run. Re-exported so both faces ask the service, never an adapter.
+export { readNativeConfig } from './native-read.ts'
 
 // The run is the one command that executes anything, and it answers through this module like every
 // other part of the environment. It is a CLI surface only: nothing the MCP face registers can start
@@ -46,16 +49,6 @@ export interface StatusDocument {
   provisions: ProvisionRow[]
 }
 
-// A Check names one file and this is its only I/O: no process, no network, no write. A file that is
-// not there is `null`, which the evaluator answers as an absence.
-function checkBytes(file: string): string | null {
-  try {
-    return readFileSync(file, 'utf8')
-  } catch {
-    return null
-  }
-}
-
 export function readStatus(filter: StatusFilter = {}, config: EngineConfig = resolveDefaultConfig()): Status {
   const environment = loadEnvironment(config)
   const rows = new Map<string, ProvisionRow>()
@@ -67,7 +60,7 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
     // order it declares them, and a repeated harness would be a duplicate key the file cannot hold.
     const row = rows.get(provision.name) ?? { name: provision.name, tags: provision.tags, harnesses: [] }
     rows.set(provision.name, row)
-    const answer = evaluateCheck(provision.check, checkBytes(provision.check.file))
+    const answer = evaluateCheck(provision.check, checkInputsOf(provision.check))
     row.harnesses.push({
       harness: provision.harness,
       tier: provision.tier,

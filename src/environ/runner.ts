@@ -1,8 +1,7 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
-import { evaluateCheck } from './check.ts'
+import { checkInputsOf, evaluateCheck } from './check.ts'
 import { loadEnvironment } from './loader.ts'
 import type { Check, EnvironmentTier, FileRefusal, Presence, ResolvedProvision } from './types.ts'
 
@@ -57,16 +56,10 @@ interface CommandResult {
   failure: string | null
 }
 
-// The one I/O a Check causes. `null` is a file that is not there, which the evaluator answers as an
-// absence, exactly as `acm status` reads it.
+// The answer a Check gives this run, read the same way `acm status` reads it: one evaluator, one
+// reader, so a run never disagrees with the status that started it.
 function presenceOf(check: Check): Presence {
-  let bytes: string | null
-  try {
-    bytes = readFileSync(check.file, 'utf8')
-  } catch {
-    bytes = null
-  }
-  return evaluateCheck(check, bytes).presence
+  return evaluateCheck(check, checkInputsOf(check)).presence
 }
 
 // A name and a command come from a file, so control characters in them would forge or corrupt the

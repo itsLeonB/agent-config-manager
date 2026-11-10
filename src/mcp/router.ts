@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { ENVIRONMENT_TIERS, HARNESSES, readStatus, statusDocument } from '../environ/service.ts'
+import { ENVIRONMENT_TIERS, HARNESSES, readNativeConfig, readStatus, statusDocument } from '../environ/service.ts'
 
 // The MCP face is a thin call into the environment service: it registers tools and formats their
 // answers, and holds no reading logic of its own. No tool runs a command and no tool runs a Check
@@ -32,6 +32,24 @@ export function createRouter(): McpServer {
     },
     async ({ harness, name, tier }) =>
       answer(JSON.stringify(statusDocument(readStatus({ harness, name, tier })), null, 2)),
+  )
+
+  server.registerTool(
+    'read_native_config',
+    {
+      description:
+        'Read what one harness declares at the native paths it loads, secret-free: every declared path at the tier with whether it could be read, and each declaration with its file and the address inside it, or the file that did not parse. A credentialed value comes back as its verdict marker. Nothing is stored. Read-only.',
+      inputSchema: {
+        harness: z.enum(HARNESSES).describe('the harness whose native configuration to read'),
+        tier: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('one declared tier id, such as codex:user; every tier the harness declares when omitted'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ harness, tier }) => answer(JSON.stringify(readNativeConfig(harness, tier), null, 2)),
   )
 
   return server

@@ -139,7 +139,7 @@ test('a file the parser refuses contributes nothing and is reported with its sou
     `version = 1
 
 [provision.serena.codex]
-check   = { file = "~/.codex/config.toml", pointer = "mcp_servers.serena" }
+check   = { file = "~/.codex/config.toml", patrh = "mcp_servers.serena" }
 install = "python3 scripts/merge-codex-mcp.py serena"
 
 [provision.opencode-no-claude.opencode]
@@ -154,10 +154,10 @@ install = "true"
       source: path.join(f.home, 'agents_environ.toml'),
       line: 4,
       column: 44,
-      reason: "unknown predicate 'pointer'",
+      reason: "unknown predicate 'patrh'",
     },
   ])
-  assert.equal(formatRefusal(status.refusals[0]), `${path.join(f.home, 'agents_environ.toml')}:4:44: unknown predicate 'pointer'`)
+  assert.equal(formatRefusal(status.refusals[0]), `${path.join(f.home, 'agents_environ.toml')}:4:44: unknown predicate 'patrh'`)
 })
 
 // A Check is data: it reads the file it names and nothing else. An executable file at the check's
