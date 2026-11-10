@@ -65,6 +65,7 @@ export function loadEnvironment(config: EngineConfig): Environment {
           tags: declaration.tags,
           harness: entry.harness,
           tier: location.tier,
+          root: location.root,
           source: location.file,
           check,
           install: entry.install,

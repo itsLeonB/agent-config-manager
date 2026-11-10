@@ -21,6 +21,12 @@ export { HARNESSES } from '../engine/adapters/types.ts'
 // command is read or run. Re-exported so both faces ask the service, never an adapter.
 export { readNativeConfig } from './native-read.ts'
 
+// The run is the one command that executes anything, and it answers through this module like every
+// other part of the environment. It is a CLI surface only: nothing the MCP face registers can start
+// one.
+export { installRun } from './runner.ts'
+export type { InstallEntry, InstallOptions, InstallOutcome } from './runner.ts'
+
 export interface StatusFilter {
   harness?: HarnessId
   name?: string

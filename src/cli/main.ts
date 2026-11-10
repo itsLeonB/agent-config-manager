@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { statSync } from 'node:fs'
 import path from 'node:path'
-import { formatRefusal, formatStatus, readNativeConfig, readStatus, statusDocument } from '../environ/service.ts'
+import { formatRefusal, formatStatus, installRun, readNativeConfig, readStatus, statusDocument } from '../environ/service.ts'
 
 const USAGE = `usage: acm <command> [--project-root <dir>]
 
@@ -10,6 +10,12 @@ const USAGE = `usage: acm <command> [--project-root <dir>]
   status [--json]  print every Provision and the Presence of each harness's entry
 
   read <harness> [tier]  print what that harness declares at its native paths, secret-free
+
+  install [--dry-run] [--force] [--only <name>]...
+                    run every Install command whose Presence is not present
+                    --dry-run  print the plan and stop (the default when stdin is not a TTY)
+                    --force    run even what is already present
+                    --only     restrict the run to the named Provision; repeatable
 
   mcp serve  speak the MCP protocol over stdin/stdout
 `
@@ -48,6 +54,7 @@ function main(input: string[]): number | Promise<number> {
   if (command === 'mcp' && rest[0] === 'serve' && rest.length === 1) return mcpServe()
   if (command === 'status') return status(rest)
   if (command === 'read') return read(rest)
+  if (command === 'install') return install(rest)
   process.stderr.write(USAGE)
   return 1
 }
@@ -87,6 +94,42 @@ function status(rest: string[]): number {
     rest.includes('--json') ? `${JSON.stringify(statusDocument(answer), null, 2)}\n` : formatStatus(answer),
   )
   return answer.refusals.length === 0 ? 0 : 1
+}
+
+// Install runs the environment, so it is the only subcommand that executes anything and the only
+// one a human starts. The flags decide what happens; the runner decides the rest, including that a
+// non-TTY stdin means a dry run.
+function install(rest: string[]): number {
+  let dryRun: boolean | undefined
+  let force = false
+  const only: string[] = []
+  for (let at = 0; at < rest.length; at += 1) {
+    const arg = rest[at]
+    if (arg === '--dry-run') {
+      dryRun = true
+      continue
+    }
+    if (arg === '--force') {
+      force = true
+      continue
+    }
+    if (arg === '--only') {
+      const value = rest[at + 1]
+      if (value === undefined || value.startsWith('--')) {
+        process.stderr.write('--only needs a Provision name\n')
+        return 1
+      }
+      only.push(value)
+      at += 1
+      continue
+    }
+    process.stderr.write(`install takes --dry-run, --force and --only, not ${arg}\n`)
+    return 1
+  }
+  const outcome = installRun((text) => process.stdout.write(text), { dryRun, force, only })
+  // A refused file contributed nothing, so the run it produced was not the one the machine declares.
+  for (const refusal of outcome.refusals) process.stderr.write(`${formatRefusal(refusal)}\n`)
+  return outcome.exitCode
 }
 
 // The server runs until the client closes stdin; there is no exit code to report on success.

@@ -124,6 +124,18 @@ test('a refused environment file is reported with line and column, and fails the
   assert.match(result.stdout, /no Provisions declared/)
 })
 
+// Install off a terminal is the piped or scheduled invocation, and it is a dry run: the plan is
+// printed, and no command — here, a script the fixture does not have — is started.
+test('acm install prints the plan and starts nothing when stdin is not a terminal', () => {
+  const home = installed()
+  const planned = run(binPath(), home, ['install'])
+  assert.equal(planned.status, 0, planned.stderr)
+  assert.match(planned.stdout, /^plan: 3 planned, 1 to run, 2 already present · dry run$/m)
+  assert.match(planned.stdout, /^    \$ \.\/scripts\/zshrc-export\.sh OPENCODE_DISABLE_CLAUDE_CODE=1$/m)
+  assert.match(planned.stdout, /dry run: nothing was run/)
+  assert.doesNotMatch(planned.stdout, /→/)
+})
+
 // The carry-forward from ticket 01: a built bundle has to find the package it was installed into,
 // not the directory it happens to be started from. It is copied into an install-shaped layout —
 // `<root>/dist/acm.mjs` under `<root>/package.json` — started from a foreign directory, and the
