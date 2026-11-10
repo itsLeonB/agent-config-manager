@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert'
 import { parse as parseToml } from 'smol-toml'
 import { stripJsonc } from './adapters/opencode/read.ts'
-import { parses, writePointer } from './edit.ts'
+import { parses, splitPointer, writePointer } from './edit.ts'
 import type { NativeValue } from './native-value.ts'
 
 function json(text: string, pointer: string, value: NativeValue): string {
@@ -16,6 +16,27 @@ function toml(text: string, pointer: string, value: string | number): string {
   assert.equal(result.kind, 'ok', result.kind === 'failed' ? result.reason : '')
   return result.kind === 'ok' ? result.text : ''
 }
+
+test('splitPointer spells a quoted key and a numeric index, and refuses what it cannot split', () => {
+  assert.deepEqual(splitPointer('mcp_servers."my.server"'), [
+    { kind: 'key', name: 'mcp_servers' },
+    { kind: 'key', name: 'my.server' },
+  ])
+  assert.deepEqual(splitPointer('plugins.0.name'), [
+    { kind: 'key', name: 'plugins' },
+    { kind: 'index', index: 0 },
+    { kind: 'key', name: 'name' },
+  ])
+  assert.deepEqual(splitPointer('plugins."0"'), [
+    { kind: 'key', name: 'plugins' },
+    { kind: 'key', name: '0' },
+  ])
+  assert.throws(() => splitPointer(''), /a pointer has no segments/)
+  assert.throws(() => splitPointer('a..b'), /a pointer segment is empty/)
+  assert.throws(() => splitPointer('a."b'), /an unterminated quote/)
+  assert.throws(() => splitPointer('a."b"c'), /a dot or the end was expected after a segment/)
+  assert.throws(() => splitPointer('a.b!'), /a dot or the end was expected after a segment/)
+})
 
 test('a JSON pointer write replaces the value and leaves the rest of the document alone', () => {
   const before = `{

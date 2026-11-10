@@ -17,9 +17,10 @@ export type Presence = (typeof PRESENCES)[number]
 
 // A Check is the inline table the file spells. `{ file }` asks whether a file exists,
 // `{ file, contains }` whether its text matches a multiline pattern, `{ file, pointer [, equals] }`
-// whether a native config holds a value at an address, and `{ onPath }` whether a name is an
-// executable file on PATH. The set is closed: a predicate outside it refuses the file instead of
-// being ignored, and a fifth one is a schema change.
+// whether a native config holds a value at an address, `{ file, pointer, includes }` whether the
+// array at an address holds a value, and `{ onPath }` whether a name is an executable file on PATH.
+// The set is closed: a predicate outside it refuses the file instead of being ignored, and a new
+// one is a schema change.
 export interface FileExistsCheck {
   file: string
 }
@@ -30,13 +31,15 @@ export interface FileContainsCheck {
 }
 
 // `pointer` is the address inside `file`, spelled the same way for a JSON pointer and a TOML dotted
-// key because one reader derives the format from the file's extension. `equals` is any TOML value and
-// compares by deep equality, which is what keeps an entry that is there but switched off (`enabled =
-// false`) from counting as installed.
+// key because one reader derives the format from the file's extension. `equals` compares the value at
+// that address by deep equality, which is what keeps an entry that is there but switched off
+// (`enabled = false`) from counting as installed; `includes` asks whether the array at the address
+// holds a deeply equal element. Both are any TOML value, and one Check holds one of them.
 export interface FilePointerCheck {
   file: string
   pointer: string
   equals?: NativeValue
+  includes?: NativeValue
 }
 
 // The one predicate that names no file: a name looked up on PATH.

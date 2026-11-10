@@ -67,13 +67,25 @@ export function evaluateCheck(check: Check, inputs: CheckInputs): CheckAnswer {
   const { bytes } = file
   if ('contains' in check) return containsAnswer(check.contains, check.file, bytes)
   if (!('pointer' in check)) return { presence: 'present', detail: null }
-  const read = readPointer(bytes, formatOf(check.file), check.pointer.split('.'))
+  const read = readPointer(bytes, formatOf(check.file), check.pointer)
   if (read.kind === 'invalid') return { presence: 'unknown', detail: `${check.file} could not be read: ${read.reason}` }
   if (read.kind === 'missing') return { presence: 'absent', detail: `${check.file} has no ${check.pointer}` }
   // `equals` is why an entry that is present but switched off is not an installed one: the address
   // exists, and its value still has to be the value the Provision means.
   if ('equals' in check && !isDeepStrictEqual(read.value, check.equals)) {
     return { presence: 'absent', detail: `${check.file}'s ${check.pointer} is not the declared value` }
+  }
+  // `includes` answers whether the array at the address holds a value, by the same deep equality:
+  // how a plugin list is addressed without a regex over the whole file. An address that holds
+  // something else is a Check written against a file it does not match, so the answer is `unknown`,
+  // not `absent`.
+  if ('includes' in check) {
+    if (!Array.isArray(read.value)) {
+      return { presence: 'unknown', detail: `${check.file}'s ${check.pointer} is not an array` }
+    }
+    if (!read.value.some((element) => isDeepStrictEqual(element, check.includes))) {
+      return { presence: 'absent', detail: `${check.file}'s ${check.pointer} does not include the declared value` }
+    }
   }
   return { presence: 'present', detail: null }
 }

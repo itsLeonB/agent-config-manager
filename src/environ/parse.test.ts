@@ -165,9 +165,10 @@ test('an unknown predicate refuses the file at that predicate', () => {
   )
 })
 
-// The other three predicates: an address inside a file, an address with the value it must hold, and
-// a name on PATH. `equals` is any TOML value, so a table with a list in it is spelled as one.
-test('pointer, equals, and onPath load as the Checks they spell', () => {
+// The other four predicates: an address inside a file, an address with the value it must hold, a
+// value among the elements of an array at one, and a name on PATH. `equals` and `includes` are any
+// TOML value, so a table with a list in it is spelled as one.
+test('pointer, equals, includes, and onPath load as the Checks they spell', () => {
   const declarations = provisionsOf(`version = 1
 
 [provision.serena.codex]
@@ -176,6 +177,10 @@ install = "true"
 
 [provision.serena.pi]
 check   = { file = "~/.pi/mcp.json", pointer = "mcpServers.serena" }
+install = "true"
+
+[provision.i-have-adhd.opencode]
+check   = { file = "~/.config/opencode/opencode.json", pointer = "plugins", includes = "i-have-adhd" }
 install = "true"
 
 [provision.rtk.pi]
@@ -193,19 +198,38 @@ install = "true"
         },
         { file: '~/.pi/mcp.json', pointer: 'mcpServers.serena' },
       ],
+      [{ file: '~/.config/opencode/opencode.json', pointer: 'plugins', includes: 'i-have-adhd' }],
       [{ onPath: 'rtk' }],
     ],
   )
 })
 
-// A Check is one of the four, never two written to look like one: `equals` without an address has
-// nothing to compare, and `onPath` beside `file` is a predicate nobody could answer.
+// A Check is one of the five, never two written to look like one: `equals` without an address has
+// nothing to compare, `includes` is the same, and neither sits beside the other or beside `contains`,
+// because each answers a different question and one Check has one answer.
 test('a predicate that contradicts itself refuses the file at the offending key', () => {
   const withoutPointer = refusalOf(
     'version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", equals = true }\ninstall = "x"\n',
   )
   assert.equal(withoutPointer.line, 4)
   assert.equal(withoutPointer.reason, 'equals needs a pointer')
+
+  const includesWithoutPointer = refusalOf(
+    'version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", includes = "y" }\ninstall = "x"\n',
+  )
+  assert.deepEqual(includesWithoutPointer, { line: 4, column: 23, reason: 'includes needs a pointer' })
+
+  const equalsAndIncludes = refusalOf(
+    'version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", pointer = "p", equals = true, includes = "y" }\ninstall = "x"\n',
+  )
+  assert.equal(equalsAndIncludes.line, 4)
+  assert.equal(equalsAndIncludes.reason, 'a check holds equals or includes, not both')
+
+  const containsAndIncludes = refusalOf(
+    'version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", contains = "y", includes = "z" }\ninstall = "x"\n',
+  )
+  assert.equal(containsAndIncludes.line, 4)
+  assert.equal(containsAndIncludes.reason, 'a check holds contains or includes, not both')
 
   const both = refusalOf(
     'version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", contains = "y", pointer = "z" }\ninstall = "x"\n',
@@ -218,6 +242,29 @@ test('a predicate that contradicts itself refuses the file at the offending key'
   )
   assert.equal(onPathAndFile.line, 4)
   assert.equal(onPathAndFile.reason, "onPath takes no other key, and 'file' is one")
+})
+
+test('a pointer that cannot be spelled refuses the file at the pointer key', () => {
+  assert.deepEqual(
+    refusalOf(
+      'version = 1\n\n[provision.serena.codex]\ncheck   = { file = "~/.codex/config.toml", pointer = "mcp_servers.\\"my.server" }\ninstall = "x"\n',
+    ),
+    { line: 4, column: 44, reason: 'pointer cannot be spelled: an unterminated quote' },
+  )
+  // A stray character after a closed quote and an empty segment refuse the same way, and a pointer
+  // that is spelled with quotes still loads when it can be split.
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", pointer = "a.\\"b\\"c" }\ninstall = "x"\n').reason,
+    'pointer cannot be spelled: a dot or the end was expected after a segment',
+  )
+  assert.equal(
+    refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", pointer = "a..b" }\ninstall = "x"\n').reason,
+    'pointer cannot be spelled: a pointer segment is empty',
+  )
+  const quoted = provisionsOf(
+    'version = 1\n\n[provision.serena.codex]\ncheck = { file = "x", pointer = "mcp_servers.\\"my.server\\"" }\ninstall = "x"\n',
+  )
+  assert.deepEqual(quoted[0].entries[0].checks, [{ file: 'x', pointer: 'mcp_servers."my.server"' }])
 })
 
 test('a pointer that is not a string or is empty refuses the file at it', () => {

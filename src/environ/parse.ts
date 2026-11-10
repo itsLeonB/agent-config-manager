@@ -1,6 +1,7 @@
 import { parse, TomlError } from 'smol-toml'
 import { z } from 'zod'
 import { HARNESSES } from '../engine/adapters/types.ts'
+import { splitPointer } from '../engine/edit.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
 import type { Check, DeclaredEntry, ParseResult, ProvisionDeclaration, Refusal } from './types.ts'
 
@@ -19,10 +20,18 @@ const FILE_KEY = 'file'
 const CONTAINS_KEY = 'contains'
 const POINTER_KEY = 'pointer'
 const EQUALS_KEY = 'equals'
+const INCLUDES_KEY = 'includes'
 const ON_PATH_KEY = 'onPath'
 // The closed predicate set: the keys a Check may carry besides `file`. Anything else is a typo and
 // refuses the file, so a Check ACM does not understand is never silently ignored.
-const PREDICATE_KEYS: ReadonlySet<string> = new Set([FILE_KEY, CONTAINS_KEY, POINTER_KEY, EQUALS_KEY, ON_PATH_KEY])
+const PREDICATE_KEYS: ReadonlySet<string> = new Set([
+  FILE_KEY,
+  CONTAINS_KEY,
+  POINTER_KEY,
+  EQUALS_KEY,
+  INCLUDES_KEY,
+  ON_PATH_KEY,
+])
 
 // TOML can hold dates and big integers; this schema describes strings, numbers, booleans, arrays, and
 // tables, which is every value an environment file is allowed to write.
@@ -135,20 +144,39 @@ function decodeCheck(table: EnvironmentTable, block: readonly string[], at: Sour
   const file = stringValue(table[FILE_KEY])
   if (file === null) return refused(place(checkAt(FILE_KEY), 'file must be a string'))
   if (file === '') return refused(place(checkAt(FILE_KEY), 'file is empty'))
-  // A Check is one of the four predicates, never two: `contains` and `pointer` answer the same
-  // question in two ways, so both spelled at once refuses rather than picking one.
+  // A Check is one of the five predicates, never two: `contains` and `pointer` answer the same
+  // question in two ways, so both spelled at once refuses rather than picking one. `equals` and
+  // `includes` are the two answers a pointer Check may give, so one Check holds one of them, and
+  // neither sits beside `contains` for the same reason.
   if (has(table, CONTAINS_KEY) && has(table, POINTER_KEY)) {
     return refused(place(checkAt(POINTER_KEY), 'a check holds contains or pointer, not both'))
+  }
+  if (has(table, INCLUDES_KEY) && has(table, EQUALS_KEY)) {
+    return refused(place(checkAt(INCLUDES_KEY), 'a check holds equals or includes, not both'))
+  }
+  if (has(table, INCLUDES_KEY) && has(table, CONTAINS_KEY)) {
+    return refused(place(checkAt(INCLUDES_KEY), 'a check holds contains or includes, not both'))
   }
   if (has(table, POINTER_KEY)) {
     const pointer = stringValue(table[POINTER_KEY])
     if (pointer === null) return refused(place(checkAt(POINTER_KEY), 'pointer must be a string'))
     if (pointer === '') return refused(place(checkAt(POINTER_KEY), 'pointer is empty'))
+    // A pointer the splitter cannot spell is an address ACM cannot read, so the file refuses here
+    // rather than a Check answering `absent` for something it never looked at.
+    try {
+      splitPointer(pointer)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      return refused(place(checkAt(POINTER_KEY), `pointer cannot be spelled: ${reason}`))
+    }
+    if (has(table, INCLUDES_KEY)) return { ok: true, value: { file, pointer, includes: table[INCLUDES_KEY] } }
     return has(table, EQUALS_KEY)
       ? { ok: true, value: { file, pointer, equals: table[EQUALS_KEY] } }
       : { ok: true, value: { file, pointer } }
   }
-  // `equals` compares a value at an address, so on its own it names nothing to compare.
+  // `equals` and `includes` compare what sits at an address, so on their own they name nothing to
+  // compare.
+  if (has(table, INCLUDES_KEY)) return refused(place(checkAt(INCLUDES_KEY), 'includes needs a pointer'))
   if (has(table, EQUALS_KEY)) return refused(place(checkAt(EQUALS_KEY), 'equals needs a pointer'))
   if (!has(table, CONTAINS_KEY)) return { ok: true, value: { file } }
   const contains = stringValue(table[CONTAINS_KEY])
