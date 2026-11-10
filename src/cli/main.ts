@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { statSync } from 'node:fs'
 import path from 'node:path'
+import { formatRefusal, formatStatus, readStatus, statusDocument } from '../environ/service.ts'
 
 const USAGE = `usage: acm <command> [--project-root <dir>]
 
   --project-root <dir>  read that project's config instead of the working directory's
+
+  status [--json]  print every Provision and the Presence of each harness's entry
 
   mcp serve  speak the MCP protocol over stdin/stdout
 `
@@ -41,8 +44,27 @@ function main(input: string[]): number | Promise<number> {
   const rest = argv.slice(1)
   // The MCP face loads the SDK only when it is asked for it.
   if (command === 'mcp' && rest[0] === 'serve' && rest.length === 1) return mcpServe()
+  if (command === 'status') return status(rest)
   process.stderr.write(USAGE)
   return 1
+}
+
+// Status re-evaluates every Check, so what it prints is this machine's now rather than a remembered
+// answer. A refused environment file makes the command fail: an environment acm could not read is
+// not an environment with nothing in it, and a script that ignored the difference would converge
+// half a machine.
+function status(rest: string[]): number {
+  const unknown = rest.find((arg) => arg !== '--json')
+  if (unknown !== undefined) {
+    process.stderr.write(`status takes --json, not ${unknown}\n`)
+    return 1
+  }
+  const answer = readStatus()
+  for (const refusal of answer.refusals) process.stderr.write(`${formatRefusal(refusal)}\n`)
+  process.stdout.write(
+    rest.includes('--json') ? `${JSON.stringify(statusDocument(answer), null, 2)}\n` : formatStatus(answer),
+  )
+  return answer.refusals.length === 0 ? 0 : 1
 }
 
 // The server runs until the client closes stdin; there is no exit code to report on success.

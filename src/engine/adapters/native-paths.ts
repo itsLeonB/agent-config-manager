@@ -155,9 +155,9 @@ const TIER_TABLES = {
   opencode: openCodeTiers,
 } satisfies Record<HarnessId, TierTable>
 
-// Every tier one harness reads, in the table's own precedence order. Ticket 03 resolves a relative
-// check path against a tier's root and ticket 08 reads every declared path at one, so both answer
-// from this pair rather than from the inventory.
+// Every tier one harness reads, in the table's own precedence order. Ticket 08 reads every declared
+// path at a tier through this pair rather than re-deriving one; an environment file's tier root is
+// not this: it is `$HOME` or the project root, and the loader owns it.
 export function nativeTiers(config: EngineConfig, harness: HarnessId): Tier[] {
   return TIER_TABLES[harness](config)
 }

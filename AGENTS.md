@@ -47,7 +47,7 @@ decisions.
   migration 2 drops the previous engine's inventory tables in four `DROP TABLE IF EXISTS`
   statements. Every write transaction opens with `BEGIN IMMEDIATE`, because the CLI, the MCP
   server, and the scanner all open the file.
-- **The engine is a library of readers, with the environment path still to come.**
+- **The engine is a library of readers, and the environment is what runs on it.**
   `src/engine/config.ts` resolves the roots an adapter never reads itself (home, project root,
   store path, `CODEX_HOME`); `src/engine/adapters/` holds one directory per harness (Pi, Codex,
   OpenCode) plus the shared readers: MCP fact classification in `mcp-facts.ts`, skills in
@@ -68,10 +68,15 @@ decisions.
   nearest `package.json` above whichever of the two it is running from — where `acm` is installed,
   shared by every project — while the **project root** is the working directory the harness or
   shell opened `acm` in (or `ACM_PROJECT_ROOT` / `CLAUDE_PROJECT_DIR`, canonicalised, never walked
-  up), so one installed `acm` reads whatever repository it was started in. `src/mcp/router.ts` is
-  the MCP face and `src/mcp/server.ts` puts it on a stdio transport behind `acm mcp serve`; the
-  router registers no tool yet, so `tools/list` answers an empty list, and neither face imports an
-  adapter. Nothing under `src/routes/` or `src/components/` imports either.
+  up), so one installed `acm` reads whatever repository it was started in. `src/environ/` holds the
+  declared environment: `parse.ts` validates one environment file totally against a closed schema
+  and refuses the whole file with a line and column, `check.ts` evaluates a Check over the bytes it
+  names (a Check reads and never spawns), `loader.ts` is the only module that knows where a tier's
+  file lives and what its root is, and `service.ts` is everything a face may call — the rows, one
+  Presence per harness, the printing, and the JSON. `src/mcp/router.ts` is the MCP face and
+  `src/mcp/server.ts` puts it on a stdio transport behind `acm mcp serve`; the router registers
+  `list_provisions`, which answers from that service, and neither face imports an adapter, a store
+  module, or a loader internal. Nothing under `src/routes/` or `src/components/` imports either.
 - **The Claude dashboard is the previous product, kept working unchanged.** It reads the same store;
   its rendering, rescan, settings, scanner, and container notes are in
   [docs/dashboard.md](docs/dashboard.md). Read that before touching `src/routes/`,

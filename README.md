@@ -10,7 +10,8 @@ Two things live here:
   declared environment — one TOML file of named Provisions, each with a check and an install command
   per harness — so a machine can be reproduced with one command instead of by hand. See
   [CONTEXT.md](CONTEXT.md) and [ADR 0007](docs/adr/0007-declare-provisions-and-delete-the-mirror-engine.md)
-  for where that is going; the environment file, `acm status`, and `acm install` are not here yet.
+  for where that is going; `acm status` reads the environment file today, and `acm install` is not
+  here yet.
 
 ## Install
 
@@ -55,7 +56,21 @@ Two things live here:
 
 | Command | What it does |
 | --- | --- |
-| `acm mcp serve` | Speaks the MCP protocol over stdin/stdout. It registers no tool yet: the environment tools land as the tickets that own them arrive, so `tools/list` answers an empty list. |
+| `acm status` | Prints every Provision with the Presence (`present`, `absent`, `unknown`) of each harness it declares, one row per harness entry, then the project and store it read from. `--json` prints the same rows as data. A refused environment file is reported on stderr with a line and column, and makes the command exit non-zero |
+| `acm mcp serve` | Speaks the MCP protocol over stdin/stdout. It registers `list_provisions`, which answers the same rows as `acm status --json`; the other environment tools land as the tickets that own them arrive |
+
+The environment file is `~/agents_environ.toml`, one table per Provision and harness:
+
+```toml
+version = 1
+
+[provision.opencode-no-claude.opencode]
+check   = { file = "~/.zshrc", contains = "OPENCODE_DISABLE_CLAUDE_CODE" }
+install = "./scripts/zshrc-export.sh OPENCODE_DISABLE_CLAUDE_CODE=1"
+```
+
+A Check is declared data and is evaluated by reading, so it never runs anything. A malformed file is
+refused whole, with the line and column of the fault, rather than loaded halfway.
 
 Every invocation takes `--project-root <dir>`: the project an engine pass reads defaults to the
 working directory, taken as given and never walked up to a repository marker, and this names another
