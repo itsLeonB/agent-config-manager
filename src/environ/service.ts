@@ -28,6 +28,11 @@ export type { EnvironmentTier } from './types.ts'
 // command is read or run. Re-exported so both faces ask the service, never an adapter.
 export { readNativeConfig } from './native-read.ts'
 
+// A definition writes an environment file and nothing else: it never runs an Install command and
+// never evaluates a Check, so adding a Provision and converging one stay two separate acts.
+export { defineProvision } from './define.ts'
+export type { DefineOutcome, DefineRequest } from './define.ts'
+
 // The run is the one command that executes anything, and it answers through this module like every
 // other part of the environment. It is a CLI surface only: nothing the MCP face registers can start
 // one.
