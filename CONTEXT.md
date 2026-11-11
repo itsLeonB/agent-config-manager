@@ -56,24 +56,30 @@ fenced code block ignored and `### ` headings not ending it. ACM reads it and ma
 nothing outside it is touched.
 _Avoid_: block, marker, region, chunk
 
-**Environment**: the merged set of Provisions declared by the environment files ACM is facing.
+**Environment**: the merged set of Provisions declared by the user and project environment files
+ACM is facing.
 _Avoid_: config, inventory, setup, state
 
-**Environment file**: `agents_environ.toml`, or `agents_environ.local.toml` at project-local tier.
-Where Provisions are declared; its location is its tier.
+**Environment file**: `agents_environ.toml`. Where Provisions are declared; its location is its tier.
 _Avoid_: manifest, lockfile, dotfile, registry
 
-**Tier**: where an environment file lives — `user` (`~/agents_environ.toml`), `project`
-(`<repo>/agents_environ.toml`, committed), `project-local` (`<repo>/agents_environ.local.toml`,
-gitignored). Nothing else is a tier, and no entry names one: the file it sits in says it. A tier's
-root is `$HOME` for `user` and the **Project root** for the other two.
+**Tier**: where an environment file lives — `user` (`~/agents_environ.toml`) or `project`
+(`<repo>/agents_environ.toml`, committed). Nothing else is a tier, and no entry names one: the file
+it sits in says it. A tier's root is `$HOME` for `user` and the **Project root** for `project`.
 _Avoid_: scope, scope bucket, layer, level
 
-**Harness**: an agent CLI that reads its own native configuration — Pi, Codex, OpenCode among them. In the environment layer the name is a free-form label (any non-empty, NUL-free string); only the native-read layer enumerates the harnesses ACM can read natively.
-In an environment file its name is a free-form label: ACM does not enumerate or validate the harnesses
-a Provision names, and a human may declare any. Only the Native read layer knows the three harnesses
-whose config it can read; the environment layer treats the name as display and identity only.
+**Harness**: an agent CLI that reads its own native configuration — Pi, Codex, OpenCode among them.
+In the environment layer the name is a free-form label (any non-empty, NUL-free string); only the
+native-read layer enumerates the harnesses ACM can read natively. A file may declare the harnesses
+it faces with a top-level `harnesses` list; when it does, every entry in that file must use one of
+those names, and the list is never merged across files. A file with no list declares no harnesses.
 _Avoid_: client, agent, tool, target
+
+**Declared harnesses**: the `harnesses` list at the top of one environment file — the harnesses that
+file's entries may name. It is per file and never merged; a file without one declares no constraint.
+`acm skills install` uses the user file's list for the user lockfile and the project file's list for
+the project lockfile.
+_Avoid_: harness set, enabled harnesses
 
 **Native location**: `{file, pointer}` — a config file plus the address inside it. Named by a native
 read, and what a check may point at.
@@ -82,6 +88,11 @@ read, and what a check may point at.
 Never stored and never the inventory: it is what an agent reads to write Provisions for a harness that
 has none yet.
 _Avoid_: discovery, scan, inventory, harvest
+
+**Skills lockfile**: the file the `skills` CLI maintains — `~/.agents/.skill-lock.json` for user scope
+and `<project>/skills-lock.json` for project scope. It is the source of truth for which skills are
+installed; ACM reads it and never writes it.
+_Avoid_: skill manifest, skill registry, skill list
 
 **Verdict**: the classifier's answer for one value — `clean`, `suspect`, or `secret` — produced before
 any value can reach a native read's answer, a tool result, or a log line.

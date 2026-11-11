@@ -55,14 +55,14 @@ Two things live here:
 
 | Command | What it does |
 | --- | --- |
-| `acm status` | Prints every Provision with the Presence (`present`, `absent`, `unknown`) of each harness it declares, one row per harness entry, then the project and store it read from. `--json` prints the same rows as data, and `--tier <user\|project\|project-local>` keeps only the entries that tier owns. A refused environment file is reported on stderr with a line and column, and makes the command exit non-zero |
+| `acm status` | Prints every Provision with the Presence (`present`, `absent`, `unknown`) of each harness it declares, one row per harness entry, then the project and store it read from. `--json` prints the same rows as data, and `--tier <user\|project>` keeps only the entries that tier owns. A refused environment file is reported on stderr with a line and column, and makes the command exit non-zero |
 | `acm read <harness> [tier]` | Prints what one harness declares at the native paths it loads — every declared location at the tier, and each declaration with its file and the address inside it — secret-free: a credentialed value comes back as its verdict marker. Nothing is stored. An omitted tier answers for every tier the harness declares |
 | `acm install` | Runs every Install command whose Presence is not `present`, in file order of the winning entry and from that entry's Tier root. `--dry-run` prints the preview and stops (the default when stdin is not a TTY), `--force` runs even what is present, `--only <name>` narrows to the named Provisions and is repeatable, and `--tier` narrows to one tier |
-| `acm mcp serve` | Speaks the MCP protocol over stdin/stdout. It registers `list_provisions`, which answers the Presence rows with no run history — `acm status --json` adds the latest Run per entry once an `acm install` has recorded one; `read_native_config`, which answers the same declarations as `acm read`; and `define_provision`, which writes one Provision's entry into an environment file |
+| `acm skills install` | Reads the user and project skills lockfiles, groups each by source, and runs `npx skills add <source> --skill <name>... --agent <harness>... [-g] -y` once per source. `--dry-run` prints the commands and stops. A missing lockfile or an entry with no source warns and the rest still runs; any failed command makes the exit status non-zero |
+| `acm mcp serve` | Speaks the MCP protocol over stdin/stdout. It registers `list_provisions`, which answers the Presence rows with no run history — `acm status --json` adds the latest Run per entry once an `acm install` has recorded one; `read_native_config`, which answers the same declarations as `acm read`; `define_provision`, which writes one Provision's entry into an environment file; `list_harnesses`, which answers the harness list per tier; and `declare_harnesses`, which writes one tier's harness list |
 
-Three environment files are read, one per Tier: `~/agents_environ.toml`, the committed
-`<project>/agents_environ.toml`, and the gitignored `<project>/agents_environ.local.toml`. Each is
-one table per Provision and harness:
+Two environment files are read, one per Tier: `~/agents_environ.toml` and the committed
+`<project>/agents_environ.toml`. Each is one table per Provision and harness:
 
 ```toml
 version = 1
@@ -72,15 +72,24 @@ check   = { file = "~/.zshrc", contains = "OPENCODE_DISABLE_CLAUDE_CODE" }
 install = "./scripts/zshrc-export.sh OPENCODE_DISABLE_CLAUDE_CODE=1"
 ```
 
-For one Provision and harness the nearest file wins whole — `project-local` over `project` over
-`user` — so a nearer entry replaces the farther one, `tags` included, rather than inheriting half of
-it. A relative path in a Check or in an Install command resolves against its Tier's root: `$HOME` in
-the user file, the Project root in the two project files, which is what lets the same text be
-written twice and read correctly in both.
+For one Provision and harness the nearer file wins whole — `project` over `user` — so a nearer
+entry replaces the farther one, `tags` included, rather than inheriting half of it. A relative path in
+a Check or in an Install command resolves against its Tier's root: `$HOME` in the user file, the
+Project root in the project file, which is what lets the same text be written twice and read
+correctly in both.
 
 A Check is declared data and is evaluated by reading, so it never runs anything. A malformed file is
 refused whole, with the line and column of the fault, rather than loaded halfway, and the files that
 do parse still load.
+
+A file may declare the harnesses it faces with a top-level `harnesses` list. When it does, every
+entry in that file must use one of those names; the list is per file and is never merged. `acm skills
+install` uses the user file's list for the user lockfile and the project file's list for the project
+lockfile.
+
+Skills are not Provisions. `acm skills install` reads the skills lockfiles and calls the `skills` CLI;
+`acm status` and `acm install` do not look at skills. See
+[ADR 0010](docs/adr/0010-skills-come-from-the-lockfile.md).
 
 Every invocation takes `--project-root <dir>`: the project an engine pass reads defaults to the
 working directory, taken as given and never walked up to a repository marker, and this names another
