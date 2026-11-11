@@ -426,13 +426,13 @@ function rootKeyEnd(lines: string[], found: number): number {
         case 'multi-basic':
           if (char === '\\') at += 1
           else if (char === '"' && next === '"' && next2 === '"') {
-            at += 2
+            while (line[at + 1] === '"') at += 1
             state = 'normal'
           }
           break
         case 'multi-literal':
           if (char === "'" && next === "'" && next2 === "'") {
-            at += 2
+            while (line[at + 1] === "'") at += 1
             state = 'normal'
           }
           break
@@ -588,7 +588,7 @@ function samePath(left: string[], right: string[]): boolean {
 function tomlLineKey(line: string): string | null {
   const match = /^\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*=/.exec(line)
   if (match === null) return null
-  if (match[1] !== undefined) return JSON.parse(`"${match[1]}"`)
+  if (match[1] !== undefined) return Object.keys(parseToml(`${match[0]} 0`))[0] ?? null
   return match[2] ?? match[3] ?? null
 }
 

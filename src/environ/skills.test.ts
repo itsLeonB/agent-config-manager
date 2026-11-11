@@ -91,6 +91,11 @@ test('integer-like skill names keep the file order the bytes spell', () => {
   assert.deepEqual(read.skills.map((skill) => skill.name), ['10', '2', 'abc'])
 })
 
+test('a repeated skills key uses the last map and keeps its file order', () => {
+  const read = parseSkillsLock(lockBytes('{"skills":{},"skills":{"10":{"source":"a"},"2":{"source":"b"}}}'), LOCK)
+  assert.deepEqual(read.skills, [{ name: '10', source: 'a' }, { name: '2', source: 'b' }])
+})
+
 test('readSkillsLock is the filesystem wrapper: a missing file warns with its tier', () => {
   const missing = path.join(somewhere(), 'never.json')
   const read = readSkillsLock(missing, 'project')

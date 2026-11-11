@@ -231,6 +231,26 @@ check = { file = "x" }
 
 // A TOML key may be literal-quoted: `'harnesses'` names the same key as `harnesses`, so a write and
 // a delete must find it — and a replace must not leave a second spelling behind.
+test('multiline strings with four or five closing quotes leave sibling Provisions intact', () => {
+  const siblings = '\n[provision.demo.pi]\ncheck = { file = "x" }\n'
+  for (const quote of ['"', "'"]) {
+    for (const count of [4, 5]) {
+      const before = `version = 1\nharnesses = [${quote.repeat(3)}pi${quote.repeat(count)}, "pi"]\n${siblings}`
+      assert.equal(parses(before, 'toml'), true)
+      assert.equal(toml(before, 'harnesses', ['codex']), `version = 1\nharnesses = ["codex"]\n${siblings}`)
+      assert.equal(deleteTomlKey(before, 'harnesses'), `version = 1\n${siblings}`)
+    }
+  }
+})
+
+test('Unicode-escaped TOML root keys support replacement and deletion', () => {
+  const siblings = '\n[provision.demo.pi]\ncheck = { file = "x" }\n'
+  const before = `version = 1\n"\\U00000068arnesses" = ["pi"]\n${siblings}`
+  assert.equal(parses(before, 'toml'), true)
+  assert.equal(toml(before, 'harnesses', ['codex']), `version = 1\nharnesses = ["codex"]\n${siblings}`)
+  assert.equal(deleteTomlKey(before, 'harnesses'), `version = 1\n${siblings}`)
+})
+
 test('a literal-quoted root key is found, replaced, and deleted like a bare one', () => {
   const before = `version = 1
 'harnesses' = ["pi"]

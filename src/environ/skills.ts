@@ -120,7 +120,7 @@ export function readSkillsLock(file: string, tier: EnvironmentTier): SkillsLockR
 // still comes from the parsed map.
 function skillsKeyOrder(text: string): string[] | null {
   const members = jsonObjectMembers(text)
-  const skills = members?.find((member) => member.key === 'skills')
+  const skills = members?.reverse().find((member) => member.key === 'skills')
   if (skills === undefined) return null
   return jsonObjectMembers(text, skills.start)?.map((member) => member.key) ?? null
 }

@@ -1,6 +1,6 @@
 # Skills lockfile and two-tier environment
 
-Spec: [spec.md](../spec.md). Tickets: [issues/](issues/).
+Spec: [spec.md](spec.md). Tickets: [issues/](issues/).
 
 ## Notes
 
@@ -35,9 +35,16 @@ Spec: [spec.md](../spec.md). Tickets: [issues/](issues/).
   `src/mcp/router.ts` registers `declare_harnesses`; `src/engine/edit.ts` gained root-key
   write/delete support. See the ticket's `## Answer` for the full record.
 
+## Review fixes
+
+- Two-axis review and a focused safety check found issues in TOML value boundaries, quoted
+  keys, lockfile order and parsing, terminal output, and command failures. Regression tests now
+  cover the reported cases, including four/five closing quotes, Unicode-escaped TOML keys,
+  and repeated JSON `skills` keys. All findings are fixed.
+
 ## Fog
 
-- All tickets are resolved and the two-axis review's findings are fixed on this branch: the
+- All tickets are resolved and the review findings are fixed on this branch: the
   root-key scanner is TOML-state aware and reads literal-quoted keys, the skills reader is a
   pure bytes function at the spec's fixed path, spawn failures are per-command, printed
   file-derived text goes through `printable`, and the define/declare write sequence is shared.

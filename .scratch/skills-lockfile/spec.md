@@ -1,6 +1,6 @@
 # Spec: skills from the lockfile, and two environment tiers
 
-Status: ready-for-agent
+Status: resolved
 Source: conversation of this branch. Vocabulary in [CONTEXT.md](../../CONTEXT.md).
 
 ## Problem Statement
