@@ -78,25 +78,32 @@ export type SectionInstall = {
 // native file and Payload a Section write names.
 export type InstallCommand = string | PayloadInstall | SectionInstall
 
-// One `(provision, harness)` as the file spells it, before any path is resolved against a tier
-// root. `checks` is one or more, and all of them have to hold; a file that spells a single
-// `check = { … }` is read as this list's one element. `install` is the command spelled in the file
-// or the Payload a too-long command lives in.
+// One `[provision.<name>.<harness>]` table. `checks` and `install` are the entry's own — possibly
+// neither, when the Provision's shared declarations cover it; an entry that ends up with no
+// effective Check or Install command refuses the file. `check = { … }` is read as a one-element
+// list, so a file written before that spelling keeps loading.
 export interface DeclaredEntry {
   harness: HarnessId
   checks: Check[]
-  install: InstallCommand
+  install: InstallCommand | null
 }
 
-// One `[provision.<name>]` table. `tags` filter and are not identity.
+// One `[provision.<name>]` table. `tags` filter and are not identity. `checks` and `install` are
+// the shared declarations every harness entry inherits — the entry's effective Checks are the
+// shared ones plus its own, and its effective Install commands are the shared one plus its own.
 export interface ProvisionDeclaration {
   name: string
   tags: string[]
+  checks: Check[]
+  install: InstallCommand | null
   entries: DeclaredEntry[]
 }
 
-// One `(provision, harness)` after the loader applied its tier's root: every Check's `file` and a
-// Payload's path are absolute and `source` is the environment file the entry came from.
+// One `(provision, harness)` after the loader applied its tier's root and folded the shared
+// declarations in: `checks` is every Check the entry answers to, `install` its own Install command
+// or null, `sharedInstall` the Provision's shared one or null — the runner needs them apart because
+// the shared command runs at most once per Provision per run. Every Check's `file` and a Payload's
+// path are absolute and `source` is the environment file the entry came from.
 export interface ResolvedProvision {
   name: string
   tags: string[]
@@ -108,7 +115,8 @@ export interface ResolvedProvision {
   root: string
   source: string
   checks: Check[]
-  install: InstallCommand
+  install: InstallCommand | null
+  sharedInstall: InstallCommand | null
 }
 
 // A refusal locates the declaration at fault, so a typo is a line to edit rather than a file to

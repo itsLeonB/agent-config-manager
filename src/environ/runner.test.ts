@@ -174,6 +174,35 @@ install = "${command} already"
   assert.match(forced.printed, /^  ran: already \(opencode\) exit 0$/m)
 })
 
+// The preview is read before the first command starts, so a skipped entry's Presence can be stale by
+// the time its turn comes: an earlier command can remove what its Check reads. The entry still runs
+// nothing, but it is reported absent and the run is not a success.
+test('a Provision skipped at preview but absent by its turn is reported absent', () => {
+  const f = fixture()
+  const fix = script(f, 'fix.sh', 'touch a.marker\nrm -f shared.marker')
+  file(path.join(f.home, 'shared.marker'), '')
+  environment(f, `version = 1
+
+[provision.first.pi]
+check   = { file = "~/a.marker" }
+install = "${fix}"
+
+[provision.second.codex]
+check   = { file = "~/shared.marker" }
+install = "./never.sh"
+`)
+  const { printed, outcome } = run(f)
+  assert.equal(fs.existsSync(path.join(f.home, 'a.marker')), true)
+  assert.equal(fs.existsSync(path.join(f.home, 'shared.marker')), false)
+  const second = outcome.entries.find((entry) => entry.provision.name === 'second')
+  assert.ok(second !== undefined)
+  assert.equal(second.attempted, false)
+  assert.equal(second.after, 'absent')
+  assert.match(printed, /^  already present: none$/m)
+  assert.match(printed, /^  still absent: second \(codex\) absent$/m)
+  assert.equal(outcome.exitCode, 1)
+})
+
 test('a failing command is reported, the run continues, and the summary names every group', () => {
   const f = fixture()
   script(f, 'boom.sh', 'echo boom-stderr >&2\nexit 7')
@@ -730,6 +759,83 @@ install = { payload = "a\\nb.sh" }
   const { printed } = run(f)
   assert.match(printed, /failed: sneaky \(pi\) .*a\?b\.sh could not be read/)
   assert.equal(printed.includes('a\nb.sh'), false, 'a raw line break reached the summary')
+})
+
+// A Provision's shared Install command runs at most once per run, before the first entry that
+// needs it: the preview prints it once, labeled, and each command it runs is its own Run.
+test('a shared Install command runs once across several entries and is recorded once', () => {
+  const f = fixture()
+  const shared = script(f, 'shared.sh', `echo shared >> "${f.log}"\ntouch shared.marker`)
+  const own = script(f, 'own.sh', `echo "$1" >> "${f.log}"\ntouch "$1.marker"`)
+  environment(f, `version = 1
+
+[provision.serena]
+checks  = [{ file = "~/shared.marker" }]
+install = "${shared}"
+
+[provision.serena.pi]
+
+[provision.serena.opencode]
+check   = { file = "~/opencode.marker" }
+install = "${own} opencode"
+`)
+  const { printed, outcome } = run(f)
+  // The shared command prints once, labeled as the Provision's, above the first entry that runs
+  // it; the empty pi entry has no command of its own to print.
+  assert.equal(printed.match(/\$ shared: \.\/shared\.sh/g)?.length, 1)
+  assert.match(printed, /\$ \.\/own\.sh opencode/)
+  // File order: pi's turn runs the shared command, opencode's runs only its own — the shared one
+  // is not spent twice.
+  assert.deepEqual(logLines(f), ['shared', 'opencode'])
+  assert.equal(outcome.exitCode, 0)
+  // One Run per command: the shared one attributed to the entry whose run triggered it, the own
+  // one to opencode.
+  const recorded = latestRuns(f.config)
+  assert.equal(recorded.length, 2)
+  const byHarness = new Map(recorded.map((entry) => [entry.harness, entry.command]))
+  assert.equal(byHarness.get('pi'), './shared.sh')
+  assert.equal(byHarness.get('opencode'), './own.sh opencode')
+})
+
+// An entry whose effective Install commands are the shared one plus its own runs the shared one
+// first: "the shared one plus its own" is an order, not a choice.
+test('an entry runs the shared command before its own', () => {
+  const f = fixture()
+  const shared = script(f, 'shared.sh', `echo shared >> "${f.log}"`)
+  const own = script(f, 'own.sh', `echo own >> "${f.log}"\ntouch own.marker`)
+  environment(f, `version = 1
+
+[provision.serena]
+install = "${shared}"
+
+[provision.serena.pi]
+check   = { file = "~/own.marker" }
+install = "${own}"
+`)
+  const { outcome } = run(f)
+  assert.deepEqual(logLines(f), ['shared', 'own'])
+  assert.equal(outcome.exitCode, 0)
+})
+
+// When no entry of the Provision runs, the shared command is skipped entirely — it is printed in
+// the preview for review, but nothing spawns it.
+test('a shared Install command is skipped when every entry of its Provision is present', () => {
+  const f = fixture()
+  const shared = script(f, 'shared.sh', `echo shared >> "${f.log}"\ntouch shared.marker`)
+  file(path.join(f.home, 'shared.marker'), '')
+  environment(f, `version = 1
+
+[provision.serena]
+checks  = [{ file = "~/shared.marker" }]
+install = "${shared}"
+
+[provision.serena.pi]
+[provision.serena.opencode]
+`)
+  const { printed, outcome } = run(f)
+  assert.deepEqual(logLines(f), [])
+  assert.equal(printed.match(/\$ shared: \.\/shared\.sh/g)?.length, 1)
+  assert.equal(outcome.exitCode, 0)
 })
 
 // The write replaces the span from the heading to the next one, so a Payload that reaches past its

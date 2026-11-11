@@ -270,6 +270,68 @@ install = "./install.sh project installed.txt"
   assert.match(missing.join(''), /no Provision named or tagged home-thing/)
 })
 
+// The shared declarations merge the way tags do: the file that declares the entry owns them whole.
+// The user file's empty pi entry keeps the user file's shared Install command; the project file's
+// codex entry gets the project file's own, and each spelling runs once.
+test('a nearer file owns the shared declarations of the entries it declares', () => {
+  const f = fixture()
+  declare(f, 'user', `version = 1
+
+[provision.serena]
+checks  = [{ file = "installed.txt" }]
+install = "./install.sh user-shared installed.txt"
+
+[provision.serena.pi]
+`)
+  declare(f, 'project', `version = 1
+
+[provision.serena]
+checks  = [{ file = "installed.txt" }]
+install = "./install.sh project-shared installed.txt"
+
+[provision.serena.codex]
+check   = { file = "codex.txt" }
+install = "./install.sh project-own codex.txt"
+`)
+  installer(f, f.home)
+  installer(f, f.projectRoot)
+
+  assert.deepEqual(
+    rows(f).map((row) => row.harnesses.map((entry) => `${entry.harness}@${entry.tier}`)),
+    [['pi@user', 'codex@project']],
+  )
+
+  const printed: string[] = []
+  const outcome = installRun((text) => printed.push(text), { dryRun: false }, f.config)
+  // pi ran the user file's shared command in the home directory; codex ran the project file's
+  // shared command and then its own in the Project root — the user file's shared command was not
+  // spent on the project entry, and the project's was not spent twice.
+  assert.deepEqual(log(f), ['home user-shared', 'project project-shared', 'project project-own'])
+  assert.equal(outcome.exitCode, 0)
+})
+
+// The same shared command spelled at two tiers is two commands: a relative path means a different
+// file under each Tier root, so the run-once rule keys on the root as well as the spelling.
+test('the same shared command spelled at two tiers runs once per Tier root', () => {
+  const f = fixture()
+  const declaration = `version = 1
+
+[provision.p]
+checks  = [{ file = "installed.txt" }]
+install = "./install.sh shared installed.txt"
+
+[provision.p.PLACEHOLDER]
+`
+  declare(f, 'user', declaration.replace('PLACEHOLDER', 'pi'))
+  declare(f, 'project', declaration.replace('PLACEHOLDER', 'codex'))
+  installer(f, f.home)
+  installer(f, f.projectRoot)
+
+  const outcome = installRun(() => {}, { dryRun: false }, f.config)
+  assert.deepEqual(log(f), ['home shared', 'project shared'])
+  assert.equal(outcome.exitCode, 0)
+})
+
 // Each file refuses on its own: the fault is reported with the file it is in, and the tiers that
 // parse still load — including one read after the refused file.
 test('a malformed project file contributes nothing while the user tier still loads', () => {

@@ -38,6 +38,8 @@ test('a version and its Provision tables load, with tags and one entry per harne
     {
       name: 'serena',
       tags: ['mcp'],
+      checks: [],
+      install: null,
       entries: [
         {
           harness: 'codex',
@@ -84,6 +86,106 @@ install = "true"
     { file: '~/.pi/agent/mcp.json', pointer: 'mcpServers.serena', equals: { command: 'uvx' } },
     { onPath: 'serena' },
   ])
+})
+
+// A Provision's own table carries the Checks and Install command every harness entry inherits:
+// an entry may then be an empty table, which means the harness takes the shared declaration whole
+// and exists so the Provision's rows show that harness.
+test('shared checks and install load on the Provision, and an empty entry takes them whole', () => {
+  const [provision] = provisionsOf(`version = 1
+
+[provision.serena]
+checks  = [{ file = "~/.local/bin/serena" }]
+install = "uv tool install serena-agent"
+
+[provision.serena.pi]
+
+[provision.serena.opencode]
+checks  = [{ file = "~/.config/opencode/opencode.json" }]
+install = "opencode mcp add serena"
+`)
+  assert.deepEqual(provision.checks, [{ file: '~/.local/bin/serena' }])
+  assert.equal(provision.install, 'uv tool install serena-agent')
+  assert.deepEqual(provision.entries, [
+    { harness: 'pi', checks: [], install: null },
+    {
+      harness: 'opencode',
+      checks: [{ file: '~/.config/opencode/opencode.json' }],
+      install: 'opencode mcp add serena',
+    },
+  ])
+})
+
+// `check = { … }` is the one-element spelling everywhere Checks are written, the Provision's own
+// table included.
+test('a shared check key loads as the one-element list', () => {
+  const [provision] = provisionsOf(`version = 1
+
+[provision.serena]
+check   = { file = "~/.local/bin/serena" }
+install = "true"
+
+[provision.serena.pi]
+`)
+  assert.deepEqual(provision.checks, [{ file: '~/.local/bin/serena' }])
+})
+
+test('a shared check beside shared checks refuses the file at the checks key', () => {
+  assert.deepEqual(
+    refusalOf(
+      'version = 1\n\n[provision.serena]\ncheck = { file = "y" }\nchecks = [{ file = "z" }]\ninstall = "x"\n\n[provision.serena.pi]\n',
+    ),
+    { line: 5, column: 1, reason: 'a provision holds check or checks, not both' },
+  )
+})
+
+test('an empty shared checks list refuses the file at the key', () => {
+  assert.deepEqual(
+    refusalOf('version = 1\n\n[provision.serena]\nchecks = []\ninstall = "x"\n\n[provision.serena.pi]\n'),
+    { line: 4, column: 1, reason: 'checks is empty' },
+  )
+})
+
+// The file is refused when an entry would end up with no effective Check or no effective Install
+// command once the shared declarations are applied — so a Provision with no shared install still
+// needs one on every entry.
+test('an entry with no effective Check refuses the file at its table', () => {
+  assert.deepEqual(
+    refusalOf('version = 1\n\n[provision.serena]\ninstall = "x"\n\n[provision.serena.pi]\n'),
+    { line: 6, column: 1, reason: 'missing check' },
+  )
+  // Shared Checks cover every entry, so an empty entry is legal when they exist.
+  const [provision] = provisionsOf(`version = 1
+
+[provision.serena]
+checks  = [{ file = "y" }]
+install = "x"
+
+[provision.serena.pi]
+`)
+  assert.equal(provision.entries.length, 1)
+})
+
+test('an entry with no effective Install command refuses the file at its table', () => {
+  assert.deepEqual(
+    refusalOf('version = 1\n\n[provision.serena.pi]\ncheck = { file = "y" }\n'),
+    { line: 3, column: 1, reason: 'missing install' },
+  )
+  // A shared Install command is the effective one for an entry that declares none of its own.
+  const [provision] = provisionsOf(`version = 1
+
+[provision.serena]\ninstall = "x"\n\n[provision.serena.pi]\ncheck = { file = "y" }\n`)
+  assert.equal(provision.entries[0].install, null)
+})
+
+// An entry spelled as an inline key rather than a table header refuses at that key, not at the
+// top of the file.
+test('an inline entry with no effective Install refuses at its key', () => {
+  assert.deepEqual(refusalOf('version = 1\n\n[provision.serena]\npi = {}\n'), {
+    line: 4,
+    column: 1,
+    reason: 'missing install',
+  })
 })
 
 test('an empty checks list refuses the file at the key', () => {

@@ -252,6 +252,75 @@ test('an unmatched tier reports the tiers and environment files read', () => {
   assert.doesNotMatch(printed, /project-local/)
 })
 
+// An empty harness entry takes the Provision's shared declaration whole: its row reports the
+// shared Checks' answer under its own harness, and a shared Check that fails is the row's absence.
+test('an empty entry reports the shared Checks under its own harness', () => {
+  const f = fixture()
+  write(
+    path.join(f.home, 'agents_environ.toml'),
+    `version = 1
+
+[provision.serena]
+checks  = [{ file = "~/.local/bin/serena" }]
+install = "true"
+
+[provision.serena.pi]
+
+[provision.serena.opencode]
+`,
+  )
+  const absent = rows(f)
+  assert.deepEqual(
+    absent[0].harnesses.map((entry) => [entry.harness, entry.presence]),
+    [
+      ['pi', 'absent'],
+      ['opencode', 'absent'],
+    ],
+  )
+  assert.match(absent[0].harnesses[0].detail ?? '', /is not there/)
+
+  write(path.join(f.home, '.local', 'bin', 'serena'), '')
+  assert.deepEqual(
+    rows(f)[0].harnesses.map((entry) => entry.presence),
+    ['present', 'present'],
+  )
+})
+
+// An entry's effective Checks are the shared ones plus its own: a shared Check that passes does
+// not hide an own Check that fails, and the detail names the Check that did not answer present.
+test('shared and own Checks fold into one entry answer', () => {
+  const f = fixture()
+  write(path.join(f.home, '.local', 'bin', 'serena'), '')
+  write(
+    path.join(f.home, 'agents_environ.toml'),
+    `version = 1
+
+[provision.serena]
+checks  = [{ file = "~/.local/bin/serena" }]
+install = "true"
+
+[provision.serena.pi]
+checks  = [{ file = "~/pi-only.marker" }]
+install = "true"
+`,
+  )
+  assert.deepEqual(rows(f), [
+    {
+      name: 'serena',
+      tags: [],
+      harnesses: [
+        {
+          harness: 'pi',
+          tier: 'user',
+          source: path.join(f.home, 'agents_environ.toml'),
+          presence: 'absent',
+          detail: `${path.join(f.home, 'pi-only.marker')} is not there`,
+        },
+      ],
+    },
+  ])
+})
+
 // One entry, two Checks: the row's Presence is the fold, and its detail names the Check that did
 // not answer `present` with that Check's own reason.
 test('an entry with several Checks folds them into one row, with the failing Check named', () => {
