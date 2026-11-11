@@ -111,13 +111,14 @@ function keyOf(provision: ResolvedProvision): string {
 
 // The user file is read always; a tier with no file declares nothing. A file that cannot be read or
 // does not parse contributes nothing and leaves the other tiers loading, with the fault reported
-// rather than swallowed.
+// rather than swallowed. `tier` scopes the load to one tier: only that tier's file is opened, and
+// the same-path rule below still holds.
 //
 // Merge is per `(provision, harness)` key with `project` > `user`. The nearer file
 // replaces the entry whole, tags included: every field below is built from the winning declaration,
 // so nothing is inherited field by field from the entry it shadowed and no entry is half one tier
 // and half another.
-export function loadEnvironment(config: EngineConfig): Environment {
+export function loadEnvironment(config: EngineConfig, tier?: EnvironmentTier): Environment {
   const won = new Map<string, PlacedProvision>()
   const refusals: FileRefusal[] = []
   const harnessesByTier: Environment['harnessesByTier'] = { user: [], project: [] }
@@ -125,9 +126,17 @@ export function loadEnvironment(config: EngineConfig): Environment {
   // `$HOME`, possibly reached through a path spelled differently — the file loads once under the
   // farther tier's name, the one read first, and the later tier contributes nothing. The `user` tier
   // keeps it, so the home file is never relabelled as a project declaration.
+  const all = environmentFiles(config)
+  const locations = tier === undefined ? all : all.filter((location) => {
+    if (location.tier !== tier) return false
+    // A scoped load keeps the ownership rule: the earlier-reading tier keeps a shared file, so a
+    // scoped user load always reads its file, and a scoped project load skips a file the user tier
+    // owns — the selected tier loads nothing rather than the other tier's file.
+    return tier === 'user' || path.resolve(location.file) !== path.resolve(all.find((item) => item.tier === 'user')!.file)
+  })
   const readFiles: { tier: EnvironmentTier; file: string }[] = []
   const seen = new Set<string>()
-  for (const [precedence, location] of environmentFiles(config).entries()) {
+  for (const [precedence, location] of locations.entries()) {
     const resolvedFile = path.resolve(location.file)
     if (seen.has(resolvedFile)) continue
     seen.add(resolvedFile)

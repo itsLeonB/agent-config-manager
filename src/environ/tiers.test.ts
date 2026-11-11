@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { EngineConfig } from '../engine/config.ts'
 import { installRun, listHarnesses, readStatus } from './service.ts'
+import { loadEnvironment } from './loader.ts'
 import type { EnvironmentTier, ProvisionRow } from './types.ts'
 
 // Seam A: three environment files against a fixture, through the environment service. A temp home
@@ -419,4 +420,34 @@ install = "true"
   assert.equal(status.refusals.length, 1)
   assert.match(status.refusals[0].reason, /harness 'codex' is not one of this file's harnesses/)
   assert.deepEqual(status.harnesses, { user: [], project: [] })
+})
+
+// One tier per load: a scoped load opens only the selected tier's file, so the other tier's
+// fault — even a refused file — contributes nothing to it.
+test('a tier-scoped load reads only that tier file', () => {
+  const f = fixture()
+  declare(f, 'user', 'version = 1\nharnesses = ["pi"]\nnot = toml\n')
+  declare(f, 'project', 'version = 1\n\nharnesses = ["opencode"]\n')
+  const scoped = loadEnvironment(f.config, 'project')
+  assert.deepEqual(scoped.refusals, [])
+  assert.deepEqual(scoped.harnessesByTier.project, ['opencode'])
+  assert.deepEqual(scoped.harnessesByTier.user, [])
+
+  const user = loadEnvironment(f.config, 'user')
+  assert.equal(user.refusals.length, 1)
+  assert.equal(user.refusals[0].source, path.join(f.home, 'agents_environ.toml'))
+  assert.deepEqual(user.harnessesByTier.user, [])
+})
+
+// The ownership rule survives the scoping: when the Project root is `$HOME` the two tiers name one
+// file, the user tier keeps it, and a scoped project load reads nothing at all.
+test('a scoped project load skips a file the user tier owns', () => {
+  const f = fixture()
+  f.config.projectRoot = f.home
+  declare(f, 'user', 'version = 1\n\nharnesses = ["pi"]\n')
+  const project = loadEnvironment(f.config, 'project')
+  assert.deepEqual(project.harnessesByTier.project, [])
+  assert.deepEqual(project.readFiles, [])
+  const owner = loadEnvironment(f.config, 'user')
+  assert.deepEqual(owner.harnessesByTier.user, ['pi'])
 })

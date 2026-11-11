@@ -289,7 +289,8 @@ export function skillsInstallRun(
 ): number {
   const tier: EnvironmentTier = options.global === true ? 'user' : 'project'
   const paths = skillsLockPaths(config)
-  const environment = loadEnvironment(config)
+  // One tier per run: the scoped load opens only the selected tier's file, never the other's.
+  const environment = loadEnvironment(config, tier)
   const location = environmentFiles(config).find((item) => item.tier === tier)
   if (location !== undefined) {
     const refusal = environment.refusals.find((item) => path.resolve(item.source) === path.resolve(location.file))

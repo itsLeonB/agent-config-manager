@@ -280,6 +280,8 @@ harnesses = ["opencode"]
   const result = run(binPath(), home, ['skills', 'install', '--dry-run'], { ACM_PROJECT_ROOT: projectRoot }, projectRoot)
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, /^npx -y skills@latest add repo\/proj --skill local --agent opencode -y$/m)
+  // One tier per run: the user lockfile's groups never appear in a default run.
+  assert.doesNotMatch(result.stdout, /repo\/one|repo\/two/)
   assert.match(result.stdout, /dry run: nothing was run/)
   assert.equal(result.stderr, '')
 

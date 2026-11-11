@@ -130,7 +130,8 @@ function skillsInstall(rest: string[]): number {
   return skillsInstallRun(
     (text) => process.stdout.write(text),
     (text) => process.stderr.write(text),
-    !dryRun && !yes && process.stdin.isTTY ? confirmTty : undefined,
+    // The prompt and the preview must both be visible: ask only on a real terminal both ways.
+    !dryRun && !yes && process.stdin.isTTY && process.stdout.isTTY ? confirmTty : undefined,
     { global, yes, dryRun },
   )
 }
