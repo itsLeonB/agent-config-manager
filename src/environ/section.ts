@@ -24,7 +24,13 @@ export function headingOf(text: string): SectionHeading {
     }
     if (fenced) continue
     const content = line.trimEnd()
-    if (content.trim() === '') continue
+    if (content.trim() === '') {
+      // A blank line carries no meaning at the end of a Section, but before the heading it is still
+      // outside the span a write replaces: the Payload's blank lines would be prepended ahead of the
+      // heading on every run, and the Section could never read back as the text that was written.
+      if (headings.length === 0) before = true
+      continue
+    }
     if (!content.startsWith('## ')) {
       if (headings.length === 0) before = true
       continue

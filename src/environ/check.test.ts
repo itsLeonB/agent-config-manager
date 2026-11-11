@@ -308,6 +308,14 @@ test('a Payload that reaches past its own heading answers unknown', () => {
   )
   assert.equal(onlyFenced.presence, 'unknown')
   assert.match(onlyFenced.detail ?? '', /has no '## ' heading/)
+  // A blank line before the heading is outside the Section span too: it would be prepended ahead of
+  // the heading on every run, so the Payload could never read back as the Section's text.
+  const afterBlank = evaluateCheck(
+    SECTION_CHECK,
+    over(AGENTS, [], { kind: 'read', bytes: '\n\n## Output style\n\nBe terse.\n' }),
+  )
+  assert.equal(afterBlank.presence, 'unknown')
+  assert.match(afterBlank.detail ?? '', /has text before its '## ' heading/)
 })
 
 test('a Payload with two headings answers unknown, because one Section cannot hold both', () => {
