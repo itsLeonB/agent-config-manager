@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { EngineConfig } from '../engine/config.ts'
-import { installRun, readStatus } from './service.ts'
+import { installRun, listHarnesses, readStatus } from './service.ts'
 import type { EnvironmentTier, ProvisionRow } from './types.ts'
 
 // Seam A: three environment files against a fixture, through the environment service. A temp home
@@ -367,4 +367,56 @@ install = "true"
   // Only the user file's own entry runs; the local file's `mine` is never seen.
   assert.deepEqual(outcome.entries.map((entry) => entry.provision.name), ['home-thing'])
   assert.deepEqual(log(f), [])
+})
+
+// The harness list is each file's own: it constrains that file's entries and never merges into the
+// other tier's answer.
+test('each tier answers its own harness list, and one file\'s list never reaches the other', () => {
+  const f = fixture()
+  declare(f, 'user', `version = 1
+
+harnesses = ["pi", "codex"]
+
+[provision.home-thing.pi]
+check   = { file = "installed.txt" }
+install = "true"
+`)
+  declare(f, 'project', `version = 1
+
+harnesses = ["opencode"]
+
+[provision.repo-thing.opencode]
+check   = { file = "installed.txt" }
+install = "true"
+`)
+
+  assert.deepEqual(readStatus({}, f.config).harnesses, {
+    user: ['pi', 'codex'],
+    project: ['opencode'],
+  })
+  // One tier's list is the answer for that tier alone, and a file with no list declares nothing.
+  assert.deepEqual(listHarnesses({ tier: 'user' }, f.config), ['pi', 'codex'])
+  assert.deepEqual(listHarnesses({ tier: 'project' }, f.config), ['opencode'])
+
+  fs.rmSync(path.join(f.projectRoot, 'agents_environ.toml'))
+  assert.deepEqual(readStatus({}, f.config).harnesses, { user: ['pi', 'codex'], project: [] })
+})
+
+// A file that refuses its own harness list contributes no list and no entries: the refusal is the
+// file's, reported the way every other refusal is.
+test('a file whose entries violate its harness list contributes nothing and is reported', () => {
+  const f = fixture()
+  declare(f, 'project', `version = 1
+
+harnesses = ["pi"]
+
+[provision.repo-thing.codex]
+check   = { file = "installed.txt" }
+install = "true"
+`)
+  const status = readStatus({}, f.config)
+  assert.deepEqual(status.provisions, [])
+  assert.equal(status.refusals.length, 1)
+  assert.match(status.refusals[0].reason, /harness 'codex' is not one of this file's harnesses/)
+  assert.deepEqual(status.harnesses, { user: [], project: [] })
 })

@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
@@ -7,8 +8,8 @@ import { ensureTomlTable, readPointer, tomlPath, writePointer } from '../engine/
 import type { EditResult } from '../engine/edit.ts'
 import type { NativeValue } from '../engine/native-value.ts'
 import { environmentFiles } from './loader.ts'
-import { parseEnvironmentFile } from './parse.ts'
-import type { EnvironmentTier, InstallCommand, ProvisionDeclaration, Refusal } from './types.ts'
+import { harnessesKeyPlace, parseEnvironmentFile } from './parse.ts'
+import type { EnvironmentTier, InstallCommand, ParseResult, ProvisionDeclaration, Refusal } from './types.ts'
 
 // One Provision's Check and Install command for one harness, written into the environment file its
 // tier names. Nothing here runs the command or evaluates the Check: the only effect is bytes in a
@@ -51,18 +52,70 @@ export type DefineOutcome =
 
 const VERSION_ROOT = 'version = 1\n'
 
-export function defineProvision(
-  request: DefineRequest,
-  config: EngineConfig = resolveDefaultConfig(),
+function resolvedWritePath(file: string, seen = new Set<string>()): string {
+  const absolute = path.resolve(file)
+  if (existsSync(absolute)) return realpathSync(absolute)
+  if (seen.has(absolute)) throw new Error(`environment file has a symlink cycle: ${absolute}`)
+  seen.add(absolute)
+  if (lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    return resolvedWritePath(path.resolve(path.dirname(absolute), readlinkSync(absolute)), seen)
+  }
+  return path.join(resolvedWritePath(path.dirname(absolute), seen), path.basename(absolute))
+}
+
+// Both writers hold the same file lock from the first read through the validated atomic rename.
+export interface EnvironmentWriteTarget {
+  file: string
+  text: string
+  // The file as the loader reads it now, so a request is checked against what is declared before
+  // anything is written.
+  environment: Extract<ParseResult, { ok: true }>
+}
+
+export function withEnvironmentWrite(
+  tier: EnvironmentTier,
+  config: EngineConfig,
+  edit: (target: EnvironmentWriteTarget) => DefineOutcome,
 ): DefineOutcome {
-  const location = environmentFiles(config).find((candidate) => candidate.tier === request.tier)
-  // A tier outside the closed list names no file, so the definition is refused rather than thrown:
-  // every other bad definition answers with a reason, and this one does too.
+  const location = environmentFiles(config).find((candidate) => candidate.tier === tier)
+  // A tier outside the closed list names no file, so the write is refused rather than thrown:
+  // every other bad write answers with a reason, and this one does too.
   if (location === undefined) {
-    return { kind: 'failed', reason: `no environment file for tier ${request.tier}` }
+    return { kind: 'failed', reason: `no environment file for tier ${tier}` }
   }
 
-  const existing = existsSync(location.file) ? readFileSync(location.file, 'utf8') : ''
+  try {
+    const destination = resolvedWritePath(location.file)
+    const user = environmentFiles(config).find((candidate) => candidate.tier === 'user')
+    if (tier === 'project' && user !== undefined && destination === resolvedWritePath(user.file)) {
+      return { kind: 'failed', reason: 'the project environment file is also the user environment file; use the user tier' }
+    }
+    mkdirSync(path.dirname(destination), { recursive: true })
+    // shortcut: a killed writer leaves its lock; add stale-lock recovery if automatic retry is needed.
+    const lock = `${destination}.lock`
+    let descriptor: number
+    try {
+      descriptor = openSync(lock, 'wx', 0o600)
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+        return { kind: 'failed', reason: `environment file is locked: ${location.file}; retry after the other writer finishes` }
+      }
+      throw error
+    }
+    try {
+      const target = openEnvironmentForWrite(location.file)
+      return 'kind' in target ? target : edit(target)
+    } finally {
+      closeSync(descriptor)
+      unlinkSync(lock)
+    }
+  } catch (error) {
+    return { kind: 'failed', reason: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function openEnvironmentForWrite(file: string): EnvironmentWriteTarget | Exclude<DefineOutcome, { kind: 'defined' }> {
+  const existing = existsSync(file) ? readFileSync(file, 'utf8') : ''
   // A file that is not there declares nothing, and the loader reads a missing file that way. A file
   // with no bytes is the same nothing, so the root is written before the first definition rather
   // than the definition being refused by a version that was never anybody's fault.
@@ -70,8 +123,72 @@ export function defineProvision(
 
   // The file as it stands is the loader's business first: a file it refuses is not one to add a
   // definition to, and its refusal already names the line to fix.
-  const before = parseEnvironmentFile(text)
-  if (!before.ok) return { kind: 'refused', refusal: before.refusal }
+  const parsed = parseEnvironmentFile(text)
+  if (!parsed.ok) return { kind: 'refused', refusal: parsed.refusal }
+  return { file, text, environment: parsed }
+}
+
+// The second half of the sequence: the candidate bytes get the same parse the loader runs, and
+// only what it would accept reaches disk — as one file write, never a partial one.
+export function commitEnvironmentWrite(
+  target: EnvironmentWriteTarget,
+  written: string,
+  tier: EnvironmentTier,
+  pointer: string,
+): DefineOutcome {
+  const after = parseEnvironmentFile(written)
+  if (!after.ok) return { kind: 'refused', refusal: after.refusal }
+
+  const destination = resolvedWritePath(target.file)
+  mkdirSync(path.dirname(destination), { recursive: true })
+  const temporary = path.join(path.dirname(destination), `.agents-environ-${randomUUID()}.tmp`)
+  const mode = existsSync(destination) ? statSync(destination).mode & 0o777 : undefined
+  const descriptor = openSync(temporary, 'wx', mode ?? 0o666)
+  try {
+    try {
+      writeFileSync(descriptor, written)
+      if (mode !== undefined) chmodSync(temporary, mode)
+    } finally {
+      closeSync(descriptor)
+    }
+    renameSync(temporary, destination)
+  } finally {
+    if (existsSync(temporary)) unlinkSync(temporary)
+  }
+  return {
+    kind: 'defined',
+    tier,
+    file: target.file,
+    pointer,
+    digest: digestOfBytes(Buffer.from(written)),
+  }
+}
+
+export function defineProvision(
+  request: DefineRequest,
+  config: EngineConfig = resolveDefaultConfig(),
+): DefineOutcome {
+  return withEnvironmentWrite(request.tier, config, (target) => defineAtTarget(request, target))
+}
+
+function defineAtTarget(request: DefineRequest, target: EnvironmentWriteTarget): DefineOutcome {
+  const before = target.environment
+  const text = target.text
+
+  // The file's own harness list is the constraint the parser enforces on a hand edit, so a
+  // definition is held to it before anything is written: a name the list does not carry is a
+  // refusal with the parser's reason, reported at the list's own key.
+  if (before.harnesses.length > 0 && !before.harnesses.includes(request.harness)) {
+    const at = harnessesKeyPlace(text)
+    return {
+      kind: 'refused',
+      refusal: {
+        line: at?.line ?? 1,
+        column: at?.column ?? 1,
+        reason: `harness '${request.harness}' is not one of this file's harnesses: ${before.harnesses.join(', ')}`,
+      },
+    }
+  }
 
   const provision = ['provision', request.name]
   const entry = [...provision, request.harness]
@@ -153,20 +270,7 @@ export function defineProvision(
     written = table.text
   }
 
-  // The same parser the loader runs, over the bytes that would land: a definition the loader would
-  // refuse is refused here, with that reason, and the file is left as it was.
-  const after = parseEnvironmentFile(written)
-  if (!after.ok) return { kind: 'refused', refusal: after.refusal }
-
-  mkdirSync(path.dirname(location.file), { recursive: true })
-  writeFileSync(location.file, written)
-  return {
-    kind: 'defined',
-    tier: request.tier,
-    file: location.file,
-    pointer: tomlPath(entry),
-    digest: digestOfBytes(Buffer.from(written)),
-  }
+  return commitEnvironmentWrite(target, written, request.tier, tomlPath(entry))
 }
 
 // A checks list keeps the spelling the table already has: `checks = [ … ]` stays a list, and a

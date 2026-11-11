@@ -301,7 +301,12 @@ function decodeInstall(
   return { ok: true, value: { payload, args } }
 }
 
-function decodeProvision(name: string, table: EnvironmentTable, at: SourceIndex): Decoded<ProvisionDeclaration> {
+function decodeProvision(
+  name: string,
+  table: EnvironmentTable,
+  at: SourceIndex,
+  declaredHarnesses: readonly string[],
+): Decoded<ProvisionDeclaration> {
   const block = [PROVISION_KEY, name]
   const tags = has(table, TAGS_KEY) ? stringList(table[TAGS_KEY]) : []
   if (tags === null) return refused(place(at.declaration(block, TAGS_KEY), 'tags must be an array of strings'))
@@ -330,6 +335,14 @@ function decodeProvision(name: string, table: EnvironmentTable, at: SourceIndex)
     if (isSharedKey) continue
     if (key === '' || key.includes('\u0000')) {
       return refused(place(at.declaration(block, key), `harness '${key}' must be non-empty and NUL-free`))
+    }
+    // A file that declares its harnesses constrains every entry to that list; a file with no
+    // list declares no harnesses and constrains nothing, which is also why an empty list reads
+    // the same as no list.
+    if (declaredHarnesses.length > 0 && !declaredHarnesses.includes(key)) {
+      return refused(
+        place(at.declaration(block, key), `harness '${key}' is not one of this file's harnesses: ${declaredHarnesses.join(', ')}`),
+      )
     }
     const harness = key
     const entry = tableValue(table[key])
@@ -398,6 +411,12 @@ function parseHarnessList(document: EnvironmentTable, at: SourceIndex): Decoded<
   return { ok: true, value: list }
 }
 
+// The place a caller reports for the `harnesses` key — `define_provision` answers a harness the
+// list does not name with the same line and column the parser would have refused the file at.
+export function harnessesKeyPlace(text: string): Refusal | null {
+  return indexSource(text).declaration([], 'harnesses')
+}
+
 export function parseEnvironmentFile(text: string): ParseResult {
   const parsed = parseDocument(text)
   if (!parsed.ok) return { ok: false, refusal: parsed.refusal }
@@ -432,7 +451,7 @@ export function parseEnvironmentFile(text: string): ParseResult {
     if (table === null) {
       return { ok: false, refusal: place(at.declaration([], PROVISION_KEY), `provision '${name}' is not a table`) }
     }
-    const provision = decodeProvision(name, table, at)
+    const provision = decodeProvision(name, table, at, declaredHarnesses.value)
     if (!provision.ok) return { ok: false, refusal: provision.refusal }
     decoded.push(provision.value)
   }

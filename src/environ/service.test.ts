@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { EngineConfig } from '../engine/config.ts'
-import { readStatus, formatStatus, formatRefusal, statusDocument } from './service.ts'
+import { listHarnesses, readStatus, formatStatus, formatRefusal, statusDocument } from './service.ts'
 import type { EnvironmentTier, ProvisionRow } from './types.ts'
 
 // A tier outside the closed list is what this test filters by: the status pass reports the files
@@ -210,10 +210,12 @@ test('the printing is a function of the rows, and the JSON carries the same rows
   assert.match(printed, /^serena\s+codex\s+~\/agents_environ\.toml\s+present$/m)
   assert.match(printed, /^serena\s+pi\s+~\/agents_environ\.toml\s+absent\s+.*is not there$/m)
   assert.match(printed, /^i-have-adhd\s+pi\s+~\/agents_environ\.toml\s+present$/m)
-  // The footer names where acm thinks it is: the project it read and the store it would record in.
+  // The footer names where acm thinks it is: the project it read, the store it would record in,
+  // and each tier's declared harness list — a file with no list declares none, not the default three.
   assert.match(printed, new RegExp(`project ${f.projectRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
   assert.match(printed, /store \/.*dashboard\.db/)
   assert.match(printed, /4 entries over 3 provisions/)
+  assert.match(printed, /harnesses: user none declared; project none declared/)
 })
 
 test('a machine with no environment file declares nothing, which is not a fault', () => {
@@ -221,13 +223,58 @@ test('a machine with no environment file declares nothing, which is not a fault'
   assert.deepEqual(readStatus({}, f.config), {
     provisions: [],
     refusals: [],
-    harnesses: ['pi', 'codex', 'opencode'],
+    harnesses: { user: [], project: [] },
     home: f.home,
     projectRoot: f.projectRoot,
     storePath: f.config.storePath,
     readFiles: [],
   })
   assert.match(formatStatus(readStatus({}, f.config)), /^no Provisions declared\n\n0 entries over 0 provisions/)
+})
+
+// The harness list is per file, so the answers are per tier: one call returns both, and a tier
+// argument narrows to that file's list. A file with no list declares none, and a missing file
+// declares none either.
+test('listHarnesses answers per tier, and one tier\'s list never reaches the other', () => {
+  const f = fixture()
+  write(
+    path.join(f.home, 'agents_environ.toml'),
+    'version = 1\n\nharnesses = ["pi", "custom-agent"]\n\n[provision.home-thing.pi]\ncheck = { file = "x" }\ninstall = "true"\n',
+  )
+  write(path.join(f.projectRoot, 'agents_environ.toml'), 'version = 1\n')
+
+  assert.deepEqual(listHarnesses({}, f.config), { user: ['pi', 'custom-agent'], project: [] })
+  assert.deepEqual(listHarnesses({ tier: 'user' }, f.config), ['pi', 'custom-agent'])
+  assert.deepEqual(listHarnesses({ tier: 'project' }, f.config), [])
+})
+
+// The JSON document carries the same per-tier lists the footer prints, so a script and a human
+// read one answer.
+test('statusDocument carries the harness lists per tier beside the rows', () => {
+  const f = fixture()
+  write(
+    path.join(f.home, 'agents_environ.toml'),
+    'version = 1\n\nharnesses = ["pi"]\n\n[provision.home-thing.pi]\ncheck = { file = "x" }\ninstall = "true"\n',
+  )
+  const status = readStatus({}, f.config)
+  assert.deepEqual(statusDocument(status), {
+    provisions: [
+      {
+        name: 'home-thing',
+        tags: [],
+        harnesses: [
+          {
+            harness: 'pi',
+            tier: 'user',
+            source: path.join(f.home, 'agents_environ.toml'),
+            presence: 'absent',
+            detail: `${path.join(f.home, 'x')} is not there`,
+          },
+        ],
+      },
+    ],
+    harnesses: { user: ['pi'], project: [] },
+  })
 })
 
 test('a home project reads the shared environment file only as user, even through an equal path', () => {
@@ -358,4 +405,19 @@ install = "true"
       ],
     },
   ])
+})
+
+// Harness names come from a file, so the footer prints them through `printable` like every other
+// file-derived value: a control character in a name cannot forge a second line.
+test('the footer prints declared harness names through printable', () => {
+  const printed = formatStatus({
+    provisions: [],
+    refusals: [],
+    harnesses: { user: ['pi\ncodex'], project: [] },
+    home: '/home/u',
+    projectRoot: '/repo',
+    storePath: '/store/dashboard.db',
+    readFiles: [],
+  })
+  assert.match(printed, /harnesses: user pi\?codex; project none declared/)
 })

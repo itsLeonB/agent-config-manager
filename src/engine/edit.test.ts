@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert'
 import { parse as parseToml } from 'smol-toml'
 import { stripJsonc } from './adapters/opencode/read.ts'
-import { parses, splitPointer, writePointer } from './edit.ts'
+import { deleteTomlKey, parses, splitPointer, writePointer } from './edit.ts'
 import type { NativeValue } from './native-value.ts'
 
 function json(text: string, pointer: string, value: NativeValue): string {
@@ -11,7 +11,7 @@ function json(text: string, pointer: string, value: NativeValue): string {
   return result.kind === 'ok' ? result.text : ''
 }
 
-function toml(text: string, pointer: string, value: string | number): string {
+function toml(text: string, pointer: string, value: NativeValue): string {
   const result = writePointer(text, 'toml', pointer.split('.'), value)
   assert.equal(result.kind, 'ok', result.kind === 'failed' ? result.reason : '')
   return result.kind === 'ok' ? result.text : ''
@@ -99,4 +99,198 @@ test('an address this writer cannot reach fails instead of writing something els
   assert.match(inline.kind === 'failed' ? inline.reason : '', /inline table/)
   const missing = writePointer('{\n}\n', 'json', ['a', 'b'], 'x')
   assert.equal(missing.kind, 'ok')
+})
+
+// A root key is written before the first table header: the key belongs to the document, not to a
+// table, and a table it followed would make it a member of that table instead.
+test('a TOML root key is written before the first table header, comments and siblings kept', () => {
+  const before = `version = 1
+
+# the entries below are reviewed by hand
+[provision.serena.pi]
+check = { file = "x" }
+install = "y"
+`
+  const after = toml(before, 'harnesses', ['pi', 'codex'])
+  assert.equal(
+    after,
+    `version = 1
+harnesses = ["pi", "codex"]
+
+# the entries below are reviewed by hand
+[provision.serena.pi]
+check = { file = "x" }
+install = "y"
+`,
+  )
+  // A file with no tables gets the key appended like any other.
+  const bare = toml('version = 1\n', 'harnesses', ['pi'])
+  assert.equal(bare, 'version = 1\n\nharnesses = ["pi"]\n')
+  assert.equal(parses(after, 'toml'), true)
+})
+
+// A key with no owner table is removed whole: its line, and the lines of a value that spans more
+// than one. Comments and siblings stay, and a key that was never there is a no-op.
+test('root writes ignore table headers and assignments inside multiline TOML values', () => {
+  for (const quote of ['"""', "'''"]) {
+    for (const realHeader of ['', '\n# keep this table\n[provision.demo.pi]\ninstall = "run"\n']) {
+      const before = `version = 1\nnotes = ${quote}\n[fake.header]\nharnesses = ["not real"]\n${quote}\n${realHeader}`
+      const after = toml(before, 'harnesses', ['pi'])
+      const parsed = parseToml(after)
+      assert.deepEqual(parsed.harnesses, ['pi'])
+      assert.equal(parsed.notes, parseToml(before).notes)
+      assert.deepEqual(parsed.provision, parseToml(before).provision)
+      assert.deepEqual(parseToml(deleteTomlKey(after, 'harnesses')), parseToml(before))
+      assert.ok(after.includes(realHeader))
+    }
+  }
+})
+
+test('deleteTomlKey removes a root key and its multi-line value, leaving everything else', () => {
+  const before = `version = 1
+# the harnesses this file faces
+harnesses = [
+  "pi", # inline comment
+  "codex",
+]
+
+[provision.serena.pi]
+check = { file = "x" }
+install = "y"
+`
+  const after = deleteTomlKey(before, 'harnesses')
+  assert.equal(
+    after,
+    `version = 1
+# the harnesses this file faces
+
+[provision.serena.pi]
+check = { file = "x" }
+install = "y"
+`,
+  )
+  assert.equal(deleteTomlKey('version = 1\n', 'harnesses'), 'version = 1\n')
+  // A key inside a table belongs to that table: the root key is untouched.
+  const nested = deleteTomlKey('[provision.x.pi]\nharnesses = ["pi"]\n', 'harnesses')
+  assert.equal(nested, '[provision.x.pi]\nharnesses = ["pi"]\n')
+  assert.equal(parses(after, 'toml'), true)
+})
+
+// A root key's value can hold brackets a scanner must not count: inside a literal string, inside a
+// comment, or inside a multi-line string. The key's lines end where its value ends, and the tables
+// after it are somebody else's bytes.
+test('deleteTomlKey stops a root value at brackets inside strings and comments', () => {
+  const before = `version = 1
+harnesses = ['[', "pi"] # a [ in a comment opens nothing
+
+[provision.demo.pi]
+check = { file = "x" }
+install = "y"
+`
+  const after = deleteTomlKey(before, 'harnesses')
+  assert.equal(
+    after,
+    `version = 1
+
+[provision.demo.pi]
+check = { file = "x" }
+install = "y"
+`,
+  )
+  assert.equal(parses(after, 'toml'), true)
+
+  const multiline = `version = 1
+harnesses = [
+  "pi", # [ this comment bracket is not a bracket
+  "codex",
+]
+
+[provision.demo.pi]
+check = { file = "x" }
+`
+  const cleared = deleteTomlKey(multiline, 'harnesses')
+  assert.equal(
+    cleared,
+    `version = 1
+
+[provision.demo.pi]
+check = { file = "x" }
+`,
+  )
+  assert.equal(parses(cleared, 'toml'), true)
+})
+
+test('a root key with a multi-line string value ends where the string ends', () => {
+  const before = `version = 1
+notes = '''
+a [ bracket
+] another
+'''
+harnesses = ["pi"]
+
+[provision.demo.pi]
+check = { file = "x" }
+`
+  const after = deleteTomlKey(before, 'notes')
+  assert.equal(
+    after,
+    `version = 1
+harnesses = ["pi"]
+
+[provision.demo.pi]
+check = { file = "x" }
+`,
+  )
+  assert.equal(parses(after, 'toml'), true)
+})
+
+// A TOML key may be literal-quoted: `'harnesses'` names the same key as `harnesses`, so a write and
+// a delete must find it — and a replace must not leave a second spelling behind.
+test('multiline strings with four or five closing quotes leave sibling Provisions intact', () => {
+  const siblings = '\n[provision.demo.pi]\ncheck = { file = "x" }\n'
+  for (const quote of ['"', "'"]) {
+    for (const count of [4, 5]) {
+      const before = `version = 1\nharnesses = [${quote.repeat(3)}pi${quote.repeat(count)}, "pi"]\n${siblings}`
+      assert.equal(parses(before, 'toml'), true)
+      assert.equal(toml(before, 'harnesses', ['codex']), `version = 1\nharnesses = ["codex"]\n${siblings}`)
+      assert.equal(deleteTomlKey(before, 'harnesses'), `version = 1\n${siblings}`)
+    }
+  }
+})
+
+test('Unicode-escaped TOML root keys support replacement and deletion', () => {
+  const siblings = '\n[provision.demo.pi]\ncheck = { file = "x" }\n'
+  const before = `version = 1\n"\\U00000068arnesses" = ["pi"]\n${siblings}`
+  assert.equal(parses(before, 'toml'), true)
+  assert.equal(toml(before, 'harnesses', ['codex']), `version = 1\nharnesses = ["codex"]\n${siblings}`)
+  assert.equal(deleteTomlKey(before, 'harnesses'), `version = 1\n${siblings}`)
+})
+
+test('a literal-quoted root key is found, replaced, and deleted like a bare one', () => {
+  const before = `version = 1
+'harnesses' = ["pi"]
+
+[provision.demo.pi]
+check = { file = "x" }
+`
+  const replaced = toml(before, 'harnesses', ['codex'])
+  assert.equal(
+    replaced,
+    `version = 1
+harnesses = ["codex"]
+
+[provision.demo.pi]
+check = { file = "x" }
+`,
+  )
+  const cleared = deleteTomlKey(before, 'harnesses')
+  assert.equal(
+    cleared,
+    `version = 1
+
+[provision.demo.pi]
+check = { file = "x" }
+`,
+  )
+  assert.equal(parses(cleared, 'toml'), true)
 })

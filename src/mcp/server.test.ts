@@ -102,13 +102,16 @@ test('a client that initialises and lists tools sees every tool, with the writer
   try {
     const listed = await client.listTools()
     assert.deepEqual(
-      listed.tools.map((tool) => ({ name: tool.name, readOnly: tool.annotations?.readOnlyHint })),
+      listed.tools
+        .map((tool) => ({ name: tool.name, readOnly: tool.annotations?.readOnlyHint }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
       [
-        { name: 'list_provisions', readOnly: true },
-        { name: 'read_native_config', readOnly: true },
+        { name: 'acm_instructions', readOnly: true },
+        { name: 'declare_harnesses', readOnly: false },
         { name: 'define_provision', readOnly: false },
         { name: 'list_harnesses', readOnly: true },
-        { name: 'acm_instructions', readOnly: true },
+        { name: 'list_provisions', readOnly: true },
+        { name: 'read_native_config', readOnly: true },
       ],
     )
   } finally {
@@ -141,6 +144,7 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
   try {
     const all: unknown = JSON.parse(answered(await client.callTool({ name: 'list_provisions', arguments: {} })))
     assert.deepEqual(all, {
+      harnesses: { user: [], project: [] },
       provisions: [
         {
           name: 'opencode-no-claude',
@@ -166,6 +170,7 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
       answered(await client.callTool({ name: 'list_provisions', arguments: { harness: 'pi' } })),
     )
     assert.deepEqual(filtered, {
+      harnesses: { user: [], project: [] },
       provisions: [
         {
           name: 'serena',
@@ -187,6 +192,122 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
   }
 })
 
+// `list_harnesses` answers the declared list per tier: a file's own list, never a merge, and a
+// file with no list contributes an empty one.
+test('list_harnesses answers each tier\'s declared harness list', async () => {
+  const home = somewhere()
+  write(
+    path.join(home, 'agents_environ.toml'),
+    'version = 1\n\nharnesses = ["pi", "custom-agent"]\n\n[provision.serena.pi]\ncheck = { file = "x" }\ninstall = "true"\n',
+  )
+  const project = somewhere()
+  write(path.join(project, 'agents_environ.toml'), 'version = 1\n')
+  const client = await connect({ ACM_HOME: home, ACM_PROJECT_ROOT: project })
+  try {
+    const listed: unknown = JSON.parse(answered(await client.callTool({ name: 'list_harnesses', arguments: {} })))
+    assert.deepEqual(listed, { user: ['pi', 'custom-agent'], project: [] })
+  } finally {
+    await client.close()
+  }
+})
+
+// `declare_harnesses` writes one tier's list through the pointer editor: the bytes land at the top
+// of the named file, `list_harnesses` answers them per tier, an empty list clears the key, and a
+// list that would strand an entry's harness is refused with the file unchanged.
+test('declare_harnesses writes, reads back per tier, clears, and refuses a stranded entry', async () => {
+  const home = somewhere()
+  const project = somewhere()
+  const client = await connect({ ACM_HOME: home, ACM_PROJECT_ROOT: project })
+  const projectFile = path.join(project, 'agents_environ.toml')
+  const userFile = path.join(home, 'agents_environ.toml')
+  try {
+    // tools/list spells the tool with a required tier and the harness array.
+    const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'declare_harnesses')
+    assert.ok(tool !== undefined, 'declare_harnesses is not registered')
+    const schema = z
+      .object({
+        properties: z.object({
+          tier: z.object({ enum: z.array(z.string()) }).passthrough(),
+          harnesses: z.object({ type: z.literal('array') }).passthrough(),
+        }).passthrough(),
+      })
+      .passthrough()
+      .parse(tool.inputSchema)
+    assert.deepEqual(schema.properties.tier.enum.sort(), ['project', 'user'])
+
+    // The write lands at the top of the project file and reads back for that tier only.
+    const written = z
+      .object({ kind: z.literal('defined'), tier: z.literal('project'), file: z.string(), pointer: z.literal('harnesses') })
+      .parse(
+        JSON.parse(
+          answered(
+            await client.callTool({
+              name: 'declare_harnesses',
+              arguments: { tier: 'project', harnesses: ['pi', 'codex'] },
+            }),
+          ),
+        ),
+      )
+    assert.equal(written.file, projectFile)
+    assert.equal(
+      fs.readFileSync(projectFile, 'utf8'),
+      'version = 1\n\nharnesses = ["pi", "codex"]\n',
+    )
+    const listed: unknown = JSON.parse(answered(await client.callTool({ name: 'list_harnesses', arguments: {} })))
+    assert.deepEqual(listed, { user: [], project: ['pi', 'codex'] })
+
+    // An entry that names a harness outside the new list strands it: refused, file unchanged.
+    write(
+      projectFile,
+      `version = 1
+
+harnesses = ["pi", "codex"]
+
+[provision.delta.codex]
+check = { file = "x" }
+install = "y"
+`,
+    )
+    const refusedResult = await client.callTool({
+      name: 'declare_harnesses',
+      arguments: { tier: 'project', harnesses: ['pi'] },
+    })
+    assert.equal(CallToolResultSchema.parse(refusedResult).isError, true)
+    assert.match(answered(refusedResult), /not declared: .*harness 'codex' is not one of this file's harnesses/)
+    assert.equal(fs.readFileSync(projectFile, 'utf8').includes('harnesses = ["pi"]'), false)
+
+    // An empty list clears the key: the file keeps its entry and declares no harnesses.
+    const cleared = z
+      .object({ kind: z.literal('defined'), pointer: z.literal('harnesses') })
+      .parse(
+        JSON.parse(
+          answered(
+            await client.callTool({
+              name: 'declare_harnesses',
+              arguments: { tier: 'project', harnesses: [] },
+            }),
+          ),
+        ),
+      )
+    assert.equal(cleared.pointer, 'harnesses')
+    assert.equal(
+      fs.readFileSync(projectFile, 'utf8'),
+      `version = 1
+
+
+[provision.delta.codex]
+check = { file = "x" }
+install = "y"
+`,
+    )
+    const after: unknown = JSON.parse(answered(await client.callTool({ name: 'list_harnesses', arguments: {} })))
+    assert.deepEqual(after, { user: [], project: [] })
+    assert.equal(fs.existsSync(userFile), false, 'the user file was written by a project-tier declaration')
+  } finally {
+    await client.close()
+  }
+})
+
 // The definition the tool answers with, checked by the protocol's own answer rather than cast: the
 // bundle has to land bytes in the fixture's project file and name the pointer it wrote.
 const DEFINED = z.object({
@@ -203,6 +324,35 @@ const LOCAL = `version = 1
 check = { file = "~/.config/opencode/opencode.json", contains = "serena" }
 install = "opencode mcp add serena"
 `
+
+// The target file's own harness list is the constraint the tool enforces: a harness the list does
+// not name is refused before anything is written, with the parser's reason.
+test('define_provision refuses a harness the target file\'s list does not name', async () => {
+  const project = somewhere()
+  const file = path.join(project, 'agents_environ.toml')
+  write(
+    file,
+    'version = 1\n\nharnesses = ["pi"]\n\n[provision.serena.pi]\ncheck = { file = "x" }\ninstall = "true"\n',
+  )
+  const client = await connect({ ACM_PROJECT_ROOT: project })
+  try {
+    const result = await client.callTool({
+      name: 'define_provision',
+      arguments: {
+        name: 'delta',
+        harness: 'codex',
+        tier: 'project',
+        check: { file: '~/.x' },
+        install: 'x',
+      },
+    })
+    assert.equal(CallToolResultSchema.parse(result).isError, true)
+    assert.match(answered(result), /harness 'codex' is not one of this file's harnesses: pi/)
+    assert.equal(fs.readFileSync(file, 'utf8').includes('delta'), false, 'the refused definition changed the file')
+  } finally {
+    await client.close()
+  }
+})
 
 // A definition with no effective Install command is refused by the loader before anything is
 // written: the shared Install command or the entry's own has to cover it.

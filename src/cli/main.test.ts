@@ -42,9 +42,9 @@ function childEnv(extra: Record<string, string>) {
   return { ...Object.fromEntries(inherited), ...extra }
 }
 
-function run(entry: string, home: string, args: string[], extra: Record<string, string> = {}) {
+function run(entry: string, home: string, args: string[], extra: Record<string, string> = {}, cwd?: string) {
   return spawnSync(process.execPath, [entry, ...args], {
-    cwd: somewhere(),
+    cwd: cwd ?? somewhere(),
     env: childEnv({ ACM_HOME: home, ...extra }),
     encoding: 'utf8',
   })
@@ -109,6 +109,7 @@ test('acm status prints Provision by harness, and --json prints the same rows as
   const asJson = run(binPath(), home, ['status', '--json'], { ACM_STORE: store })
   assert.equal(asJson.status, 0, asJson.stderr)
   assert.deepEqual(JSON.parse(asJson.stdout), {
+    harnesses: { user: [], project: [] },
     provisions: [
       {
         name: 'opencode-no-claude',
@@ -144,6 +145,26 @@ test('acm status prints Provision by harness, and --json prints the same rows as
       },
     ],
   })
+})
+
+// The footer names each tier's declared harness list: the lists are per file, so the answer is
+// per tier and a file with no list contributes none.
+test('acm status prints the harness lists per tier in the footer', () => {
+  const home = installed()
+  write(
+    path.join(home, 'agents_environ.toml'),
+    `version = 1
+
+harnesses = ["pi", "codex"]
+
+[provision.serena.pi]
+check   = { file = "~/.pi/agent/mcp.json" }
+install = "pi plugin install serena"
+`,
+  )
+  const result = run(binPath(), home, ['status'])
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /harnesses: user pi, codex; project none declared/)
 })
 
 test('a refused environment file is reported with line and column, and fails the command', () => {
@@ -219,4 +240,43 @@ test('the built bundle run from a foreign directory finds its own package root',
   assert.equal(result.status, 0, result.stderr)
   const store = path.join(root, 'database', 'dashboard.db')
   assert.ok(result.stdout.includes(`store ${store}`), `expected the footer to name ${store}:\n${result.stdout}`)
+})
+
+// Seam C's skills half: the built bundle spawned on `acm skills install --dry-run` against fixture
+// lockfiles. The printed commands are the assertion — user groups first with -g, project groups
+// from the project root without it, and a tier with no declared harnesses omits --agent.
+test('acm skills install --dry-run prints one command per source group and runs nothing', () => {
+  const home = somewhere()
+  const projectRoot = somewhere()
+  write(
+    path.join(home, '.agents', '.skill-lock.json'),
+    JSON.stringify({
+      version: 3,
+      skills: {
+        alpha: { source: 'repo/one', sourceType: 'github' },
+        beta: { source: 'repo/two', sourceType: 'github' },
+        gamma: { source: 'repo/one', sourceType: 'github' },
+      },
+    }),
+  )
+  write(
+    path.join(projectRoot, 'skills-lock.json'),
+    JSON.stringify({ version: 1, skills: { local: { source: 'repo/proj', sourceType: 'github' } } }),
+  )
+  write(
+    path.join(home, 'agents_environ.toml'),
+    `version = 1
+
+harnesses = ["pi", "codex"]
+`,
+  )
+  write(path.join(projectRoot, 'agents_environ.toml'), 'version = 1\n')
+  const result = run(binPath(), home, ['skills', 'install', '--dry-run'], { ACM_PROJECT_ROOT: projectRoot }, projectRoot)
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /^npx -y skills@latest add repo\/one --skill alpha --skill gamma --agent pi --agent codex -g -y$/m)
+  assert.match(result.stdout, /^npx -y skills@latest add repo\/two --skill beta --agent pi --agent codex -g -y$/m)
+  assert.match(result.stdout, /^npx -y skills@latest add repo\/proj --skill local -y$/m)
+  assert.match(result.stdout, /dry run: nothing was run/)
+  // The project lockfile exists, so the only warning is none; a missing tier warns on stderr.
+  assert.equal(result.stderr, '')
 })

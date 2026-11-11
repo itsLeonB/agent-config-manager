@@ -17,8 +17,8 @@ for a declared environment of Provisions. [README.md](README.md) covers what it 
 it. Configuration on claude.ai is deliberately out of scope; see
 [docs/adr/0002](docs/adr/0002-no-cloud-config-management.md).
 
-Bun is the package manager and script runner (`bun install`, `bun run <script>`, `bunx`); npm and
-npx are not used here.
+Use Bun for dependencies and project scripts (`bun install`, `bun run <script>`, `bunx`).
+`acm skills install` also requires Node.js and `npx` on `PATH`; Bun alone is not enough for that command.
 
 ## Environment tickets
 
@@ -78,11 +78,14 @@ decisions.
   that compares one and the install that rewrites one both ask it — `loader.ts` is the only module
   that knows where a tier's file lives and what its root is
   — `~/agents_environ.toml` and the committed `<project>/agents_environ.toml`, merged per `(provision, harness)` so the nearer file replaces
-  the farther one whole — `tags` included — `runner.ts` is the install run, the only place a command is
-  spawned and the only place a Run is recorded, `history.ts` is the environment's one caller of the store,
-  `native-read.ts` is a Native read over the three harness readers, `define.ts` is `define_provision`
-  writing one entry through the pointer editor, `print.ts` is how a value from a file reaches a printed
-  line, and `service.ts` is everything a face may call — the rows, one Presence per harness, the
+  the farther one whole — `tags` included — `runner.ts` is the Provision install run, the only
+  place a Provision's Install command is spawned and the only place a Run is recorded,
+  `skills.ts` is the skills installer — a CLI-only converge over the two skills lockfiles that
+  spawns `npx` once per source group and records nothing — `history.ts` is the environment's one
+  caller of the store, `native-read.ts` is a Native read over the three harness readers,
+  `define.ts` is `define_provision` writing one entry through the pointer editor and `declare.ts`
+  `declare_harnesses` writing one tier's harness list, `print.ts` is how a value from a file
+  reaches a printed line, and `service.ts` is everything a face may call — the rows, one Presence per harness, the
   printing, the JSON, and the re-exports a face asks for. `src/mcp/router.ts` is the MCP face
   and `src/mcp/server.ts` puts it on a stdio transport behind `acm mcp serve`; the router registers
   `list_provisions`, `read_native_config`, and `define_provision`, which answer from that service, and

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   ENVIRONMENT_TIERS,
   HARNESSES,
+  declareHarnesses,
   defineProvision,
   listHarnesses,
   readNativeConfig,
@@ -18,14 +19,15 @@ function answer(document: string) {
   return { content: [{ type: 'text' as const, text: document }] }
 }
 
-// A refused definition is a failure the caller fixes, not an answer: the reason is the parser's own,
-// so it names the fault the next read would report anyway.
-function refused(outcome: Exclude<DefineOutcome, { kind: 'defined' }>) {
+// A refused write is a failure the caller fixes, not an answer: the reason is the parser's own,
+// so it names the fault the next read would report anyway. `what` is the verb the tool answers
+// with — a definition is "not defined", a declaration "not declared".
+function refused(outcome: Exclude<DefineOutcome, { kind: 'defined' }>, what = 'defined') {
   const text =
     outcome.kind === 'refused'
       ? `${outcome.refusal.line}:${outcome.refusal.column}: ${outcome.refusal.reason}`
       : outcome.reason
-  return { content: [{ type: 'text' as const, text: `not defined: ${text}` }], isError: true }
+  return { content: [{ type: 'text' as const, text: `not ${what}: ${text}` }], isError: true }
 }
 
 // The six predicates and the three Install forms, as the tool's own schema: a client reading
@@ -182,9 +184,31 @@ export function createRouter(): McpServer {
   )
 
   server.registerTool(
+    'declare_harnesses',
+    {
+      description:
+        'Write one tier\'s harnesses list — the top-level harnesses key of that tier\'s environment file. The list replaces the file\'s own whole and is never merged; an empty list removes the key, which is how a file declares no harnesses again. The parser validates the result before anything is written, so a list that would leave an entry naming a harness it does not declare is refused with its reason and the file is unchanged. The tier is required: a write never lands in a file the caller did not name. Never runs a command and never evaluates a Check: the only effect is the file. Answers the key written and the file\'s digest, or the reason the loader would refuse the result.',
+      inputSchema: {
+        tier: z
+          .enum(ENVIRONMENT_TIERS)
+          .describe('which environment file to write: user or project — required, so a declaration never lands in the wrong file by accident'),
+        harnesses: z
+          .array(z.string().min(1))
+          .describe('the whole list, replacing the file\'s own; an empty array removes the harnesses key'),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    async ({ tier, harnesses }) => {
+      const outcome = declareHarnesses({ tier, harnesses })
+      return outcome.kind === 'defined' ? answer(JSON.stringify(outcome, null, 2)) : refused(outcome, 'declared')
+    },
+  )
+
+  server.registerTool(
     'list_harnesses',
     {
-      description: 'List the harnesses this environment declares (or pi, codex, opencode when none are declared). Read-only.',
+      description:
+        'List the harnesses each environment file declares, keyed by tier: { user: [...], project: [...] }. A file with no harnesses list declares none. Read-only.',
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
@@ -205,7 +229,8 @@ export function createRouter(): McpServer {
           '- list_provisions: list Provisions with Presence per harness.',
           '- read_native_config: read native config for pi, codex, or opencode.',
           '- define_provision: write one Provision entry for one harness.',
-          '- list_harnesses: list declared harnesses (or pi, codex, opencode by default).',
+          '- declare_harnesses: write one tier\'s harnesses list; an empty list clears it.',
+          '- list_harnesses: list the harnesses each environment file declares, per tier.',
           '',
           'Harnesses are free-form labels in the environment layer: any non-empty, NUL-free string is a legal target. Only read_native_config validates against the closed set (pi, codex, opencode).',
           '',
