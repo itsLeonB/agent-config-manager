@@ -243,8 +243,8 @@ test('the built bundle run from a foreign directory finds its own package root',
 })
 
 // Seam C's skills half: the built bundle spawned on `acm skills install --dry-run` against fixture
-// lockfiles. The printed commands are the assertion — user groups first with -g, project groups
-// from the project root without it, and a tier with no declared harnesses omits --agent.
+// lockfiles. One run covers one tier — the project tier by default, the user tier with -g — and
+// the printed commands are the assertion.
 test('acm skills install --dry-run prints one command per source group and runs nothing', () => {
   const home = somewhere()
   const projectRoot = somewhere()
@@ -270,13 +270,25 @@ test('acm skills install --dry-run prints one command per source group and runs 
 harnesses = ["pi", "codex"]
 `,
   )
-  write(path.join(projectRoot, 'agents_environ.toml'), 'version = 1\n')
+  write(
+    path.join(projectRoot, 'agents_environ.toml'),
+    `version = 1
+
+harnesses = ["opencode"]
+`,
+  )
   const result = run(binPath(), home, ['skills', 'install', '--dry-run'], { ACM_PROJECT_ROOT: projectRoot }, projectRoot)
   assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /^npx -y skills@latest add repo\/one --skill alpha --skill gamma --agent pi --agent codex -g -y$/m)
-  assert.match(result.stdout, /^npx -y skills@latest add repo\/two --skill beta --agent pi --agent codex -g -y$/m)
-  assert.match(result.stdout, /^npx -y skills@latest add repo\/proj --skill local -y$/m)
+  assert.match(result.stdout, /^npx -y skills@latest add repo\/proj --skill local --agent opencode -y$/m)
+  // One tier per run: the user lockfile's groups never appear in a default run.
+  assert.doesNotMatch(result.stdout, /repo\/one|repo\/two/)
   assert.match(result.stdout, /dry run: nothing was run/)
-  // The project lockfile exists, so the only warning is none; a missing tier warns on stderr.
   assert.equal(result.stderr, '')
+
+  const global = run(binPath(), home, ['skills', 'install', '--dry-run', '-g'], { ACM_PROJECT_ROOT: projectRoot }, projectRoot)
+  assert.equal(global.status, 0, global.stderr)
+  assert.match(global.stdout, /^npx -y skills@latest add repo\/one --skill alpha --skill gamma --agent pi --agent codex -g -y$/m)
+  assert.match(global.stdout, /^npx -y skills@latest add repo\/two --skill beta --agent pi --agent codex -g -y$/m)
+  assert.doesNotMatch(global.stdout, /repo\/proj/)
+  assert.equal(global.stderr, '')
 })

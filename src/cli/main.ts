@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { statSync } from 'node:fs'
+import { readSync, statSync } from 'node:fs'
 import path from 'node:path'
 import {
   ENVIRONMENT_TIERS,
@@ -31,10 +31,11 @@ const USAGE = `usage: acm <command> [--project-root <dir>]
                     --only     restrict the run to Provisions with that name or tag; repeatable
                     --tier     restrict the run to one tier
 
-  skills install [--dry-run]
-                    converge the skills lockfiles: one npx skills add per source group, user
-                    lockfile first with -g, project lockfile from the project root
-                    --dry-run  print the commands and stop
+  skills install [-g|--global] [-y|--yes] [--dry-run]
+                    converge one tier's skills lockfile: one npx skills add per source group
+                    --global/-g  the user tier's lockfile, installed with -g; the project tier is the default
+                    --yes/-y     print and run without asking (a non-TTY run without it prints and stops)
+                    --dry-run    print the commands and stop
 
   mcp serve  speak the MCP protocol over stdin/stdout
 `
@@ -101,16 +102,37 @@ function main(input: string[]): number | Promise<number> {
 
 // Skills converge the lockfiles, not the environment: the command prints each `npx skills add`
 // and its exit status, and any failure makes the exit status non-zero. Warnings go to stderr.
+// EOF or a read error declines: an unanswerable prompt must not run anything.
+function confirmTty(message: string): boolean {
+  process.stdout.write(message)
+  const line = Buffer.alloc(1024)
+  let read = 0
+  try {
+    read = readSync(0, line, 0, line.length, null)
+  } catch {
+    return false
+  }
+  const answer = line.subarray(0, read).toString('utf8').trim().toLowerCase()
+  return answer === 'y' || answer === 'yes'
+}
+
 function skillsInstall(rest: string[]): number {
-  const unknown = rest.find((arg) => arg !== '--dry-run')
+  const known = new Set(['-g', '--global', '-y', '--yes', '--dry-run'])
+  const unknown = rest.find((arg) => !known.has(arg))
   if (unknown !== undefined) {
-    process.stderr.write(`skills install takes --dry-run, not ${unknown}\n`)
+    process.stderr.write(`skills install takes -g/--global, -y/--yes and --dry-run, not ${unknown}\n`)
+    process.stderr.write('usage: acm skills install [-g|--global] [-y|--yes] [--dry-run]\n')
     return 1
   }
+  const global = rest.includes('-g') || rest.includes('--global')
+  const yes = rest.includes('-y') || rest.includes('--yes')
+  const dryRun = rest.includes('--dry-run')
   return skillsInstallRun(
     (text) => process.stdout.write(text),
     (text) => process.stderr.write(text),
-    { dryRun: rest.includes('--dry-run') },
+    // The prompt and the preview must both be visible: ask only on a real terminal both ways.
+    !dryRun && !yes && process.stdin.isTTY && process.stdout.isTTY ? confirmTty : undefined,
+    { global, yes, dryRun },
   )
 }
 
