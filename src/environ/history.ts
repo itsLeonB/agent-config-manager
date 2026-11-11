@@ -3,7 +3,7 @@ import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { openStore } from '../server/store.cjs'
 import { installCommand } from './command.ts'
-import type { Presence, ResolvedProvision, Run } from './types.ts'
+import type { InstallCommand, Presence, ResolvedProvision, Run } from './types.ts'
 
 // The environment's one caller of the store, and the only place a Run is read or written. It is not
 // a face: the CLI and the MCP router reach it through `service.ts` and never learn a database
@@ -15,6 +15,7 @@ import type { Presence, ResolvedProvision, Run } from './types.ts'
 
 export function recordRun(
   provision: ResolvedProvision,
+  install: InstallCommand,
   exitCode: number | null,
   presence: Presence,
   config: EngineConfig = resolveDefaultConfig(),
@@ -29,7 +30,7 @@ export function recordRun(
       // The command that ran, spelled: the Payload path followed by its arguments, or the file and
       // Payload pair a Section write named, when there is one. The bytes a Payload held are what
       // ran, never what is recorded.
-      command: installCommand(provision.install),
+      command: installCommand(install),
       exitCode,
       presence,
     })

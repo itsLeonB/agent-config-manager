@@ -151,6 +151,13 @@ export function loadEnvironment(config: EngineConfig): Environment {
     }
     let position = 0
     for (const declaration of parsed.provisions) {
+      // The shared declarations resolve once per Provision and ride on every entry the file
+      // declares: an entry's effective Checks are the shared ones plus its own, and its Install
+      // commands the shared one plus its own. A nearer file owns them whole because they are built
+      // here, from the winning file's declaration, with no field-level merging.
+      const sharedChecks = declaration.checks.map((check) => resolveCheck(check, location.root, config.home))
+      const sharedInstall =
+        declaration.install === null ? null : resolveInstall(declaration.install, location.root, config.home)
       for (const entry of declaration.entries) {
         const provision: ResolvedProvision = {
           name: declaration.name,
@@ -161,8 +168,12 @@ export function loadEnvironment(config: EngineConfig): Environment {
           // of one command reads the same at two tiers.
           root: location.root,
           source: location.file,
-          checks: entry.checks.map((check) => resolveCheck(check, location.root, config.home)),
-          install: resolveInstall(entry.install, location.root, config.home),
+          checks: [
+            ...sharedChecks,
+            ...entry.checks.map((check) => resolveCheck(check, location.root, config.home)),
+          ],
+          install: entry.install === null ? null : resolveInstall(entry.install, location.root, config.home),
+          sharedInstall,
         }
         won.set(keyOf(provision), { provision, precedence, position })
         position += 1

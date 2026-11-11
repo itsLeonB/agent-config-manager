@@ -9,7 +9,7 @@ import { installCommand } from './command.ts'
 import { isPayloadInstall, isSectionInstall, loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
 import { headingOf, rewriteSection } from './section.ts'
-import type { EnvironmentTier, FileRefusal, Presence, ResolvedProvision, SectionInstall } from './types.ts'
+import type { EnvironmentTier, FileRefusal, InstallCommand, Presence, ResolvedProvision, SectionInstall } from './types.ts'
 
 // The run is the only place ACM executes anything. `install` is the single field that acts, in one
 // of three spellings, and the preview prints what the run does. A string command is its own text —
@@ -60,6 +60,31 @@ interface Previewed {
   skip: boolean
 }
 
+// The identity of one Provision's shared Install command inside a run: the Provision's name, the
+// Tier root it runs from, and the command's spelling. Two entries of one Provision declared in one
+// file share it, so the command runs once; the same name and spelling at two tiers are two
+// commands — a relative path means a different file under each root — and each runs.
+function sharedKey(provision: ResolvedProvision, install: InstallCommand): string {
+  return `${provision.name}\u0000${provision.root}\u0000${installCommand(install)}`
+}
+
+// Where each shared command prints: once, above the first entry that will run it. When every entry
+// of its group is skipped the command does not run, but the preview still shows it above the
+// group's first entry — what a run will not do is part of what a human reviews.
+function sharedTriggers(previewed: Previewed[]): Set<number> {
+  const groups = new Map<string, number[]>()
+  previewed.forEach((item, index) => {
+    if (item.provision.sharedInstall === null) return
+    const key = sharedKey(item.provision, item.provision.sharedInstall)
+    groups.set(key, [...(groups.get(key) ?? []), index])
+  })
+  const triggers = new Set<number>()
+  for (const indices of groups.values()) {
+    triggers.add(indices.find((index) => !previewed[index].skip) ?? indices[0])
+  }
+  return triggers
+}
+
 // One command's answer: the shell's status, and the text the summary reports when it went wrong.
 interface CommandResult {
   status: number | null
@@ -85,17 +110,29 @@ function previewText(previewed: Previewed[], dryRun: boolean, only: string[]): s
     `preview: ${counted(previewed.length, 'entry', 'entries')}, ${toRun} to run, ${previewed.length - toRun} already present${dryRun ? ' · dry run' : ''}`,
   ]
   if (only.length > 0) lines.push(`selection: --only ${only.join(', ')}`)
-  for (const item of previewed) {
+  const triggers = sharedTriggers(previewed)
+  for (const [index, item] of previewed.entries()) {
     const action = item.skip ? 'present, skipped' : item.presence === 'present' ? 'present, forced' : item.presence
     lines.push(
       `  ${printable(item.provision.name).padEnd(nameWidth)}  ${item.provision.harness.padEnd(harnessWidth)}  ${item.provision.tier.padEnd(tierWidth)}  ${action}`,
     )
-    const spelled = printable(installCommand(item.provision.install))
-    // `$ ` says the line is a command that runs; a Section write's label prints without it, because
-    // there is no command text for the prompt to mark.
-    lines.push(isSectionInstall(item.provision.install) ? `    ${spelled}` : `    $ ${spelled}`)
+    // The shared command prints once, labeled, above the first entry that runs it; the entry's own
+    // command prints under its row as before.
+    if (triggers.has(index) && item.provision.sharedInstall !== null) {
+      lines.push(installPreviewLine(item.provision.sharedInstall, true))
+    }
+    if (item.provision.install !== null) lines.push(installPreviewLine(item.provision.install, false))
   }
   return `${lines.join('\n')}\n`
+}
+
+// One Install command's preview line: `$ ` marks a command that runs — a Section write's label
+// prints without it, because there is no command text for the prompt to mark — and `shared: `
+// marks the Provision's shared command, which prints once for the group rather than per entry.
+function installPreviewLine(install: InstallCommand, shared: boolean): string {
+  const spelled = printable(installCommand(install))
+  const marks = `${isSectionInstall(install) ? '' : '$ '}${shared ? 'shared: ' : ''}`
+  return `    ${marks}${spelled}`
 }
 
 function joined(labels: string[]): string {
@@ -106,7 +143,10 @@ function joined(labels: string[]): string {
 // message, so it reaches the summary through the same sanitiser a Provision name does: one line in,
 // one line out.
 function reason(entry: InstallEntry): string {
-  return entry.failure === null ? `exit ${entry.commandExit}` : printable(entry.failure)
+  if (entry.failure !== null) return printable(entry.failure)
+  // An entry that ran can still have no status of its own: every Install command it had left was
+  // a shared one an earlier entry of the same Provision already spent.
+  return entry.commandExit === null ? 'no command ran' : `exit ${entry.commandExit}`
 }
 
 function summaryText(entries: InstallEntry[], refusals: FileRefusal[]): string {
@@ -139,22 +179,22 @@ function notRun(provision: ResolvedProvision, presence: Presence): InstallEntry 
 // the parent environment arrives unchanged and ACM adds no variables. `shell: true` is the POSIX
 // shell with the command text as a single argument, which is the text that was printed.
 // shortcut: no per-command timeout; add one when a real command hangs.
-function spawnInstall(provision: ResolvedProvision): CommandResult {
+function spawnInstall(install: InstallCommand, root: string): CommandResult {
   // A Section install writes bytes itself, so it never reaches a shell.
-  if (isSectionInstall(provision.install)) return sectionInstall(provision.install)
-  const command = installCommand(provision.install)
+  if (isSectionInstall(install)) return sectionInstall(install)
+  const command = installCommand(install)
   // A Payload that cannot be read fails its entry here, before the shell starts: `sh` would report
   // the same fault, but only after a spawn the preview said nothing about.
-  if (isPayloadInstall(provision.install)) {
+  if (isPayloadInstall(install)) {
     try {
-      accessSync(provision.install.payload, constants.R_OK)
+      accessSync(install.payload, constants.R_OK)
     } catch (error) {
       const cause = error instanceof Error ? error.message : String(error)
-      return { status: null, failure: `${provision.install.payload} could not be read: ${cause}` }
+      return { status: null, failure: `${install.payload} could not be read: ${cause}` }
     }
   }
   const result = spawnSync(command, {
-    cwd: provision.root,
+    cwd: root,
     stdio: ['ignore', 'inherit', 'inherit'],
     shell: true,
   })
@@ -245,26 +285,59 @@ export function installRun(
     )
   }
   const entries: InstallEntry[] = []
+  // A Provision's shared Install command runs at most once per run, before the first entry that
+  // needs it, and is skipped entirely when no entry of the Provision runs. The key is the
+  // Provision's name and the command's spelling, so two entries that share one declaration run it
+  // once while a same-named Provision at another tier with a different command still runs its own.
+  const sharedRan = new Set<string>()
   for (const item of previewed) {
+    const provision = item.provision
     if (item.skip) {
-      entries.push(notRun(item.provision, item.presence))
+      entries.push(notRun(provision, item.presence))
       continue
     }
-    write(`\n→ ${label(item.provision)} ${item.provision.tier} in ${item.provision.root}\n`)
-    const command = spawnInstall(item.provision)
-    // The answer after the command, not before and not the command's report of itself: a command
+    // Presence is live, not the preview's: a shared command an earlier entry of this Provision
+    // already ran can make this entry present before its turn comes, and it then runs nothing.
+    const before = evaluateChecks(provision.checks).presence
+    if (before === 'present' && options.force !== true) {
+      entries.push(notRun(provision, before))
+      continue
+    }
+    write(`\n→ ${label(provision)} ${provision.tier} in ${provision.root}\n`)
+    const commands: InstallCommand[] = []
+    if (provision.sharedInstall !== null) {
+      const key = sharedKey(provision, provision.sharedInstall)
+      if (!sharedRan.has(key)) {
+        sharedRan.add(key)
+        commands.push(provision.sharedInstall)
+      }
+    }
+    if (provision.install !== null) commands.push(provision.install)
+    let commandExit: number | null = null
+    let failure: string | null = null
+    for (const command of commands) {
+      const result = spawnInstall(command, provision.root)
+      // Each command is its own Run, recorded now, before the next command starts: the row is
+      // committed on its own, so an interrupted run keeps the history of the commands that had
+      // already finished. The presence recorded is this entry's answer after that command.
+      recordRun(provision, command, result.status, evaluateChecks(provision.checks).presence, config)
+      if (result.failure !== null && failure === null) {
+        failure = result.failure
+        commandExit = result.status
+      } else if (failure === null) {
+        commandExit = result.status
+      }
+    }
+    // The answer after the commands, not before and not the command's report of itself: a command
     // that half-worked is present if its Check now passes.
-    const after = evaluateChecks(item.provision.checks).presence
-    // Recorded now, before the next command starts: the row is committed on its own, so an
-    // interrupted run keeps the history of the commands that had already finished.
-    recordRun(item.provision, command.status, after, config)
+    const after = evaluateChecks(provision.checks).presence
     entries.push({
-      provision: item.provision,
-      before: item.presence,
+      provision,
+      before,
       after,
       attempted: true,
-      commandExit: command.status,
-      failure: command.failure,
+      commandExit,
+      failure,
     })
   }
   write(summaryText(entries, environment.refusals))

@@ -198,36 +198,27 @@ function decodeCheck(table: EnvironmentTable, block: readonly string[], at: Sour
   return { ok: true, value: { file, contains } }
 }
 
-// One `[provision.<name>.<harness>]` table. Its Checks — `check = { … }` or `checks = [ … ]`, one or
-// more of them — and `install` are both required: a Provision is a check and a command, and one
-// without the other cannot be converged.
-function decodeEntry(
-  harness: HarnessId,
+// `check`/`checks` spelled at one level — a Provision's own table or a harness entry. Either
+// spelling decodes to the same list; `check = { … }` is the one-element spelling, so a file written
+// before the list keeps loading. Returns null when neither key is spelled: whether that is a fault
+// depends on the level's shared declarations, which only the caller knows.
+function decodeChecks(
   table: EnvironmentTable,
   block: readonly string[],
   at: SourceIndex,
-): Decoded<DeclaredEntry> {
-  for (const key of Object.keys(table)) {
-    if (key !== CHECK_KEY && key !== CHECKS_KEY && key !== INSTALL_KEY) {
-      return refused(place(at.declaration(block, key), `unknown key '${key}'`))
-    }
-  }
-  if (!has(table, INSTALL_KEY)) return refused(place(at.header(block), 'missing install'))
-  const install = decodeInstall(table[INSTALL_KEY], block, at)
-  if (!install.ok) return install
+  bothReason: string,
+): Decoded<Check[]> | null {
   if (has(table, CHECK_KEY) && has(table, CHECKS_KEY)) {
-    return refused(place(at.declaration(block, CHECKS_KEY), 'an entry holds check or checks, not both'))
+    return refused(place(at.declaration(block, CHECKS_KEY), bothReason))
   }
   if (has(table, CHECK_KEY)) {
-    // `check` is the one-element spelling: an older file keeps loading, and the parser reads the
-    // same list either way.
     const checkTable = tableValue(table[CHECK_KEY])
     if (checkTable === null) return refused(place(at.declaration(block, CHECK_KEY), 'check must be an inline table'))
     const check = decodeCheck(checkTable, block, at)
     if (!check.ok) return check
-    return { ok: true, value: { harness, checks: [check.value], install: install.value } }
+    return { ok: true, value: [check.value] }
   }
-  if (!has(table, CHECKS_KEY)) return refused(place(at.header(block), 'missing check'))
+  if (!has(table, CHECKS_KEY)) return null
   const checksList = z.array(TOML_TABLE).safeParse(table[CHECKS_KEY])
   if (!checksList.success) {
     return refused(place(at.declaration(block, CHECKS_KEY), 'checks must be an array of tables'))
@@ -239,7 +230,32 @@ function decodeEntry(
     if (!check.ok) return check
     checks.push(check.value)
   }
-  return { ok: true, value: { harness, checks, install: install.value } }
+  return { ok: true, value: checks }
+}
+
+// One `[provision.<name>.<harness>]` table. Its own `checks` and `install` are optional: the
+// Provision's shared declarations may cover them, and `decodeProvision` refuses the file when an
+// entry would end up with no effective Check or Install command.
+function decodeEntry(
+  harness: HarnessId,
+  table: EnvironmentTable,
+  block: readonly string[],
+  at: SourceIndex,
+): Decoded<DeclaredEntry> {
+  for (const key of Object.keys(table)) {
+    if (key !== CHECK_KEY && key !== CHECKS_KEY && key !== INSTALL_KEY) {
+      return refused(place(at.declaration(block, key), `unknown key '${key}'`))
+    }
+  }
+  let install: InstallCommand | null = null
+  if (has(table, INSTALL_KEY)) {
+    const decoded = decodeInstall(table[INSTALL_KEY], block, at)
+    if (!decoded.ok) return decoded
+    install = decoded.value
+  }
+  const checks = decodeChecks(table, block, at, 'an entry holds check or checks, not both')
+  if (checks !== null && !checks.ok) return checks
+  return { ok: true, value: { harness, checks: checks === null ? [] : checks.value, install } }
 }
 
 // `install` is the one command ACM ever executes, and it is either spelled in the file, a
@@ -299,18 +315,50 @@ function decodeProvision(name: string, table: EnvironmentTable, at: SourceIndex)
   const tags = has(table, TAGS_KEY) ? stringList(table[TAGS_KEY]) : []
   if (tags === null) return refused(place(at.declaration(block, TAGS_KEY), 'tags must be an array of strings'))
 
+  // The Provision's own `checks` and `install` are the shared declarations every entry inherits.
+  // They are optional here and required in effect: an entry with no Checks of its own is covered
+  // by these, and one with neither refuses the file below.
+  const sharedChecks = decodeChecks(table, block, at, 'a provision holds check or checks, not both')
+  if (sharedChecks !== null && !sharedChecks.ok) return sharedChecks
+  let sharedInstall: InstallCommand | null = null
+  if (has(table, INSTALL_KEY)) {
+    const install = decodeInstall(table[INSTALL_KEY], block, at)
+    if (!install.ok) return install
+    sharedInstall = install.value
+  }
+
   const entries: DeclaredEntry[] = []
   for (const key of Object.keys(table)) {
-    if (key === TAGS_KEY) continue
+    if (key === TAGS_KEY || key === CHECK_KEY || key === CHECKS_KEY || key === INSTALL_KEY) continue
     const harness = harnessId(key)
     if (harness === null) return refused(place(at.declaration(block, key), `unknown harness '${key}'`))
     const entry = tableValue(table[key])
     if (entry === null) return refused(place(at.declaration(block, key), `the ${key} entry is not a table`))
-    const decoded = decodeEntry(harness, entry, [...block, key], at)
+    const entryBlock = [...block, key]
+    const decoded = decodeEntry(harness, entry, entryBlock, at)
     if (!decoded.ok) return decoded
+    // An entry's effective Install commands are the shared one plus its own, and its effective
+    // Checks the shared ones plus its own: the file refuses when either set would be empty.
+    // An entry is a table header or an inline `pi = { … }` key; `declaration` finds either, where
+    // `header` would miss the inline spelling and report the fault at the top of the file.
+    if (sharedInstall === null && decoded.value.install === null) {
+      return refused(place(at.declaration(block, key), 'missing install'))
+    }
+    if ((sharedChecks === null ? 0 : sharedChecks.value.length) + decoded.value.checks.length === 0) {
+      return refused(place(at.declaration(block, key), 'missing check'))
+    }
     entries.push(decoded.value)
   }
-  return { ok: true, value: { name, tags, entries } }
+  return {
+    ok: true,
+    value: {
+      name,
+      tags,
+      checks: sharedChecks === null ? [] : sharedChecks.value,
+      install: sharedInstall,
+      entries,
+    },
+  }
 }
 
 function firstLine(message: string): string {
