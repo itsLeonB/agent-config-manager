@@ -38,11 +38,10 @@ function write(target: string, text: string): void {
   fs.writeFileSync(target, text)
 }
 
-// The file one tier reads: the committed name in the home directory and in the Project root, and the
-// `.local` suffix in the Project root for the gitignored one.
+// The file one tier reads: `agents_environ.toml` in the home directory for `user`, and in the
+// Project root for `project`.
 function declare(f: Fixture, tier: EnvironmentTier, text: string): void {
-  const name = tier === 'project-local' ? 'agents_environ.local.toml' : 'agents_environ.toml'
-  write(path.join(tier === 'user' ? f.home : f.projectRoot, name), text)
+  write(path.join(tier === 'user' ? f.home : f.projectRoot, 'agents_environ.toml'), text)
 }
 
 // A same-named script in each root. It records the directory it ran in and the marker it was given,
@@ -78,7 +77,7 @@ function presence(f: Fixture, filter: { tier?: EnvironmentTier } = {}): string {
 
 // The whole point of the merge: an entry is won or lost whole. The nearer file's tags, Check,
 // Install command, tier and root all come from that file, and nothing is inherited field by field.
-test('one Provision at all three tiers keeps the project-local entry whole, and its command runs in the Project root', () => {
+test('one Provision at both tiers keeps the project entry whole, and its command runs in the Project root', () => {
   const f = fixture()
   const declaration = (tags: string, marker: string): string => `version = 1
 
@@ -91,19 +90,18 @@ install = "./install.sh ${marker} installed.txt"
 `
   declare(f, 'user', declaration('user', 'user'))
   declare(f, 'project', declaration('project', 'project'))
-  declare(f, 'project-local', declaration('project-local', 'project-local'))
   installer(f, f.home)
   installer(f, f.projectRoot)
 
   assert.deepEqual(rows(f), [
     {
       name: 'serena',
-      tags: ['project-local'],
+      tags: ['project'],
       harnesses: [
         {
           harness: 'codex',
-          tier: 'project-local',
-          source: path.join(f.projectRoot, 'agents_environ.local.toml'),
+          tier: 'project',
+          source: path.join(f.projectRoot, 'agents_environ.toml'),
           presence: 'absent',
           detail: `${path.join(f.projectRoot, 'installed.txt')} is not there`,
         },
@@ -114,9 +112,9 @@ install = "./install.sh ${marker} installed.txt"
   const printed: string[] = []
   const outcome = installRun((text) => printed.push(text), { dryRun: false }, f.config)
   assert.equal(outcome.entries.length, 1)
-  assert.match(printed.join(''), /serena\s+codex\s+project-local/)
+  assert.match(printed.join(''), /serena\s+codex\s+project/)
   // The copy that ran is the Project root's, so a relative `install` path meant the Project root.
-  assert.deepEqual(log(f), ['project project-local'])
+  assert.deepEqual(log(f), ['project project'])
   assert.equal(outcome.entries[0].after, 'present')
 })
 
@@ -223,19 +221,9 @@ install = "./install.sh user installed.txt"
 check   = { file = "installed.txt" }
 install = "./install.sh project installed.txt"
 `)
-  declare(f, 'project-local', `version = 1
-
-[provision.home-thing.pi]
-check   = { file = "shadowed.txt" }
-install = "true"
-`)
-
-  assert.deepEqual(names(f), ['repo-thing', 'home-thing'])
+  assert.deepEqual(names(f), ['home-thing', 'repo-thing'])
   assert.deepEqual(names(f, { tier: 'project' }), ['repo-thing'])
-  // `home-thing` is declared in the user file too, but the gitignored file owns it, so the user tier
-  // has nothing of its own left.
-  assert.deepEqual(names(f, { tier: 'user' }), [])
-  assert.deepEqual(rows(f, { tier: 'project-local' })[0].tags, [])
+  assert.deepEqual(names(f, { tier: 'user' }), ['home-thing'])
 })
 
 test('--tier restricts install to the entries one tier owns', () => {
@@ -358,8 +346,8 @@ install = "true"
   assert.equal(refused.refusals[0].line, 4)
   assert.match(refused.refusals[0].reason, /unknown predicate 'smells'/)
 
-  // The gitignored file is read after the refused one, so a refusal does not end the pass.
-  declare(f, 'project-local', `version = 1
+  // A local file git ignores is not read at all: it has no effect on status.
+  write(path.join(f.projectRoot, 'agents_environ.local.toml'), `version = 1
 
 [provision.mine.opencode]
 check   = { file = "installed.txt" }
@@ -368,8 +356,15 @@ install = "true"
   const both = readStatus({}, f.config)
   assert.deepEqual(
     both.provisions.map((row) => row.name),
-    ['home-thing', 'mine'],
+    ['home-thing'],
   )
-  assert.equal(both.provisions[1].harnesses[0].tier, 'project-local')
   assert.equal(both.refusals.length, 1)
+
+  // Nor on install: the local file's Provision is never seen, so a run has nothing to execute.
+  installer(f, f.projectRoot)
+  const printed: string[] = []
+  const outcome = installRun((text) => printed.push(text), { dryRun: false }, f.config)
+  // Only the user file's own entry runs; the local file's `mine` is never seen.
+  assert.deepEqual(outcome.entries.map((entry) => entry.provision.name), ['home-thing'])
+  assert.deepEqual(log(f), [])
 })

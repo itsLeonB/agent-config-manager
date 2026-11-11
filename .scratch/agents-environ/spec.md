@@ -87,7 +87,7 @@ unstored input for authoring). Everything else in the mirror engine is deleted, 
     provisions travel with my dotfiles.
 18. As a human, I want a project-tier environment file I can commit, so that a repository can require
     provisions of anyone who works in it.
-19. As a human, I want a project-local environment file that git ignores, so that my private additions
+19. ~~As a human, I want a project-local environment file that git ignores~~ (superseded: the project-local tier was removed; see the skills-lockfile spec)
     to a shared project do not leak into the repository.
 20. As a human, I want the file's location to be its Tier, so that no entry has to name a tier and no
     entry can disagree with where it lives.
@@ -296,15 +296,15 @@ install = "grep -q OPENCODE_DISABLE_CLAUDE_CODE ~/.zshrc || echo 'export OPENCOD
   one on every entry. A file that does not parse contributes nothing; the
   other tiers still load.
 - **A relative path in `file`, a Payload path, or an `install` string resolves against the tier
-  root** — `$HOME` for `user`, the Project root for `project` and `project-local`. A leading `~` or
+  root** — `$HOME` for `user`, the Project root for `project`. A leading `~` or
   `/` is absolute. This is what lets one Provision's text be written twice for two tiers and stay
   readable.
 
 ### Loading and merging
 
 One loader answers with a list of resolved Provisions, each carrying its Tier, harness, name, the
-shared and entry Checks and Install command, and source file. It reads `user` always, and the two project files when the Project
-root has them. Merge is per `(provision, harness)` key with `project-local` > `project` > `user`; a
+shared and entry Checks and Install command, and source file. It reads `user` always, and the project file when the Project
+root has it. Merge is per `(provision, harness)` key with `project` > `user`; a
 Provision's `tags` merge the same way, replaced rather than unioned, so a nearer file owns its entry
 whole — and the Provision's shared `checks` and `install` merge the same way too: the nearest file
 that declares the Provision owns them whole, with no field-level merging. Ordering for a run is file order of the winning entry, `user` file first, which keeps a
@@ -375,8 +375,8 @@ Three tools, identical on all three clients, registered with zod input schemas:
 - No tool deletes a Provision: the environment file is the interface, and removal is an edit to it.
 - No tool runs a command and no tool runs a Check that spawns anything, by construction: Checks cannot
   spawn.
-- `define_provision` defaults to `project-local`, so an agent's unreviewed addition never lands in a
-  committed file. It writes through the pointer-level native editor, so comments and sibling
+- `define_provision` requires an explicit tier (`user` or `project`), so an unreviewed
+  addition never lands in a file by accident. It writes through the pointer-level native editor, so comments and sibling
   Provisions survive; a same-key write replaces that Provision's harness subtree only, and a shared
   write replaces the Provision's own `checks`/`install` keys only.
 - `read_native_config` reuses the existing harness readers. It answers for every path a harness's read

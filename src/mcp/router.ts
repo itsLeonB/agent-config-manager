@@ -155,7 +155,7 @@ export function createRouter(): McpServer {
     'define_provision',
     {
       description:
-        'Define one Provision\'s Check and Install command for one harness, written as [provision.<name>.<harness>] in the environment file of the chosen tier, with optional shared Checks and Install command written on [provision.<name>] for every entry to inherit. Comments and sibling Provisions survive; a same-key write replaces only the keys it names. The default tier is project-local, which git ignores. Never runs the Install command and never evaluates the Check: the only effect is the file. Answers the pointer written and the file\'s digest, or the reason the loader would refuse the result.',
+        'Define one Provision\'s Check and Install command for one harness, written as [provision.<name>.<harness>] in the environment file of the chosen tier, with optional shared Checks and Install command written on [provision.<name>] for every entry to inherit. Comments and sibling Provisions survive; a same-key write replaces only the keys it names. The environment file of the chosen tier, which the caller must name. Never runs the Install command and never evaluates the Check: the only effect is the file. Answers the pointer written and the file\'s digest, or the reason the loader would refuse the result.',
       inputSchema: {
         name: z.string().min(1).describe('the Provision name, such as serena'),
         // Deliberately not an enum: the file's own validator names an unknown harness, and that is
@@ -163,8 +163,7 @@ export function createRouter(): McpServer {
         harness: z.string().min(1).describe('the harness the entry is for: pi, codex, or opencode'),
         tier: z
           .enum(ENVIRONMENT_TIERS)
-          .optional()
-          .describe('which environment file to write: user, project, or project-local (the default)'),
+          .describe('which environment file to write: user or project — required, so a definition never lands in the wrong file by accident'),
         check: CHECK.optional().describe(
           'one Check, the singular spelling the file writes as check = { \u2026 }',
         ),

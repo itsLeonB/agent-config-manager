@@ -1,6 +1,5 @@
 database/
 .claude/settings.local.json
-agents_environ.local.toml
 node_modules
 .DS_Store
 dist

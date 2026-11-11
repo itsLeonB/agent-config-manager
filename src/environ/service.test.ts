@@ -5,7 +5,12 @@ import os from 'node:os'
 import path from 'node:path'
 import type { EngineConfig } from '../engine/config.ts'
 import { readStatus, formatStatus, formatRefusal, statusDocument } from './service.ts'
-import type { ProvisionRow } from './types.ts'
+import type { EnvironmentTier, ProvisionRow } from './types.ts'
+
+// A tier outside the closed list is what this test filters by: the status pass reports the files
+// read rather than refusing, so the cast names a value the type cannot spell.
+// SAFETY: the test deliberately filters by a tier no file can own.
+const UNOWNED_TIER = 'system' as EnvironmentTier
 
 // Seam A: the environment service against a fixture. A temp home holds a hand-written environment
 // file and hand-written native files; the assertions are the rows `acm status` prints and the same
@@ -244,13 +249,12 @@ test('a home project reads the shared environment file only as user, even throug
 test('an unmatched tier reports the tiers and environment files read', () => {
   const f = fixture()
   installed(f)
-  // A project file too, so the answer names both files it read and neither tier the filter named.
+  // A project file too, so the answer names both files it read.
   write(path.join(f.projectRoot, 'agents_environ.toml'), 'version = 1\n')
-  const printed = formatStatus(readStatus({ tier: 'project-local' }, f.config))
+  const printed = formatStatus(readStatus({ tier: UNOWNED_TIER }, f.config))
   assert.match(printed, /no Provisions declared/)
   assert.match(printed, /user ~\/agents_environ\.toml/)
   assert.match(printed, /project .*agents_environ\.toml/)
-  assert.doesNotMatch(printed, /project-local/)
 })
 
 // An empty harness entry takes the Provision's shared declaration whole: its row reports the

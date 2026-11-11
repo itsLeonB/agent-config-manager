@@ -17,7 +17,9 @@ import type { EnvironmentTier, InstallCommand, ProvisionDeclaration, Refusal } f
 export interface DefineRequest {
   name: string
   harness: string
-  tier?: EnvironmentTier
+  // Required, never defaulted: an unreviewed definition cannot land in a committed file by
+  // accident — the caller has to say which file it belongs in.
+  tier: EnvironmentTier
   // One Check as the file spells it, written `check = { … }`: the singular spelling stays legal, so
   // a file with one Check keeps the shape it had, and a same-key write against an entry that spells
   // `checks` replaces that list with the one element. Passed through rather than re-shaped here: the
@@ -53,11 +55,12 @@ export function defineProvision(
   request: DefineRequest,
   config: EngineConfig = resolveDefaultConfig(),
 ): DefineOutcome {
-  // An unreviewed definition lands in the gitignored file unless the caller says otherwise.
-  const tier = request.tier ?? 'project-local'
-  const location = environmentFiles(config).find((candidate) => candidate.tier === tier)
-  // The tier list is closed and every member has a file, so a missing one is a bug, not an answer.
-  if (location === undefined) throw new Error(`no environment file for tier ${tier}`)
+  const location = environmentFiles(config).find((candidate) => candidate.tier === request.tier)
+  // A tier outside the closed list names no file, so the definition is refused rather than thrown:
+  // every other bad definition answers with a reason, and this one does too.
+  if (location === undefined) {
+    return { kind: 'failed', reason: `no environment file for tier ${request.tier}` }
+  }
 
   const existing = existsSync(location.file) ? readFileSync(location.file, 'utf8') : ''
   // A file that is not there declares nothing, and the loader reads a missing file that way. A file
@@ -159,7 +162,7 @@ export function defineProvision(
   writeFileSync(location.file, written)
   return {
     kind: 'defined',
-    tier,
+    tier: request.tier,
     file: location.file,
     pointer: tomlPath(entry),
     digest: digestOfBytes(Buffer.from(written)),

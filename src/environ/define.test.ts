@@ -46,13 +46,10 @@ function userFile(f: Fixture): string {
   return path.join(f.home, 'agents_environ.toml')
 }
 
-function committedFile(f: Fixture): string {
+// The file a definition lands in when its caller names the project tier: the committed
+// `agents_environ.toml` in the Project root.
+function projectFile(f: Fixture): string {
   return path.join(f.projectRoot, 'agents_environ.toml')
-}
-
-// The file a definition lands in when its caller names no tier.
-function localFile(f: Fixture): string {
-  return path.join(f.projectRoot, 'agents_environ.local.toml')
 }
 
 type Defined = Extract<DefineOutcome, { kind: 'defined' }>
@@ -105,6 +102,7 @@ test('a definition is a row status reports, with the Presence its Check answers'
       {
         name: 'rtk',
         harness: 'pi',
+        tier: 'project',
         check: { file: '~/AGENTS.md', contains: '^@RTK' },
         install: 'npx rtk init --quiet',
       },
@@ -112,27 +110,28 @@ test('a definition is a row status reports, with the Presence its Check answers'
     ),
   )
   assert.equal(outcome.pointer, 'provision.rtk.pi')
-  assert.equal(outcome.tier, 'project-local')
-  assert.equal(outcome.file, localFile(f))
+  assert.equal(outcome.tier, 'project')
+  assert.equal(outcome.file, projectFile(f))
   // The digest is the bytes a later read would see, not a value computed on the way past them.
-  assert.equal(outcome.digest, digestOfBytes(fs.readFileSync(localFile(f))))
+  assert.equal(outcome.digest, digestOfBytes(fs.readFileSync(projectFile(f))))
   assert.deepEqual(readStatus({}, f.config).provisions, [
     {
       name: 'rtk',
       tags: [],
-      harnesses: [{ harness: 'pi', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'present', detail: null }],
+      harnesses: [{ harness: 'pi', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'present', detail: null }],
     },
   ])
 })
 
 test('a new harness entry is one added table, and every other byte of the file is unchanged', () => {
   const f = fixture()
-  write(localFile(f), REVIEWED)
+  write(projectFile(f), REVIEWED)
   const outcome = defined(
     defineProvision(
       {
         name: 'serena',
         harness: 'opencode',
+        tier: 'project',
         check: { file: '~/.config/opencode/opencode.json', contains: 'serena' },
         install: 'opencode mcp add serena',
       },
@@ -143,7 +142,7 @@ test('a new harness entry is one added table, and every other byte of the file i
   // The comment, the tags table, both sibling harness entries, and zeta's comment above it: all the
   // same bytes, in the same order. The diff is the separator and the table below.
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `${REVIEWED}
 [provision.serena.opencode]
 check = { file = "~/.config/opencode/opencode.json", contains = "serena" }
@@ -154,13 +153,14 @@ install = "opencode mcp add serena"
 
 test('a same-key write replaces that entry and leaves the sibling harness entry intact', () => {
   const f = fixture()
-  write(localFile(f), REVIEWED)
+  write(projectFile(f), REVIEWED)
   write(path.join(f.home, '.codex', 'config.toml'), '[mcp_servers.serena]\ncommand = "uvx"\n')
   const outcome = defined(
     defineProvision(
       {
         name: 'serena',
         harness: 'codex',
+        tier: 'project',
         check: { file: '~/.codex/config.toml', contains: 'mcp_servers.serena' },
         install: 'python3 scripts/merge-codex-mcp.py serena --replace',
       },
@@ -171,7 +171,7 @@ test('a same-key write replaces that entry and leaves the sibling harness entry 
   // Only the two lines of the entry named are new — the address formatter drops the alignment —
   // and the human's trailing comment on the check line stays where it was.
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 # Provisions below are reviewed by hand
@@ -196,11 +196,11 @@ install = "pi plugin install zeta"
   assert.deepEqual(
     readStatus({ name: 'serena' }, f.config).provisions.flatMap((row) => row.harnesses),
     [
-      { harness: 'codex', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'present', detail: null },
+      { harness: 'codex', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'present', detail: null },
       {
         harness: 'pi',
-        tier: 'project-local',
-        source: path.join(f.projectRoot, 'agents_environ.local.toml'),
+        tier: 'project',
+        source: path.join(f.projectRoot, 'agents_environ.toml'),
         presence: 'absent',
         detail: `${path.join(f.home, '.pi', 'agent', 'mcp.json')} is not there`,
       },
@@ -213,12 +213,13 @@ install = "pi plugin install zeta"
 // rather than leaving the old text in force beside the new Check.
 test('a same-key definition replaces the Install command the entry already carried', () => {
   const f = fixture()
-  write(localFile(f), REVIEWED)
+  write(projectFile(f), REVIEWED)
   const outcome = defined(
     defineProvision(
       {
         name: 'serena',
         harness: 'pi',
+        tier: 'project',
         check: { file: '~/.pi/agent/mcp.json', contains: 'serena' },
         install: 'pi plugin add serena --pinned',
       },
@@ -226,7 +227,7 @@ test('a same-key definition replaces the Install command the entry already carri
     ),
   )
   assert.equal(outcome.pointer, 'provision.serena.pi')
-  const written = read(localFile(f))
+  const written = read(projectFile(f))
   assert.match(written, /^install = "pi plugin add serena --pinned"$/m)
   assert.equal(written.includes('pi plugin install serena'), false, 'the command the entry carried survived')
   // The sibling harness entry and every other Provision are the bytes the human wrote.
@@ -239,7 +240,7 @@ test('a same-key definition replaces the Install command the entry already carri
 test('a singular Check replaces a checks list with its one element, keeping the list spelling', () => {
   const f = fixture()
   write(
-    localFile(f),
+    projectFile(f),
     `version = 1
 
 [provision.serena.pi]
@@ -253,6 +254,7 @@ install = "old command"
       {
         name: 'serena',
         harness: 'pi',
+        tier: 'project',
         check: { file: '~/.pi/mcp.json', contains: 'new' },
         install: 'new command',
       },
@@ -261,7 +263,7 @@ install = "old command"
   )
   assert.equal(outcome.pointer, 'provision.serena.pi')
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.serena.pi]
@@ -281,7 +283,7 @@ install = "new command"
 test('a one-element checks list replaces a singular check, keeping the singular spelling', () => {
   const f = fixture()
   write(
-    localFile(f),
+    projectFile(f),
     `version = 1
 
 [provision.serena.pi]
@@ -295,6 +297,7 @@ install = "old command"
       {
         name: 'serena',
         harness: 'pi',
+        tier: 'project',
         checks: [{ file: '~/.pi/mcp.json', contains: 'new' }],
         install: 'new command',
       },
@@ -303,7 +306,7 @@ install = "old command"
   )
   assert.equal(outcome.pointer, 'provision.serena.pi')
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.serena.pi]
@@ -325,6 +328,7 @@ test('shared declarations write the Provision table and an empty harness entry',
       {
         name: 'skills-mattpocock',
         harness: 'pi',
+        tier: 'project',
         sharedChecks: [{ file: '~/.agents/.skill-lock.json', contains: 'mattpocock' }],
         sharedInstall: 'npx skills add mattpocock/skills -g -y',
       },
@@ -333,7 +337,7 @@ test('shared declarations write the Provision table and an empty harness entry',
   )
   assert.equal(outcome.pointer, 'provision.skills-mattpocock.pi')
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.skills-mattpocock]
@@ -350,8 +354,8 @@ install = "npx skills add mattpocock/skills -g -y"
       harnesses: [
         {
           harness: 'pi',
-          tier: 'project-local',
-          source: path.join(f.projectRoot, 'agents_environ.local.toml'),
+          tier: 'project',
+          source: path.join(f.projectRoot, 'agents_environ.toml'),
           presence: 'present',
           detail: null,
         },
@@ -363,7 +367,7 @@ install = "npx skills add mattpocock/skills -g -y"
 test('shared and entry fields write together, and a repeat shared write replaces only the shared keys', () => {
   const f = fixture()
   write(
-    localFile(f),
+    projectFile(f),
     `version = 1
 
 # shared declarations are reviewed by hand
@@ -387,6 +391,7 @@ install = "pi plugin install zeta"
       {
         name: 'serena',
         harness: 'codex',
+        tier: 'project',
         sharedChecks: [{ file: '~/.new-shared' }],
         sharedInstall: 'new shared install',
         check: { file: '~/.codex/config.toml', contains: 'serena' },
@@ -400,6 +405,7 @@ install = "pi plugin install zeta"
       {
         name: 'serena',
         harness: 'pi',
+        tier: 'project',
         sharedChecks: [{ file: '~/.newer-shared', contains: 'serena' }],
         sharedInstall: 'newer shared install',
       },
@@ -407,7 +413,7 @@ install = "pi plugin install zeta"
     ),
   )
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 # shared declarations are reviewed by hand
@@ -435,7 +441,7 @@ install = "codex mcp add serena"
 test('a shared checks list keeps the Provision\'s singular check spelling', () => {
   const f = fixture()
   write(
-    localFile(f),
+    projectFile(f),
     `version = 1
 
 [provision.serena]
@@ -450,13 +456,14 @@ install = "old shared install"
       {
         name: 'serena',
         harness: 'pi',
+        tier: 'project',
         sharedChecks: [{ file: '~/.new-shared' }],
       },
       f.config,
     ),
   )
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.serena]
@@ -471,7 +478,7 @@ install = "old shared install"
 test('shared declarations can be added to a provision that only has harness entries', () => {
   const f = fixture()
   write(
-    localFile(f),
+    projectFile(f),
     `version = 1
 
 [provision.serena.pi]
@@ -484,6 +491,7 @@ install = "pi plugin install serena"
       {
         name: 'serena',
         harness: 'codex',
+        tier: 'project',
         sharedChecks: [{ file: '~/.local/bin/serena' }],
         sharedInstall: 'uv tool install serena-agent',
         check: { file: '~/.codex/config.toml', contains: 'serena' },
@@ -494,7 +502,7 @@ install = "pi plugin install serena"
   )
   assert.equal(outcome.pointer, 'provision.serena.codex')
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.serena.pi]
@@ -516,27 +524,26 @@ install = "codex mcp add serena"
   )
 })
 
-test('an unreviewed definition lands in the gitignored file, and an explicit tier writes that file', () => {
+test('an explicit tier writes that file and nowhere else', () => {
   const f = fixture()
   const user = `version = 1\n\n[provision.rtk.pi]\ncheck = { file = "~/AGENTS.md" }\ninstall = "npx rtk init"\n`
-  const committed = `version = 1\n\n# the repository requires nothing yet\n`
   write(userFile(f), user)
-  write(committedFile(f), committed)
   const outcome = defined(
     defineProvision(
       {
         name: 'serena',
         harness: 'codex',
+        tier: 'project',
         check: { file: '~/.codex/config.toml', contains: 'mcp_servers.serena' },
         install: 'python3 scripts/merge-codex-mcp.py serena',
       },
       f.config,
     ),
   )
-  assert.equal(outcome.tier, 'project-local')
-  assert.equal(outcome.file, localFile(f))
+  assert.equal(outcome.tier, 'project')
+  assert.equal(outcome.file, projectFile(f))
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.serena.codex]
@@ -545,10 +552,9 @@ install = "python3 scripts/merge-codex-mcp.py serena"
 `,
   )
   assert.equal(read(userFile(f)), user, 'the user file changed')
-  assert.equal(read(committedFile(f)), committed, 'the committed file changed')
 
-  // A caller that names the tier gets that file, and the other two are still untouched.
-  const local = read(localFile(f))
+  // A caller that names the other tier gets that file, and the project file is untouched.
+  const project = read(projectFile(f))
   const named = defined(
     defineProvision(
       {
@@ -564,8 +570,7 @@ install = "python3 scripts/merge-codex-mcp.py serena"
   assert.equal(named.tier, 'user')
   assert.equal(named.file, userFile(f))
   assert.match(read(userFile(f)), /\n\[provision\.serena\.pi\]\n/)
-  assert.equal(read(localFile(f)), local, 'the project-local file changed')
-  assert.equal(read(committedFile(f)), committed, 'the committed file changed')
+  assert.equal(read(projectFile(f)), project, 'the project file changed')
 })
 
 // Each case is a definition, and the same declaration as a human would have hand-written it into the
@@ -579,22 +584,22 @@ interface RefusalCase {
 const REFUSAL_CASES: readonly RefusalCase[] = [
   {
     what: 'an empty contains',
-    request: { name: 'delta', harness: 'codex', check: { file: '~/.codex/config.toml', contains: '' }, install: 'x' },
+    request: { name: 'delta', harness: 'codex', tier: 'project', check: { file: '~/.codex/config.toml', contains: '' }, install: 'x' },
     handWritten: `version = 1\n\n[provision.delta.codex]\ncheck = { file = "~/.codex/config.toml", contains = "" }\ninstall = "x"\n`,
   },
   {
     what: 'an unknown predicate',
-    request: { name: 'delta', harness: 'codex', check: { file: '~/.codex/config.toml', grep: 'serena' }, install: 'x' },
+    request: { name: 'delta', harness: 'codex', tier: 'project', check: { file: '~/.codex/config.toml', grep: 'serena' }, install: 'x' },
     handWritten: `version = 1\n\n[provision.delta.codex]\ncheck = { file = "~/.codex/config.toml", grep = "serena" }\ninstall = "x"\n`,
   },
   {
     what: 'shared install with no effective Check',
-    request: { name: 'delta', harness: 'pi', sharedInstall: 'x' },
+    request: { name: 'delta', harness: 'pi', tier: 'project', sharedInstall: 'x' },
     handWritten: `version = 1\n\n[provision.delta]\ninstall = "x"\n\n[provision.delta.pi]\n`,
   },
   {
     what: 'shared checks with no effective Install command',
-    request: { name: 'delta', harness: 'pi', sharedChecks: [{ file: '~/.x' }] },
+    request: { name: 'delta', harness: 'pi', tier: 'project', sharedChecks: [{ file: '~/.x' }] },
     handWritten: `version = 1\n\n[provision.delta]\nchecks = [{ file = "~/.x" }]\n\n[provision.delta.pi]\n`,
   },
 ]
@@ -607,24 +612,38 @@ function loaderReason(handWritten: string): string {
   return first.reason
 }
 
+test('a definition naming no file\'s tier is refused, not thrown', () => {
+  const f = fixture()
+  const outcome = defineProvision(
+    // SAFETY: the test deliberately names a tier no environment file lives at.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- the unknown tier is the point of the test
+    { name: 'delta', harness: 'pi', tier: 'system' as never, check: { file: '~/.x' }, install: 'x' },
+    f.config,
+  )
+  assert.equal(outcome.kind, 'failed')
+  assert.match(outcome.kind === 'failed' ? outcome.reason : '', /no environment file for tier system/)
+  assert.equal(fs.existsSync(projectFile(f)), false)
+  assert.equal(fs.existsSync(userFile(f)), false)
+})
+
 test('a definition the loader would refuse is refused with that reason and writes nothing', () => {
   for (const sample of REFUSAL_CASES) {
     const f = fixture()
-    write(localFile(f), REVIEWED)
+    write(projectFile(f), REVIEWED)
     const refusal = refused(defineProvision(sample.request, f.config))
     assert.equal(refusal.reason, loaderReason(sample.handWritten), sample.what)
-    assert.equal(read(localFile(f)), REVIEWED, `${sample.what} changed the file`)
+    assert.equal(read(projectFile(f)), REVIEWED, `${sample.what} changed the file`)
   }
   // A refused definition does not create the tier's file either: a half-written environment is worse
   // than none, because the next read would report a Provision nobody declared.
   const f = fixture()
   refused(
     defineProvision(
-      { name: 'delta', harness: 'pi', check: { file: '~/.x', grep: 'serena' }, install: 'x' },
+      { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', grep: 'serena' }, install: 'x' },
       f.config,
     ),
   )
-  assert.equal(fs.existsSync(localFile(f)), false)
+  assert.equal(fs.existsSync(projectFile(f)), false)
 })
 
 test('a definition never evaluates its Check: no Presence is computed and nothing else is written', () => {
@@ -637,6 +656,7 @@ test('a definition never evaluates its Check: no Presence is computed and nothin
       {
         name: 'rtk',
         harness: 'pi',
+        tier: 'project',
         check: { file: '~/AGENTS.md', contains: '(' },
         install: 'npx rtk init --quiet',
       },
@@ -663,6 +683,7 @@ test('a definition with a checks list writes checks, and status folds the Checks
       {
         name: 'rtk',
         harness: 'pi',
+        tier: 'project',
         checks: [
           { file: '~/AGENTS.md', contains: '^@RTK' },
           { file: '~/AGENTS.md', contains: '^## Output style' },
@@ -674,7 +695,7 @@ test('a definition with a checks list writes checks, and status folds the Checks
   )
   assert.equal(outcome.pointer, 'provision.rtk.pi')
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.rtk.pi]
@@ -689,8 +710,8 @@ install = "npx rtk init --quiet"
       harnesses: [
         {
           harness: 'pi',
-          tier: 'project-local',
-          source: path.join(f.projectRoot, 'agents_environ.local.toml'),
+          tier: 'project',
+          source: path.join(f.projectRoot, 'agents_environ.toml'),
           presence: 'absent',
           detail: `${path.join(f.home, 'AGENTS.md')} does not contain ^## Output style`,
         },
@@ -706,6 +727,7 @@ test('a definition adds tags to a Provision it creates, and leaves a declared li
       {
         name: 'rtk',
         harness: 'pi',
+        tier: 'project',
         check: { file: '~/AGENTS.md', contains: '^@RTK' },
         install: 'npx rtk init --quiet',
         tags: ['prompt'],
@@ -715,7 +737,7 @@ test('a definition adds tags to a Provision it creates, and leaves a declared li
   )
   assert.equal(outcome.pointer, 'provision.rtk.pi')
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.rtk]
@@ -732,6 +754,7 @@ install = "npx rtk init --quiet"
       {
         name: 'rtk',
         harness: 'codex',
+        tier: 'project',
         check: { file: '~/.codex/config.toml', contains: 'rtk' },
         install: 'python3 scripts/merge-codex-mcp.py rtk',
         tags: ['mcp'],
@@ -763,8 +786,8 @@ test('the third harness is defined from what the other two declare, and status r
     [`${path.join(f.home, '.codex', 'config.toml')} mcp_servers.serena`],
   )
 
-  // The repository declares serena for the two harnesses that exist, and the agent adds the third to
-  // the gitignored file.
+  // The repository declares serena for the two harnesses that exist, and the agent adds the third
+  // to the project file — the caller names the tier, so the write is deliberate.
   const committed = `version = 1
 
 [provision.serena]
@@ -778,7 +801,7 @@ install = "pi plugin install serena"
 check   = { file = "~/.codex/config.toml", contains = "mcp_servers.serena" }
 install = "python3 scripts/merge-codex-mcp.py serena"
 `
-  write(committedFile(f), committed)
+  write(projectFile(f), committed)
   write(
     path.join(f.home, '.config', 'opencode', 'opencode.json'),
     JSON.stringify({ mcp: { serena: { type: 'local', command: ['serena'] } } }),
@@ -789,6 +812,7 @@ install = "python3 scripts/merge-codex-mcp.py serena"
       {
         name: 'serena',
         harness: 'opencode',
+        tier: 'project',
         check: { file: '~/.config/opencode/opencode.json', contains: 'serena' },
         install: 'opencode mcp add serena',
       },
@@ -796,13 +820,11 @@ install = "python3 scripts/merge-codex-mcp.py serena"
     ),
   )
   assert.equal(outcome.pointer, 'provision.serena.opencode')
-  assert.equal(outcome.tier, 'project-local')
-  assert.equal(read(committedFile(f)), committed, 'the committed file changed')
+  assert.equal(outcome.tier, 'project')
   // The diff is the added table: nothing else in the file moved, because there was nothing else.
   assert.equal(
-    read(localFile(f)),
-    `version = 1
-
+    read(projectFile(f)),
+    `${committed}
 [provision.serena.opencode]
 check = { file = "~/.config/opencode/opencode.json", contains = "serena" }
 install = "opencode mcp add serena"
@@ -817,7 +839,7 @@ install = "opencode mcp add serena"
       harnesses: [
         { harness: 'pi', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'present', detail: null },
         { harness: 'codex', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'present', detail: null },
-        { harness: 'opencode', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'present', detail: null },
+        { harness: 'opencode', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'present', detail: null },
       ],
     },
   ])
@@ -830,6 +852,7 @@ test('a definition with a payload install writes the table form the file spells,
       {
         name: 'serena',
         harness: 'codex',
+        tier: 'project',
         check: { file: '~/.codex/config.toml', contains: 'serena' },
         install: { payload: 'install/codex-mcp.sh', args: ['serena'] },
       },
@@ -838,7 +861,7 @@ test('a definition with a payload install writes the table form the file spells,
   )
   assert.equal(outcome.pointer, 'provision.serena.codex')
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.serena.codex]
@@ -860,6 +883,7 @@ test('a definition with a section install writes the table form the file spells,
       {
         name: 'i-have-adhd',
         harness: 'pi',
+        tier: 'project',
         check: { file: '~/.pi/agent/AGENTS.md', section: 'instructions/output-style.md' },
         install: { file: '~/.pi/agent/AGENTS.md', section: 'instructions/output-style.md' },
       },
@@ -868,7 +892,7 @@ test('a definition with a section install writes the table form the file spells,
   )
   assert.equal(outcome.pointer, 'provision.i-have-adhd.pi')
   assert.equal(
-    read(localFile(f)),
+    read(projectFile(f)),
     `version = 1
 
 [provision.i-have-adhd.pi]
@@ -887,12 +911,13 @@ install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style
 // the write never reaches disk.
 test('a payload definition the loader would refuse is refused with that reason and writes nothing', () => {
   const f = fixture()
-  write(localFile(f), REVIEWED)
+  write(projectFile(f), REVIEWED)
   const notAString = refused(
     defineProvision(
       {
         name: 'serena',
         harness: 'pi',
+        tier: 'project',
         check: { file: '~/.pi/agent/mcp.json' },
         install: brokenInstall({ payload: 1 }),
       },
@@ -900,13 +925,14 @@ test('a payload definition the loader would refuse is refused with that reason a
     ),
   )
   assert.equal(notAString.reason, 'payload must be a string')
-  assert.equal(read(localFile(f)), REVIEWED, 'the refused definition changed the file')
+  assert.equal(read(projectFile(f)), REVIEWED, 'the refused definition changed the file')
 
   const missing = refused(
     defineProvision(
       {
         name: 'serena',
         harness: 'pi',
+        tier: 'project',
         check: { file: '~/.pi/agent/mcp.json' },
         install: brokenInstall({}),
       },
@@ -914,7 +940,7 @@ test('a payload definition the loader would refuse is refused with that reason a
     ),
   )
   assert.equal(missing.reason, 'install has no payload')
-  assert.equal(read(localFile(f)), REVIEWED, 'the refused definition changed the file')
+  assert.equal(read(projectFile(f)), REVIEWED, 'the refused definition changed the file')
 })
 
 // A definition can name an Install shape the file parser must refuse, the way a loose client could:

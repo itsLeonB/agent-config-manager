@@ -4,9 +4,9 @@ import type { NativeValue } from '../engine/native-value.ts'
 // declares, what the loader resolves it to, and the rows the CLI and MCP faces print. The words are
 // CONTEXT.md's — Provision, Check, Presence, Install command, Tier, Harness.
 
-// A tier is where an environment file lives and nothing else; no entry names one. 03 reads `user`
-// only, 06 adds the two project files.
-export const ENVIRONMENT_TIERS = ['user', 'project', 'project-local'] as const
+// A tier is where an environment file lives and nothing else; no entry names one. The list is the
+// loader's file table: `user` is the home file, `project` the committed project file.
+export const ENVIRONMENT_TIERS = ['user', 'project'] as const
 export type EnvironmentTier = (typeof ENVIRONMENT_TIERS)[number]
 
 // An unanswered question is never reported as an absence, so the third value exists from the start:

@@ -188,10 +188,10 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
 })
 
 // The definition the tool answers with, checked by the protocol's own answer rather than cast: the
-// bundle has to land bytes in the fixture's project-local file and name the pointer it wrote.
+// bundle has to land bytes in the fixture's project file and name the pointer it wrote.
 const DEFINED = z.object({
   kind: z.literal('defined'),
-  tier: z.literal('project-local'),
+  tier: z.enum(['user','project']),
   file: z.string(),
   pointer: z.literal('provision.serena.opencode'),
   digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
@@ -215,18 +215,19 @@ test('define_provision refuses a definition with no effective Install command, b
       arguments: {
         name: 'serena',
         harness: 'opencode',
+        tier: 'project',
         check: { file: '~/.config/opencode/opencode.json', contains: 'serena' },
       },
     })
     assert.equal(CallToolResultSchema.parse(result).isError, true)
     assert.match(answered(result), /install/i)
-    assert.equal(fs.existsSync(path.join(project, 'agents_environ.local.toml')), false, 'the refusal wrote the file')
+    assert.equal(fs.existsSync(path.join(project, 'agents_environ.toml')), false, 'the refusal wrote the file')
   } finally {
     await client.close()
   }
 })
 
-test('define_provision writes the entry into the project-local file and answers its pointer', async () => {
+test('define_provision writes the entry into the project file and answers its pointer', async () => {
   const project = somewhere()
   const client = await connect({ ACM_PROJECT_ROOT: project })
   try {
@@ -238,6 +239,7 @@ test('define_provision writes the entry into the project-local file and answers 
             arguments: {
               name: 'serena',
               harness: 'opencode',
+              tier: 'project',
               check: { file: '~/.config/opencode/opencode.json', contains: 'serena' },
               install: 'opencode mcp add serena',
             },
@@ -245,14 +247,14 @@ test('define_provision writes the entry into the project-local file and answers 
         ),
       ),
     )
-    const file = path.join(project, 'agents_environ.local.toml')
+    const file = path.join(project, 'agents_environ.toml')
     assert.equal(defined.file, file)
     assert.equal(fs.readFileSync(file, 'utf8'), LOCAL)
 
     // A definition the loader would refuse is an error the caller fixes, and the file is untouched.
     const refusedResult = await client.callTool({
       name: 'define_provision',
-      arguments: { name: 'serena', harness: 'pi', check: { file: '~/.x', grep: 'serena' }, install: 'x' },
+      arguments: { name: 'serena', harness: 'pi', tier: 'project', check: { file: '~/.x', grep: 'serena' }, install: 'x' },
     })
     assert.equal(CallToolResultSchema.parse(refusedResult).isError, true)
     assert.match(answered(refusedResult), /unknown predicate 'grep'/)
@@ -390,7 +392,7 @@ function acceptedCases(home: string): readonly AcceptedCase[] {
 
 const DELTA_DEFINED = z.object({
   kind: z.literal('defined'),
-  tier: z.literal('project-local'),
+  tier: z.enum(['user','project']),
   file: z.string(),
   pointer: z.string(),
   digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
@@ -407,12 +409,12 @@ test('one accepted definition per predicate: each lands in the file and acm stat
           answered(
             await client.callTool({
               name: 'define_provision',
-              arguments: { name: 'delta', harness: 'pi', check: sample.check, install: 'x' },
+              arguments: { name: 'delta', harness: 'pi', tier: 'project', check: sample.check, install: 'x' },
             }),
           ),
         ),
       )
-      const file = path.join(project, 'agents_environ.local.toml')
+      const file = path.join(project, 'agents_environ.toml')
       assert.equal(defined.file, file, sample.what)
       assert.equal(defined.pointer, 'provision.delta.pi', sample.what)
       assert.equal(
@@ -428,7 +430,7 @@ test('one accepted definition per predicate: each lands in the file and acm stat
             name: 'delta',
             tags: [],
             harnesses: [
-              { harness: 'pi', tier: 'project-local', source: file, presence: 'absent', detail: sample.detail },
+              { harness: 'pi', tier: 'project', source: file, presence: 'absent', detail: sample.detail },
             ],
           },
         ],
@@ -446,7 +448,7 @@ test('several Checks, a Payload with arguments, and a Section write each round-t
   const project = somewhere()
   const home = somewhere()
   const client = await connect({ ACM_PROJECT_ROOT: project, ACM_HOME: home })
-  const file = path.join(project, 'agents_environ.local.toml')
+  const file = path.join(project, 'agents_environ.toml')
   try {
     const several = DELTA_DEFINED.parse(
       JSON.parse(
@@ -456,6 +458,7 @@ test('several Checks, a Payload with arguments, and a Section write each round-t
             arguments: {
               name: 'delta',
               harness: 'pi',
+              tier: 'project',
               checks: [
                 { file: '~/AGENTS.md', contains: '^@RTK' },
                 { file: '~/AGENTS.md', contains: '^## Output style' },
@@ -486,7 +489,7 @@ install = "npx rtk init --quiet"
           harnesses: [
             {
               harness: 'pi',
-              tier: 'project-local',
+              tier: 'project',
               source: file,
               presence: 'absent',
               detail: `${path.join(home, 'AGENTS.md')} is not there; ${path.join(home, 'AGENTS.md')} is not there`,
@@ -502,7 +505,7 @@ install = "npx rtk init --quiet"
   const payloadProject = somewhere()
   const payloadHome = somewhere()
   const payloadClient = await connect({ ACM_PROJECT_ROOT: payloadProject, ACM_HOME: payloadHome })
-  const payloadFile = path.join(payloadProject, 'agents_environ.local.toml')
+  const payloadFile = path.join(payloadProject, 'agents_environ.toml')
   try {
     DELTA_DEFINED.parse(
       JSON.parse(
@@ -512,6 +515,7 @@ install = "npx rtk init --quiet"
             arguments: {
               name: 'delta',
               harness: 'codex',
+              tier: 'project',
               check: { file: '~/.codex/config.toml', contains: 'serena' },
               install: { payload: 'install/codex-mcp.sh', args: ['serena'] },
             },
@@ -537,7 +541,7 @@ install = { payload = "install/codex-mcp.sh", args = ["serena"] }
           harnesses: [
             {
               harness: 'codex',
-              tier: 'project-local',
+              tier: 'project',
               source: payloadFile,
               presence: 'absent',
               detail: `${path.join(payloadHome, '.codex', 'config.toml')} is not there`,
@@ -553,7 +557,7 @@ install = { payload = "install/codex-mcp.sh", args = ["serena"] }
   const sectionProject = somewhere()
   const sectionHome = somewhere()
   const sectionClient = await connect({ ACM_PROJECT_ROOT: sectionProject, ACM_HOME: sectionHome })
-  const sectionFile = path.join(sectionProject, 'agents_environ.local.toml')
+  const sectionFile = path.join(sectionProject, 'agents_environ.toml')
   try {
     DELTA_DEFINED.parse(
       JSON.parse(
@@ -563,6 +567,7 @@ install = { payload = "install/codex-mcp.sh", args = ["serena"] }
             arguments: {
               name: 'delta',
               harness: 'pi',
+              tier: 'project',
               check: { file: '~/.pi/agent/AGENTS.md', section: 'instructions/output-style.md' },
               install: { file: '~/.pi/agent/AGENTS.md', section: 'instructions/output-style.md' },
             },
@@ -588,7 +593,7 @@ install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style
           harnesses: [
             {
               harness: 'pi',
-              tier: 'project-local',
+              tier: 'project',
               source: sectionFile,
               presence: 'absent',
               detail: `${path.join(sectionHome, '.pi', 'agent', 'AGENTS.md')} is not there`,
@@ -609,7 +614,7 @@ test('shared declarations round-trip through the tool and every declared harness
   const project = somewhere()
   const home = somewhere()
   const client = await connect({ ACM_PROJECT_ROOT: project, ACM_HOME: home })
-  const file = path.join(project, 'agents_environ.local.toml')
+  const file = path.join(project, 'agents_environ.toml')
   try {
     const first = DELTA_DEFINED.parse(
       JSON.parse(
@@ -619,6 +624,7 @@ test('shared declarations round-trip through the tool and every declared harness
             arguments: {
               name: 'delta',
               harness: 'pi',
+              tier: 'project',
               sharedChecks: [{ file: '~/AGENTS.md', contains: '^@RTK' }],
               sharedInstall: 'npx rtk init --quiet',
             },
@@ -644,7 +650,7 @@ install = "npx rtk init --quiet"
         answered(
           await client.callTool({
             name: 'define_provision',
-            arguments: { name: 'delta', harness: 'codex' },
+            arguments: { name: 'delta', harness: 'codex', tier: 'project' },
           }),
         ),
       ),
@@ -668,8 +674,8 @@ install = "npx rtk init --quiet"
         name: 'delta',
         tags: [],
         harnesses: [
-          { harness: 'pi', tier: 'project-local', source: file, presence: 'absent', detail: `${path.join(home, 'AGENTS.md')} is not there` },
-          { harness: 'codex', tier: 'project-local', source: file, presence: 'absent', detail: `${path.join(home, 'AGENTS.md')} is not there` },
+          { harness: 'pi', tier: 'project', source: file, presence: 'absent', detail: `${path.join(home, 'AGENTS.md')} is not there` },
+          { harness: 'codex', tier: 'project', source: file, presence: 'absent', detail: `${path.join(home, 'AGENTS.md')} is not there` },
         ],
       },
     ])
@@ -712,154 +718,154 @@ function refusalCases(): readonly RefusalCase[] {
   return [
     {
       what: 'an unknown predicate',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', grep: 'serena' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', grep: 'serena' }, install: 'x' },
       line: 4,
       column: 26,
       reason: "unknown predicate 'grep'",
     },
     {
       what: 'an onPath beside another key',
-      request: { name: 'delta', harness: 'pi', check: { onPath: 'uvx', file: '~/.x' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { onPath: 'uvx', file: '~/.x' }, install: 'x' },
       line: 4,
       column: 27,
       reason: "onPath takes no other key, and 'file' is one",
     },
     {
       what: 'an empty onPath',
-      request: { name: 'delta', harness: 'pi', check: { onPath: '' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { onPath: '' }, install: 'x' },
       line: 4,
       column: 11,
       reason: 'onPath is empty',
     },
     {
       what: 'an empty file',
-      request: { name: 'delta', harness: 'pi', check: { file: '' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '' }, install: 'x' },
       line: 4,
       column: 11,
       reason: 'file is empty',
     },
     {
       what: 'an empty contains',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', contains: '' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', contains: '' }, install: 'x' },
       line: 4,
       column: 26,
       reason: 'contains is empty',
     },
     {
       what: 'contains beside pointer',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', contains: 'y', pointer: 'p' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', contains: 'y', pointer: 'p' }, install: 'x' },
       line: 4,
       column: 42,
       reason: 'a check holds contains or pointer, not both',
     },
     {
       what: 'equals beside includes',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', pointer: 'p', equals: 1, includes: 'y' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', pointer: 'p', equals: 1, includes: 'y' }, install: 'x' },
       line: 4,
       column: 53,
       reason: 'a check holds equals or includes, not both',
     },
     {
       what: 'contains beside includes',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', contains: 'y', includes: 'y' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', contains: 'y', includes: 'y' }, install: 'x' },
       line: 4,
       column: 42,
       reason: 'a check holds contains or includes, not both',
     },
     {
       what: 'a key beside section',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', section: 's', contains: 'y' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', section: 's', contains: 'y' }, install: 'x' },
       line: 4,
       column: 41,
       reason: 'a check holds section or contains, not both',
     },
     {
       what: 'an empty section',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', section: '' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', section: '' }, install: 'x' },
       line: 4,
       column: 26,
       reason: 'section is empty',
     },
     {
       what: 'an empty pointer',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', pointer: '' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', pointer: '' }, install: 'x' },
       line: 4,
       column: 26,
       reason: 'pointer is empty',
     },
     {
       what: 'a pointer that cannot be spelled',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', pointer: 'mcp_servers."my.server' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', pointer: 'mcp_servers."my.server' }, install: 'x' },
       line: 4,
       column: 26,
       reason: 'pointer cannot be spelled: an unterminated quote',
     },
     {
       what: 'includes without a pointer',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', includes: 'y' }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', includes: 'y' }, install: 'x' },
       line: 4,
       column: 26,
       reason: 'includes needs a pointer',
     },
     {
       what: 'equals without a pointer',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x', equals: 1 }, install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x', equals: 1 }, install: 'x' },
       line: 4,
       column: 26,
       reason: 'equals needs a pointer',
     },
     {
       what: 'no Check at all',
-      request: { name: 'delta', harness: 'pi', install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', install: 'x' },
       line: 3,
       column: 1,
       reason: 'missing check',
     },
     {
       what: 'check and checks both',
-      request: { name: 'delta', harness: 'pi', check: { file: '~/.x' }, checks: [{ file: '~/.y' }], install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check: { file: '~/.x' }, checks: [{ file: '~/.y' }], install: 'x' },
       line: 5,
       column: 1,
       reason: 'an entry holds check or checks, not both',
     },
     {
       what: 'an empty checks list',
-      request: { name: 'delta', harness: 'pi', checks: [], install: 'x' },
+      request: { name: 'delta', harness: 'pi', tier: 'project', checks: [], install: 'x' },
       line: 4,
       column: 1,
       reason: 'checks is empty',
     },
     {
       what: 'an empty payload',
-      request: { name: 'delta', harness: 'pi', check, install: { payload: '' } },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check, install: { payload: '' } },
       line: 5,
       column: 13,
       reason: 'payload is empty',
     },
     {
       what: 'an unknown install key',
-      request: { name: 'delta', harness: 'pi', check, install: { payload: 'x', bogus: 1 } },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check, install: { payload: 'x', bogus: 1 } },
       line: 5,
       column: 28,
       reason: "unknown install key 'bogus'",
     },
     {
       what: 'an argument beside a section write',
-      request: { name: 'delta', harness: 'pi', check, install: { file: '~/.x', section: 's', args: ['a'] } },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check, install: { file: '~/.x', section: 's', args: ['a'] } },
       line: 5,
       column: 43,
       reason: 'a section install holds file and section, not args',
     },
     {
       what: 'an empty install file',
-      request: { name: 'delta', harness: 'pi', check, install: { file: '', section: 's' } },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check, install: { file: '', section: 's' } },
       line: 4,
       column: 11,
       reason: 'file is empty',
     },
     {
       what: 'an empty install section',
-      request: { name: 'delta', harness: 'pi', check, install: { file: '~/.x', section: '' } },
+      request: { name: 'delta', harness: 'pi', tier: 'project', check, install: { file: '~/.x', section: '' } },
       line: 5,
       column: 28,
       reason: 'section is empty',
@@ -871,7 +877,7 @@ function refusalCases(): readonly RefusalCase[] {
 // never appears, and the definition the existing tests pinned stays the one they assert.
 test('one refused definition per refusal reason: the loader\'s line, column and reason, nothing written', async () => {
   const project = somewhere()
-  const file = path.join(project, 'agents_environ.local.toml')
+  const file = path.join(project, 'agents_environ.toml')
   const client = await connect({ ACM_PROJECT_ROOT: project })
   try {
     for (const sample of refusalCases()) {

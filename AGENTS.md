@@ -77,9 +77,8 @@ decisions.
   `absent`), `section.ts` is the one place that decides where a Section starts and ends — the Check
   that compares one and the install that rewrites one both ask it — `loader.ts` is the only module
   that knows where a tier's file lives and what its root is
-  — `~/agents_environ.toml`, the committed `<project>/agents_environ.toml`, and the gitignored
-  `<project>/agents_environ.local.toml`, merged per `(provision, harness)` so the nearer file replaces
-  the farther one whole, `tags` included — `runner.ts` is the install run, the only place a command is
+  — `~/agents_environ.toml` and the committed `<project>/agents_environ.toml`, merged per `(provision, harness)` so the nearer file replaces
+  the farther one whole — `tags` included — `runner.ts` is the install run, the only place a command is
   spawned and the only place a Run is recorded, `history.ts` is the environment's one caller of the store,
   `native-read.ts` is a Native read over the three harness readers, `define.ts` is `define_provision`
   writing one entry through the pointer editor, `print.ts` is how a value from a file reaches a printed

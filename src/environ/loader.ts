@@ -14,23 +14,16 @@ export interface EnvironmentFileLocation {
   root: string
 }
 
-// The committed file's name, and the `.local` suffix that tells the gitignored one apart in a
-// directory listing and in the ignore rule.
+// The environment file's name. There is no local variant: an unreviewed definition must name a
+// tier, and the committed project file is the only project one.
 const ENVIRONMENT_FILE = 'agents_environ.toml'
-const ENVIRONMENT_LOCAL_FILE = 'agents_environ.local.toml'
 
 // The one place that knows where a tier's environment file lives and what its root is. The order is
-// the precedence order: a later location shadows an earlier one, so nothing else learns that a
-// third file exists.
+// the precedence order: a later location shadows an earlier one.
 export function environmentFiles(config: EngineConfig): EnvironmentFileLocation[] {
   return [
     { tier: 'user', file: path.join(config.home, ENVIRONMENT_FILE), root: config.home },
     { tier: 'project', file: path.join(config.projectRoot, ENVIRONMENT_FILE), root: config.projectRoot },
-    {
-      tier: 'project-local',
-      file: path.join(config.projectRoot, ENVIRONMENT_LOCAL_FILE),
-      root: config.projectRoot,
-    },
   ]
 }
 
@@ -119,7 +112,7 @@ function keyOf(provision: ResolvedProvision): string {
 // does not parse contributes nothing and leaves the other tiers loading, with the fault reported
 // rather than swallowed.
 //
-// Merge is per `(provision, harness)` key with `project-local` > `project` > `user`. The nearer file
+// Merge is per `(provision, harness)` key with `project` > `user`. The nearer file
 // replaces the entry whole, tags included: every field below is built from the winning declaration,
 // so nothing is inherited field by field from the entry it shadowed and no entry is half one tier
 // and half another.
