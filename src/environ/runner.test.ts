@@ -174,6 +174,35 @@ install = "${command} already"
   assert.match(forced.printed, /^  ran: already \(opencode\) exit 0$/m)
 })
 
+// The preview is read before the first command starts, so a skipped entry's Presence can be stale by
+// the time its turn comes: an earlier command can remove what its Check reads. The entry still runs
+// nothing, but it is reported absent and the run is not a success.
+test('a Provision skipped at preview but absent by its turn is reported absent', () => {
+  const f = fixture()
+  const fix = script(f, 'fix.sh', 'touch a.marker\nrm -f shared.marker')
+  file(path.join(f.home, 'shared.marker'), '')
+  environment(f, `version = 1
+
+[provision.first.pi]
+check   = { file = "~/a.marker" }
+install = "${fix}"
+
+[provision.second.codex]
+check   = { file = "~/shared.marker" }
+install = "./never.sh"
+`)
+  const { printed, outcome } = run(f)
+  assert.equal(fs.existsSync(path.join(f.home, 'a.marker')), true)
+  assert.equal(fs.existsSync(path.join(f.home, 'shared.marker')), false)
+  const second = outcome.entries.find((entry) => entry.provision.name === 'second')
+  assert.ok(second !== undefined)
+  assert.equal(second.attempted, false)
+  assert.equal(second.after, 'absent')
+  assert.match(printed, /^  already present: none$/m)
+  assert.match(printed, /^  still absent: second \(codex\) absent$/m)
+  assert.equal(outcome.exitCode, 1)
+})
+
 test('a failing command is reported, the run continues, and the summary names every group', () => {
   const f = fixture()
   script(f, 'boom.sh', 'echo boom-stderr >&2\nexit 7')

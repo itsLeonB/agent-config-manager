@@ -150,7 +150,7 @@ function reason(entry: InstallEntry): string {
 }
 
 function summaryText(entries: InstallEntry[], refusals: FileRefusal[]): string {
-  const present = entries.filter((entry) => !entry.attempted)
+  const present = entries.filter((entry) => !entry.attempted && entry.after === 'present')
   const ran = entries.filter((entry) => entry.attempted)
   const failed = entries.filter((entry) => entry.failure !== null)
   const absent = entries.filter((entry) => entry.after !== 'present')
@@ -293,7 +293,10 @@ export function installRun(
   for (const item of previewed) {
     const provision = item.provision
     if (item.skip) {
-      entries.push(notRun(provision, item.presence))
+      // The preview's Presence is stale by the time this entry's turn comes: an earlier command can
+      // have removed what its Check reads. Recheck it, but still run nothing — a skipped entry stays
+      // skipped, and a now-absent one is reported absent rather than as success.
+      entries.push(notRun(provision, evaluateChecks(provision.checks).presence))
       continue
     }
     // Presence is live, not the preview's: a shared command an earlier entry of this Provision
