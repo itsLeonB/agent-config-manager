@@ -4,11 +4,14 @@
 
 **Blocked by:** 01 (free-form harness labels in the environment layer)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Parser accepts top-level `harnesses` key (string array) without refusing
-- [ ] `ParseResult` carries the declared harness list
-- [ ] Loader merges lists across tiers as a union in precedence order, deduplicated
-- [ ] `Environment` exposes the merged list
-- [ ] Service exposes `listHarnesses()` with the default fallback
-- [ ] `Status` carries the merged list
+- [x] Parser accepts top-level `harnesses` key (string array) without refusing
+- [x] `ParseResult` carries the declared harness list
+- [x] Loader merges lists across tiers as a union in precedence order, deduplicated
+- [x] `Environment` exposes the merged list
+- [x] Service exposes `listHarnesses()` with the default fallback
+- [x] `Status` carries the merged list
+## Answer
+
+Implemented on main working tree. See diff.

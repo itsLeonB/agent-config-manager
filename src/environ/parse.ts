@@ -1,8 +1,6 @@
 import { parse, TomlError } from 'smol-toml'
 import { z } from 'zod'
-import { HARNESSES } from '../engine/adapters/types.ts'
 import { splitPointer } from '../engine/edit.ts'
-import type { HarnessId } from '../engine/adapters/types.ts'
 import type { Check, DeclaredEntry, InstallCommand, ParseResult, ProvisionDeclaration, Refusal } from './types.ts'
 
 // The parser is total against the closed environment-file schema: every value in the document is
@@ -43,17 +41,10 @@ const TOML_TABLE = z.record(z.string(), z.json())
 type EnvironmentTable = z.infer<typeof TOML_TABLE>
 type EnvironmentValue = EnvironmentTable[string]
 
-const HARNESS_ID = z.enum(HARNESSES)
-
 type Decoded<T> = { ok: true; value: T } | { ok: false; refusal: Refusal }
 
 function refused<T>(refusal: Refusal): Decoded<T> {
   return { ok: false, refusal }
-}
-
-function harnessId(name: string): HarnessId | null {
-  const parsed = HARNESS_ID.safeParse(name)
-  return parsed.success ? parsed.data : null
 }
 
 function stringValue(value: EnvironmentValue | undefined): string | null {
@@ -237,7 +228,7 @@ function decodeChecks(
 // Provision's shared declarations may cover them, and `decodeProvision` refuses the file when an
 // entry would end up with no effective Check or Install command.
 function decodeEntry(
-  harness: HarnessId,
+  harness: string,
   table: EnvironmentTable,
   block: readonly string[],
   at: SourceIndex,
@@ -329,9 +320,18 @@ function decodeProvision(name: string, table: EnvironmentTable, at: SourceIndex)
 
   const entries: DeclaredEntry[] = []
   for (const key of Object.keys(table)) {
-    if (key === TAGS_KEY || key === CHECK_KEY || key === CHECKS_KEY || key === INSTALL_KEY) continue
-    const harness = harnessId(key)
-    if (harness === null) return refused(place(at.declaration(block, key), `unknown harness '${key}'`))
+    const value = table[key]
+    const entryTable = tableValue(value)
+    const looksLikeEntry =
+      entryTable !== null &&
+      (has(entryTable, CHECK_KEY) || has(entryTable, CHECKS_KEY) || has(entryTable, INSTALL_KEY))
+    const isSharedKey =
+      (key === TAGS_KEY || key === CHECK_KEY || key === CHECKS_KEY || key === INSTALL_KEY) && !looksLikeEntry
+    if (isSharedKey) continue
+    if (key === '' || key.includes('\u0000')) {
+      return refused(place(at.declaration(block, key), `harness '${key}' must be non-empty and NUL-free`))
+    }
+    const harness = key
     const entry = tableValue(table[key])
     if (entry === null) return refused(place(at.declaration(block, key), `the ${key} entry is not a table`))
     const entryBlock = [...block, key]
@@ -383,14 +383,30 @@ function parseDocument(text: string): Decoded<EnvironmentTable> {
   }
 }
 
+function parseHarnessList(document: EnvironmentTable, at: SourceIndex): Decoded<string[]> {
+  const HARNESS_LIST_KEY = 'harnesses'
+  if (!has(document, HARNESS_LIST_KEY)) return { ok: true, value: [] }
+  const list = stringList(document[HARNESS_LIST_KEY])
+  if (list === null) {
+    return refused(place(at.declaration([], HARNESS_LIST_KEY), 'harnesses must be an array of strings'))
+  }
+  for (const name of list) {
+    if (name === '' || name.includes('\u0000')) {
+      return refused(place(at.declaration([], HARNESS_LIST_KEY), 'harnesses must be non-empty, NUL-free strings'))
+    }
+  }
+  return { ok: true, value: list }
+}
+
 export function parseEnvironmentFile(text: string): ParseResult {
   const parsed = parseDocument(text)
   if (!parsed.ok) return { ok: false, refusal: parsed.refusal }
   const document = parsed.value
   const at = indexSource(text)
 
+  const HARNESS_LIST_KEY = 'harnesses'
   for (const key of Object.keys(document)) {
-    if (key !== VERSION_KEY && key !== PROVISION_KEY) {
+    if (key !== VERSION_KEY && key !== PROVISION_KEY && key !== HARNESS_LIST_KEY) {
       return { ok: false, refusal: place(at.declaration([], key), `unknown key '${key}'`) }
     }
   }
@@ -402,7 +418,9 @@ export function parseEnvironmentFile(text: string): ParseResult {
 
   // A file with no `[provision]` table declares nothing, which is a legal environment: a dotfiles
   // file for a machine with nothing installed to it yet.
-  if (!has(document, PROVISION_KEY)) return { ok: true, provisions: [] }
+  const declaredHarnesses = parseHarnessList(document, at)
+  if (!declaredHarnesses.ok) return { ok: false, refusal: declaredHarnesses.refusal }
+  if (!has(document, PROVISION_KEY)) return { ok: true, provisions: [], harnesses: declaredHarnesses.value }
   const provisions = tableValue(document[PROVISION_KEY])
   if (provisions === null) {
     return { ok: false, refusal: place(at.declaration([], PROVISION_KEY), 'provision must be a table') }
@@ -418,5 +436,5 @@ export function parseEnvironmentFile(text: string): ParseResult {
     if (!provision.ok) return { ok: false, refusal: provision.refusal }
     decoded.push(provision.value)
   }
-  return { ok: true, provisions: decoded }
+  return { ok: true, provisions: decoded, harnesses: declaredHarnesses.value }
 }

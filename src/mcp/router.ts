@@ -4,6 +4,7 @@ import {
   ENVIRONMENT_TIERS,
   HARNESSES,
   defineProvision,
+  listHarnesses,
   readNativeConfig,
   readStatus,
   statusDocument,
@@ -122,7 +123,7 @@ export function createRouter(): McpServer {
       description:
         'List every Provision the environment files declare, with the Presence (present, absent, or unknown) of each harness entry and a detail when a Check could not answer. Read-only.',
       inputSchema: {
-        harness: z.enum(HARNESSES).optional().describe('only the entries declared for this harness'),
+        harness: z.string().min(1).optional().describe('only the entries declared for this harness'),
         name: z.string().min(1).optional().describe('only the Provision with this name'),
         tier: z.enum(ENVIRONMENT_TIERS).optional().describe('only the entries this tier owns'),
       },
@@ -179,6 +180,39 @@ export function createRouter(): McpServer {
       const outcome = defineProvision(request)
       return outcome.kind === 'defined' ? answer(JSON.stringify(outcome, null, 2)) : refused(outcome)
     },
+  )
+
+  server.registerTool(
+    'list_harnesses',
+    {
+      description: 'List the harnesses this environment declares (or pi, codex, opencode when none are declared). Read-only.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => answer(JSON.stringify(listHarnesses(), null, 2)),
+  )
+
+  server.registerTool(
+    'acm_instructions',
+    {
+      description: 'A concise guide to the environment-facing MCP tools, the harness-as-label rule, and the Check/Install contract. Read-only.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () =>
+      answer(
+        [
+          'ACM environment tools:',
+          '- list_provisions: list Provisions with Presence per harness.',
+          '- read_native_config: read native config for pi, codex, or opencode.',
+          '- define_provision: write one Provision entry for one harness.',
+          '- list_harnesses: list declared harnesses (or pi, codex, opencode by default).',
+          '',
+          'Harnesses are free-form labels in the environment layer: any non-empty, NUL-free string is a legal target. Only read_native_config validates against the closed set (pi, codex, opencode).',
+          '',
+          'Check/Install contract: a Provision entry needs at least one Check and one Install command (shared or own). Checks answer present/absent/unknown; Install commands are text ACM executes only when asked.',
+        ].join('\n'),
+      ),
   )
 
   return server

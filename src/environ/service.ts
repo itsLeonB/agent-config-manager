@@ -1,6 +1,5 @@
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
-import type { HarnessId } from '../engine/adapters/types.ts'
 import { evaluateChecks } from './check.ts'
 import { entryKey, loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
@@ -44,7 +43,7 @@ export type { InstallEntry, InstallOptions, InstallOutcome } from './runner.ts'
 export { latestRuns } from './history.ts'
 
 export interface StatusFilter {
-  harness?: HarnessId
+  harness?: string
   name?: string
   // Only the entries a tier owns after the merge, which is what `--tier` asks for.
   tier?: EnvironmentTier
@@ -53,6 +52,8 @@ export interface StatusFilter {
 export interface Status {
   provisions: ProvisionRow[]
   refusals: FileRefusal[]
+  // The merged declared harness list (or the default three when none is declared).
+  harnesses: string[]
   // Where this answer was read from. Printed in the footer because a harness that started acm
   // somewhere unexpected otherwise reads an empty answer and guesses why.
   home: string
@@ -88,6 +89,7 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
   return {
     provisions: [...rows.values()],
     refusals: environment.refusals,
+    harnesses: environment.harnesses.length > 0 ? environment.harnesses : ['pi', 'codex', 'opencode'],
     home: config.home,
     projectRoot: config.projectRoot,
     storePath: config.storePath,
@@ -116,6 +118,12 @@ export function statusDocument(status: Status, runs: Run[] = []): StatusDocument
   }
 }
 
+export function listHarnesses(config: EngineConfig = resolveDefaultConfig()) {
+  const environment = loadEnvironment(config)
+  const harnesses = environment.harnesses.length > 0 ? environment.harnesses : ['pi', 'codex', 'opencode']
+  return { harnesses, refusals: environment.refusals }
+}
+
 export function formatRefusal(refusal: FileRefusal): string {
   return `${refusal.source}:${refusal.line}:${refusal.column}: ${refusal.reason}`
 }
@@ -136,7 +144,7 @@ function shorten(file: string, home: string): string {
 // than printing from inside a command.
 export function formatStatus(status: Status): string {
   const rows = status.provisions
-  const harnessWidth = Math.max('harness'.length, ...rows.flatMap((row) => row.harnesses.map((entry) => entry.harness.length)))
+  const harnessWidth = Math.max('harness'.length, ...rows.flatMap((row) => row.harnesses.map((entry) => printable(entry.harness).length)))
   const sourceWidth = Math.max('source'.length, ...rows.flatMap((row) => row.harnesses.map((entry) => shorten(entry.source, status.home).length)))
   const nameWidth = Math.max('provision'.length, ...rows.map((row) => printable(row.name).length))
   const lines: string[] = []
@@ -148,7 +156,7 @@ export function formatStatus(status: Status): string {
       for (const entry of row.harnesses) {
         const detail = entry.detail === null ? '' : `  ${printable(entry.detail)}`
         lines.push(
-          `${printable(row.name).padEnd(nameWidth)}  ${entry.harness.padEnd(harnessWidth)}  ${shorten(entry.source, status.home).padEnd(sourceWidth)}  ${entry.presence}${detail}`,
+          `${printable(row.name).padEnd(nameWidth)}  ${printable(entry.harness).padEnd(harnessWidth)}  ${shorten(entry.source, status.home).padEnd(sourceWidth)}  ${entry.presence}${detail}`,
         )
       }
     }

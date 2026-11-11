@@ -69,7 +69,7 @@ gitignored). Nothing else is a tier, and no entry names one: the file it sits in
 root is `$HOME` for `user` and the **Project root** for the other two.
 _Avoid_: scope, scope bucket, layer, level
 
-**Harness**: an agent CLI that reads its own native configuration — Pi, Codex, OpenCode among them.
+**Harness**: an agent CLI that reads its own native configuration — Pi, Codex, OpenCode among them. In the environment layer the name is a free-form label (any non-empty, NUL-free string); only the native-read layer enumerates the harnesses ACM can read natively.
 In an environment file its name is a free-form label: ACM does not enumerate or validate the harnesses
 a Provision names, and a human may declare any. Only the Native read layer knows the three harnesses
 whose config it can read; the environment layer treats the name as display and identity only.

@@ -216,6 +216,7 @@ test('a machine with no environment file declares nothing, which is not a fault'
   assert.deepEqual(readStatus({}, f.config), {
     provisions: [],
     refusals: [],
+    harnesses: ['pi', 'codex', 'opencode'],
     home: f.home,
     projectRoot: f.projectRoot,
     storePath: f.config.storePath,
