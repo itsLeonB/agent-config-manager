@@ -82,8 +82,9 @@ function resolveInstall(install: InstallCommand, root: string, home: string): In
 export interface Environment {
   provisions: ResolvedProvision[]
   refusals: FileRefusal[]
-  // The merged declared harness list across tiers (union, precedence order, deduplicated).
-  harnesses: string[]
+  // Each tier's own declared harness list, keyed by tier: a file's list is never merged into
+  // another tier's answer, and a file that declares none contributes an empty list.
+  harnessesByTier: Record<EnvironmentTier, string[]>
   // The files this load read, in the order it read them: what a status with no matching rows names,
   // so an empty answer is never mistaken for an empty environment.
   readFiles: { tier: EnvironmentTier; file: string }[]
@@ -119,8 +120,7 @@ function keyOf(provision: ResolvedProvision): string {
 export function loadEnvironment(config: EngineConfig): Environment {
   const won = new Map<string, PlacedProvision>()
   const refusals: FileRefusal[] = []
-  const harnesses: string[] = []
-  const seenHarnesses = new Set<string>()
+  const harnessesByTier: Environment['harnessesByTier'] = { user: [], project: [] }
   // The user file is read first, so when two tiers resolve to one path — a Project root that is
   // `$HOME`, possibly reached through a path spelled differently — the file loads once under the
   // farther tier's name, the one read first, and the later tier contributes nothing. The `user` tier
@@ -146,12 +146,8 @@ export function loadEnvironment(config: EngineConfig): Environment {
       refusals.push({ source: location.file, ...parsed.refusal })
       continue
     }
-    for (const name of parsed.harnesses) {
-      if (!seenHarnesses.has(name)) {
-        seenHarnesses.add(name)
-        harnesses.push(name)
-      }
-    }
+    // The list belongs to the tier whose file declared it and goes nowhere else.
+    harnessesByTier[location.tier] = parsed.harnesses
     let position = 0
     for (const declaration of parsed.provisions) {
       // The shared declarations resolve once per Provision and ride on every entry the file
@@ -186,5 +182,5 @@ export function loadEnvironment(config: EngineConfig): Environment {
   const ordered = [...won.values()].sort(
     (left, right) => left.precedence - right.precedence || left.position - right.position,
   )
-  return { provisions: ordered.map((placed) => placed.provision), refusals, harnesses, readFiles }
+  return { provisions: ordered.map((placed) => placed.provision), refusals, harnessesByTier, readFiles }
 }

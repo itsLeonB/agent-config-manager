@@ -326,6 +326,51 @@ test('an unknown harness name loads without refusal', () => {
   assert.equal(declarations[0].entries[0].harness, 'gpt')
 })
 
+// The harness list is the file's own constraint: when it declares one, an entry naming anything
+// outside it is a fault in the file, refused at the entry's key rather than at load.
+test('an entry outside the declared harnesses list refuses the file at its key', () => {
+  assert.deepEqual(
+    refusalOf(
+      'version = 1\n\nharnesses = ["pi", "codex"]\n\n[provision.serena.gpt]\ncheck = { file = "y" }\ninstall = "x"\n',
+    ),
+    { line: 5, column: 1, reason: "harness 'gpt' is not one of this file's harnesses: pi, codex" },
+  )
+})
+
+test('every spelling of an entry is checked against the list, inline keys included', () => {
+  // An inline entry table is the same declaration as a header; the refusal names its key.
+  assert.deepEqual(
+    refusalOf(
+      'version = 1\n\nharnesses = ["pi"]\n\n[provision.serena]\ninstall = "x"\ncodex = { check = { file = "y" } }\n',
+    ),
+    { line: 7, column: 1, reason: "harness 'codex' is not one of this file's harnesses: pi" },
+  )
+})
+
+test('a file with no harnesses list accepts any non-empty, NUL-free harness name', () => {
+  // No list is no constraint: the free-form label rule is unchanged for the files that spell none.
+  const declarations = provisionsOf('version = 1\n\n[provision.serena.gpt]\ncheck = { file = "y" }\ninstall = "x"\n')
+  assert.equal(declarations[0].entries[0].harness, 'gpt')
+  // An empty list declares nothing either, so it constrains nothing.
+  const listed = provisionsOf('version = 1\n\nharnesses = []\n\n[provision.serena.gpt]\ncheck = { file = "y" }\ninstall = "x"\n')
+  assert.equal(listed[0].entries[0].harness, 'gpt')
+})
+
+test('a harness name that is empty or holds a NUL refuses before the list is consulted', () => {
+  const empty = refusalOf('version = 1\n\nharnesses = ["pi"]\n\n[provision.serena]\ninstall = "x"\n"" = { check = { file = "y" } }\n')
+  assert.equal(empty.reason, "harness '' must be non-empty and NUL-free")
+})
+
+test('the harnesses list loads as the file declares it', () => {
+  const result = parseEnvironmentFile('version = 1\n\nharnesses = ["pi", "custom-agent"]\n')
+  assert.ok(result.ok)
+  assert.deepEqual(result.harnesses, ['pi', 'custom-agent'])
+  // A file with no list declares no harnesses, not the default three.
+  const none = parseEnvironmentFile('version = 1\n')
+  assert.ok(none.ok)
+  assert.deepEqual(none.harnesses, [])
+})
+
 test('a missing install command refuses the file at the entry table', () => {
   assert.deepEqual(refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "~/.codex/config.toml" }\n'), {
     line: 3,

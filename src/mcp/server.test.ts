@@ -141,6 +141,7 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
   try {
     const all: unknown = JSON.parse(answered(await client.callTool({ name: 'list_provisions', arguments: {} })))
     assert.deepEqual(all, {
+      harnesses: { user: [], project: [] },
       provisions: [
         {
           name: 'opencode-no-claude',
@@ -166,6 +167,7 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
       answered(await client.callTool({ name: 'list_provisions', arguments: { harness: 'pi' } })),
     )
     assert.deepEqual(filtered, {
+      harnesses: { user: [], project: [] },
       provisions: [
         {
           name: 'serena',
@@ -187,6 +189,25 @@ test('list_provisions answers the Presence rows, filtered by harness', async () 
   }
 })
 
+// `list_harnesses` answers the declared list per tier: a file's own list, never a merge, and a
+// file with no list contributes an empty one.
+test('list_harnesses answers each tier\'s declared harness list', async () => {
+  const home = somewhere()
+  write(
+    path.join(home, 'agents_environ.toml'),
+    'version = 1\n\nharnesses = ["pi", "custom-agent"]\n\n[provision.serena.pi]\ncheck = { file = "x" }\ninstall = "true"\n',
+  )
+  const project = somewhere()
+  write(path.join(project, 'agents_environ.toml'), 'version = 1\n')
+  const client = await connect({ ACM_HOME: home, ACM_PROJECT_ROOT: project })
+  try {
+    const listed: unknown = JSON.parse(answered(await client.callTool({ name: 'list_harnesses', arguments: {} })))
+    assert.deepEqual(listed, { user: ['pi', 'custom-agent'], project: [] })
+  } finally {
+    await client.close()
+  }
+})
+
 // The definition the tool answers with, checked by the protocol's own answer rather than cast: the
 // bundle has to land bytes in the fixture's project file and name the pointer it wrote.
 const DEFINED = z.object({
@@ -203,6 +224,35 @@ const LOCAL = `version = 1
 check = { file = "~/.config/opencode/opencode.json", contains = "serena" }
 install = "opencode mcp add serena"
 `
+
+// The target file's own harness list is the constraint the tool enforces: a harness the list does
+// not name is refused before anything is written, with the parser's reason.
+test('define_provision refuses a harness the target file\'s list does not name', async () => {
+  const project = somewhere()
+  const file = path.join(project, 'agents_environ.toml')
+  write(
+    file,
+    'version = 1\n\nharnesses = ["pi"]\n\n[provision.serena.pi]\ncheck = { file = "x" }\ninstall = "true"\n',
+  )
+  const client = await connect({ ACM_PROJECT_ROOT: project })
+  try {
+    const result = await client.callTool({
+      name: 'define_provision',
+      arguments: {
+        name: 'delta',
+        harness: 'codex',
+        tier: 'project',
+        check: { file: '~/.x' },
+        install: 'x',
+      },
+    })
+    assert.equal(CallToolResultSchema.parse(result).isError, true)
+    assert.match(answered(result), /harness 'codex' is not one of this file's harnesses: pi/)
+    assert.equal(fs.readFileSync(file, 'utf8').includes('delta'), false, 'the refused definition changed the file')
+  } finally {
+    await client.close()
+  }
+})
 
 // A definition with no effective Install command is refused by the loader before anything is
 // written: the shared Install command or the entry's own has to cover it.

@@ -646,6 +646,46 @@ test('a definition the loader would refuse is refused with that reason and write
   assert.equal(fs.existsSync(projectFile(f)), false)
 })
 
+// The file's own harness list is the constraint `define_provision` enforces before it writes: an
+// entry naming a harness the target file does not face is refused with the parser's reason, and
+// the file is left as it was. A file with no list constrains nothing.
+test('a harness the target file\'s list does not name is refused, and the file is unchanged', () => {
+  const f = fixture()
+  write(
+    projectFile(f),
+    'version = 1\n\nharnesses = ["pi", "codex"]\n\n[provision.serena.pi]\ncheck = { file = "x" }\ninstall = "true"\n',
+  )
+  const refusal = refused(
+    defineProvision(
+      {
+        name: 'delta',
+        harness: 'opencode',
+        tier: 'project',
+        check: { file: '~/.x' },
+        install: 'x',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(refusal.reason, "harness 'opencode' is not one of this file's harnesses: pi, codex")
+  assert.equal(read(projectFile(f)).includes('delta'), false, 'the refused definition changed the file')
+
+  // The same harness the list names is defined, and a file with no list still accepts any name.
+  defined(
+    defineProvision(
+      { name: 'delta', harness: 'codex', tier: 'project', check: { file: '~/.x' }, install: 'x' },
+      f.config,
+    ),
+  )
+  write(userFile(f), 'version = 1\n')
+  defined(
+    defineProvision(
+      { name: 'delta', harness: 'opencode', tier: 'user', check: { file: '~/.x' }, install: 'x' },
+      f.config,
+    ),
+  )
+})
+
 test('a definition never evaluates its Check: no Presence is computed and nothing else is written', () => {
   const f = fixture()
   write(path.join(f.home, 'AGENTS.md'), '# AGENTS\n\n@RTK\n')

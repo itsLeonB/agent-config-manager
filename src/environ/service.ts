@@ -3,6 +3,7 @@ import type { EngineConfig } from '../engine/config.ts'
 import { evaluateChecks } from './check.ts'
 import { entryKey, loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
+import { ENVIRONMENT_TIERS } from './types.ts'
 import type {
   EnvironmentTier,
   FileRefusal,
@@ -52,8 +53,8 @@ export interface StatusFilter {
 export interface Status {
   provisions: ProvisionRow[]
   refusals: FileRefusal[]
-  // The merged declared harness list (or the default three when none is declared).
-  harnesses: string[]
+  // Each tier's declared harness list — a file's list is never merged into another tier's.
+  harnesses: Record<EnvironmentTier, string[]>
   // Where this answer was read from. Printed in the footer because a harness that started acm
   // somewhere unexpected otherwise reads an empty answer and guesses why.
   home: string
@@ -64,6 +65,8 @@ export interface Status {
 
 export interface StatusDocument {
   provisions: ProvisionDocumentRow[]
+  // The same per-tier harness lists the footer prints, so `--json` carries what a human reads.
+  harnesses: Record<EnvironmentTier, string[]>
 }
 
 export function readStatus(filter: StatusFilter = {}, config: EngineConfig = resolveDefaultConfig()): Status {
@@ -89,7 +92,7 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
   return {
     provisions: [...rows.values()],
     refusals: environment.refusals,
-    harnesses: environment.harnesses.length > 0 ? environment.harnesses : ['pi', 'codex', 'opencode'],
+    harnesses: environment.harnessesByTier,
     home: config.home,
     projectRoot: config.projectRoot,
     storePath: config.storePath,
@@ -105,6 +108,7 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
 export function statusDocument(status: Status, runs: Run[] = []): StatusDocument {
   const latest = new Map(runs.map((run) => [entryKey(run.provision, run.harness), run]))
   return {
+    harnesses: status.harnesses,
     provisions: status.provisions.map((row) => ({
       name: row.name,
       tags: row.tags,
@@ -118,10 +122,21 @@ export function statusDocument(status: Status, runs: Run[] = []): StatusDocument
   }
 }
 
-export function listHarnesses(config: EngineConfig = resolveDefaultConfig()) {
-  const environment = loadEnvironment(config)
-  const harnesses = environment.harnesses.length > 0 ? environment.harnesses : ['pi', 'codex', 'opencode']
-  return { harnesses, refusals: environment.refusals }
+// The harness list is per file, so the answers are per tier: no filter returns both tiers'
+// lists keyed by tier, and a tier filter narrows to that file's own list. A file with no list
+// declares none — the default three are gone.
+export function listHarnesses(config?: EngineConfig): Record<EnvironmentTier, string[]>
+export function listHarnesses(filter: { tier?: EnvironmentTier }, config?: EngineConfig): string[] | Record<EnvironmentTier, string[]>
+export function listHarnesses(
+  filterOrConfig: { tier?: EnvironmentTier } | EngineConfig = {},
+  config?: EngineConfig,
+): string[] | Record<EnvironmentTier, string[]> {
+  // A bare config is the no-filter call; a filter object is the tiered one.
+  const filter = 'home' in filterOrConfig ? {} : filterOrConfig
+  const resolved = 'home' in filterOrConfig ? filterOrConfig : config
+  const environment = loadEnvironment(resolved ?? resolveDefaultConfig())
+  if (filter.tier === undefined) return environment.harnessesByTier
+  return environment.harnessesByTier[filter.tier]
 }
 
 export function formatRefusal(refusal: FileRefusal): string {
@@ -132,7 +147,10 @@ export function formatRefusal(refusal: FileRefusal): string {
 // so it is also the answer the built-bundle test reads.
 function footer(status: Status): string {
   const entries = status.provisions.reduce((total, row) => total + row.harnesses.length, 0)
-  return `${counted(entries, 'entry', 'entries')} over ${counted(status.provisions.length, 'provision', 'provisions')} · project ${shorten(status.projectRoot, status.home)} · store ${shorten(status.storePath, status.home)}`
+  const harnesses = ENVIRONMENT_TIERS.map(
+    (tier) => `${tier} ${status.harnesses[tier].length > 0 ? status.harnesses[tier].join(', ') : 'none declared'}`,
+  ).join('; ')
+  return `${counted(entries, 'entry', 'entries')} over ${counted(status.provisions.length, 'provision', 'provisions')} · project ${shorten(status.projectRoot, status.home)} · store ${shorten(status.storePath, status.home)} · harnesses: ${harnesses}`
 }
 
 function shorten(file: string, home: string): string {

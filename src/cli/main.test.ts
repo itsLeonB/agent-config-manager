@@ -109,6 +109,7 @@ test('acm status prints Provision by harness, and --json prints the same rows as
   const asJson = run(binPath(), home, ['status', '--json'], { ACM_STORE: store })
   assert.equal(asJson.status, 0, asJson.stderr)
   assert.deepEqual(JSON.parse(asJson.stdout), {
+    harnesses: { user: [], project: [] },
     provisions: [
       {
         name: 'opencode-no-claude',
@@ -144,6 +145,26 @@ test('acm status prints Provision by harness, and --json prints the same rows as
       },
     ],
   })
+})
+
+// The footer names each tier's declared harness list: the lists are per file, so the answer is
+// per tier and a file with no list contributes none.
+test('acm status prints the harness lists per tier in the footer', () => {
+  const home = installed()
+  write(
+    path.join(home, 'agents_environ.toml'),
+    `version = 1
+
+harnesses = ["pi", "codex"]
+
+[provision.serena.pi]
+check   = { file = "~/.pi/agent/mcp.json" }
+install = "pi plugin install serena"
+`,
+  )
+  const result = run(binPath(), home, ['status'])
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /harnesses: user pi, codex; project none declared/)
 })
 
 test('a refused environment file is reported with line and column, and fails the command', () => {

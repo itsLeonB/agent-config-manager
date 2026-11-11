@@ -7,7 +7,7 @@ import { ensureTomlTable, readPointer, tomlPath, writePointer } from '../engine/
 import type { EditResult } from '../engine/edit.ts'
 import type { NativeValue } from '../engine/native-value.ts'
 import { environmentFiles } from './loader.ts'
-import { parseEnvironmentFile } from './parse.ts'
+import { harnessesKeyPlace, parseEnvironmentFile } from './parse.ts'
 import type { EnvironmentTier, InstallCommand, ProvisionDeclaration, Refusal } from './types.ts'
 
 // One Provision's Check and Install command for one harness, written into the environment file its
@@ -72,6 +72,21 @@ export function defineProvision(
   // definition to, and its refusal already names the line to fix.
   const before = parseEnvironmentFile(text)
   if (!before.ok) return { kind: 'refused', refusal: before.refusal }
+
+  // The file's own harness list is the constraint the parser enforces on a hand edit, so a
+  // definition is held to it before anything is written: a name the list does not carry is a
+  // refusal with the parser's reason, reported at the list's own key.
+  if (before.harnesses.length > 0 && !before.harnesses.includes(request.harness)) {
+    const at = harnessesKeyPlace(text)
+    return {
+      kind: 'refused',
+      refusal: {
+        line: at?.line ?? 1,
+        column: at?.column ?? 1,
+        reason: `harness '${request.harness}' is not one of this file's harnesses: ${before.harnesses.join(', ')}`,
+      },
+    }
+  }
 
   const provision = ['provision', request.name]
   const entry = [...provision, request.harness]

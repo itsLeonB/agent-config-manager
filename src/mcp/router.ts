@@ -184,7 +184,8 @@ export function createRouter(): McpServer {
   server.registerTool(
     'list_harnesses',
     {
-      description: 'List the harnesses this environment declares (or pi, codex, opencode when none are declared). Read-only.',
+      description:
+        'List the harnesses each environment file declares, keyed by tier: { user: [...], project: [...] }. A file with no harnesses list declares none. Read-only.',
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
@@ -205,7 +206,7 @@ export function createRouter(): McpServer {
           '- list_provisions: list Provisions with Presence per harness.',
           '- read_native_config: read native config for pi, codex, or opencode.',
           '- define_provision: write one Provision entry for one harness.',
-          '- list_harnesses: list declared harnesses (or pi, codex, opencode by default).',
+          '- list_harnesses: list the harnesses each environment file declares, per tier.',
           '',
           'Harnesses are free-form labels in the environment layer: any non-empty, NUL-free string is a legal target. Only read_native_config validates against the closed set (pi, codex, opencode).',
           '',
