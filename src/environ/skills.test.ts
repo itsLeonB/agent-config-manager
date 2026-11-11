@@ -96,6 +96,19 @@ test('a repeated skills key uses the last map and keeps its file order', () => {
   assert.deepEqual(read.skills, [{ name: '10', source: 'a' }, { name: '2', source: 'b' }])
 })
 
+test('option-like sources and skill names are skipped with reasons', () => {
+  const read = parseSkillsLock(lockBytes(JSON.stringify({ skills: {
+    badSource: { source: '--global' },
+    '-g': { source: 'repo/one' },
+    good: { source: 'repo/good' },
+    empty: { source: '' },
+  } })), LOCK)
+  assert.deepEqual(read.skills, [{ name: 'good', source: 'repo/good' }])
+  assert.match(read.warnings.join('\n'), /badSource.*source.*option/)
+  assert.match(read.warnings.join('\n'), /'-g'.*name.*option/)
+  assert.match(read.warnings.join('\n'), /empty.*has no source/)
+})
+
 test('readSkillsLock is the filesystem wrapper: a missing file warns with its tier', () => {
   const missing = path.join(somewhere(), 'never.json')
   const read = readSkillsLock(missing, 'project')
@@ -337,6 +350,26 @@ test('--dry-run prints every command and runs nothing', () => {
   assert.equal(exitCode, 0)
 })
 
+test('a refused environment skips only its own tier and fails real and dry runs', () => {
+  for (const refusedTier of ['user', 'project'] as const) {
+    for (const dryRun of [false, true]) {
+      const f = fixture()
+      userLock(f, { userSkill: { source: 'repo/user' } })
+      projectLock(f, { projectSkill: { source: 'repo/project' } })
+      const invalid = 'version = 1\nharnesses = [42]\n'
+      if (refusedTier === 'user') environment(f, invalid)
+      else projectEnvironment(f, invalid)
+      const result = run(f, { dryRun })
+      assert.equal(result.exitCode, 1)
+      assert.match(result.warned, /refused environment/)
+      assert.match(result.warned, new RegExp(`skipping ${refusedTier} skills`))
+      assert.doesNotMatch(result.printed, new RegExp(`repo/${refusedTier}`))
+      assert.match(result.printed, new RegExp(`repo/${refusedTier === 'user' ? 'project' : 'user'}`))
+      assert.equal(calls(f).length, dryRun ? 0 : 1)
+    }
+  }
+})
+
 test('a missing user lockfile still installs the project skills, and the reverse', () => {
   const f = fixture()
   projectLock(f, { p: { source: 'repo/p', sourceType: 'github' } })
@@ -388,6 +421,29 @@ test('one failed command does not stop the rest, and the exit status is non-zero
 
 // The user lockfile's path is fixed by the spec: ~/.agents/.skill-lock.json. XDG_STATE_HOME is
 // not consulted — a variable that moved the file would install a different set of skills.
+test('global installs use config.home as the child home without moving project installs', () => {
+  const f = fixture()
+  f.config.home = path.relative(process.cwd(), f.home)
+  userLock(f, { userSkill: { source: 'repo/user' } })
+  projectLock(f, { projectSkill: { source: 'repo/project' } })
+  const homes = path.join(path.dirname(f.log), 'homes.jsonl')
+  const fake = path.join(path.dirname(f.log), 'bin', 'npx')
+  fs.writeFileSync(fake, `#!/usr/bin/env node
+const fs = require('node:fs')
+const os = require('node:os')
+fs.appendFileSync(${JSON.stringify(homes)}, JSON.stringify({ home: os.homedir(), profile: process.env.USERPROFILE, global: process.argv.includes('-g') }) + '\\n')
+`)
+  const processHome = path.join(path.dirname(f.home), 'process-home')
+  fs.mkdirSync(processHome)
+  const result = run(f, {}, { ...f.env, HOME: processHome, USERPROFILE: processHome })
+  assert.equal(result.exitCode, 0)
+  const actual = fs.readFileSync(homes, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+  assert.deepEqual(actual, [
+    { home: f.home, profile: f.home, global: true },
+    { home: processHome, profile: processHome, global: false },
+  ])
+})
+
 test('XDG_STATE_HOME does not move the user lockfile', () => {
   const f = fixture()
   const xdg = path.join(f.home, 'xdg-state')

@@ -17,8 +17,8 @@ for a declared environment of Provisions. [README.md](README.md) covers what it 
 it. Configuration on claude.ai is deliberately out of scope; see
 [docs/adr/0002](docs/adr/0002-no-cloud-config-management.md).
 
-Bun is the package manager and script runner (`bun install`, `bun run <script>`, `bunx`); npm and
-npx are not used here.
+Use Bun for dependencies and project scripts (`bun install`, `bun run <script>`, `bunx`).
+`acm skills install` also requires Node.js and `npx` on `PATH`; Bun alone is not enough for that command.
 
 ## Environment tickets
 

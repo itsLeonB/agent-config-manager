@@ -131,6 +131,21 @@ install = "y"
 
 // A key with no owner table is removed whole: its line, and the lines of a value that spans more
 // than one. Comments and siblings stay, and a key that was never there is a no-op.
+test('root writes ignore table headers and assignments inside multiline TOML values', () => {
+  for (const quote of ['"""', "'''"]) {
+    for (const realHeader of ['', '\n# keep this table\n[provision.demo.pi]\ninstall = "run"\n']) {
+      const before = `version = 1\nnotes = ${quote}\n[fake.header]\nharnesses = ["not real"]\n${quote}\n${realHeader}`
+      const after = toml(before, 'harnesses', ['pi'])
+      const parsed = parseToml(after)
+      assert.deepEqual(parsed.harnesses, ['pi'])
+      assert.equal(parsed.notes, parseToml(before).notes)
+      assert.deepEqual(parsed.provision, parseToml(before).provision)
+      assert.deepEqual(parseToml(deleteTomlKey(after, 'harnesses')), parseToml(before))
+      assert.ok(after.includes(realHeader))
+    }
+  }
+})
+
 test('deleteTomlKey removes a root key and its multi-line value, leaving everything else', () => {
   const before = `version = 1
 # the harnesses this file faces

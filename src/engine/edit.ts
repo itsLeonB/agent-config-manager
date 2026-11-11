@@ -458,14 +458,23 @@ function rootKeyEnd(lines: string[], found: number): number {
   return last
 }
 
+// Value continuation lines are data, even when they look like headers or assignments.
+function tomlLineIndices(lines: string[]): number[] {
+  const indices: number[] = []
+  for (let index = 0; index < lines.length; index += 1) {
+    indices.push(index)
+    index = rootKeyEnd(lines, index)
+  }
+  return indices
+}
+
 export function deleteTomlKey(text: string, key: string): string {
   const lines = text.split('\n')
   // The key is a document key only before the first table header: the same spelling inside a table
   // belongs to that table and is left alone.
-  const firstTable = lines.findIndex((line) => FIRST_TABLE.test(line))
-  const found = lines
-    .slice(0, firstTable === -1 ? lines.length : firstTable)
-    .findIndex((line) => tomlLineKey(line) === key)
+  const indices = tomlLineIndices(lines)
+  const firstTable = indices.find((index) => FIRST_TABLE.test(lines[index] ?? '')) ?? lines.length
+  const found = indices.find((index) => index < firstTable && tomlLineKey(lines[index] ?? '') === key) ?? -1
   if (found === -1) return text
   lines.splice(found, rootKeyEnd(lines, found) - found + 1)
   // The removed block owned the blank line after it, so a table that followed keeps exactly one.
@@ -484,8 +493,8 @@ interface TomlTable {
 function tomlTables(lines: string[]): TomlTable[] {
   const tables: TomlTable[] = []
   let open: TomlTable | undefined
-  for (const [index, line] of lines.entries()) {
-    const header = /^\s*\[([^[\]]+)\]/.exec(line)
+  for (const index of tomlLineIndices(lines)) {
+    const header = /^\s*\[([^[\]]+)\]/.exec(lines[index] ?? '')
     if (header === null) continue
     if (open !== undefined) open.bodyEnd = index - 1
     open = { path: headerNames(header[1] ?? ''), header: index, bodyStart: index + 1, bodyEnd: lines.length - 1 }
@@ -512,13 +521,12 @@ function writeToml(text: string, segments: string[], value: NativeValue): EditRe
     // A root key has no parent table: it goes before the first table header, or at the end when the
     // document is all root keys. Without this, `[]` would be written as a table header.
     if (parent.length === 0) {
-      const headerAt = lines.findIndex((line) => FIRST_TABLE.test(line))
+      const indices = tomlLineIndices(lines)
+      const headerAt = indices.find((index) => FIRST_TABLE.test(lines[index] ?? '')) ?? -1
       const rootEnd = headerAt === -1 ? lines.length : headerAt
       // A root key that already exists is replaced in place — its comment stays — and a
       // multi-line value collapses into the one line the write renders.
-      const existing = lines
-        .slice(0, rootEnd)
-        .findIndex((line) => tomlLineKey(line) === key)
+      const existing = indices.find((index) => index < rootEnd && tomlLineKey(lines[index] ?? '') === key) ?? -1
       if (existing !== -1) {
         const end = rootKeyEnd(lines, existing)
         const indent = /^[ \t]*/.exec(lines[existing] ?? '')?.[0] ?? ''

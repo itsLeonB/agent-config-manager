@@ -3,9 +3,10 @@ import assert from 'node:assert'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import type { EngineConfig } from '../engine/config.ts'
 import { digestOfBytes } from '../engine/digest.ts'
-import { defineProvision, readNativeConfig, readStatus } from './service.ts'
+import { declareHarnesses, defineProvision, readNativeConfig, readStatus } from './service.ts'
 import type { DefineOutcome, DefineRequest } from './service.ts'
 import type { NativeValue } from '../engine/native-value.ts'
 import type { Refusal } from './types.ts'
@@ -93,6 +94,138 @@ install = "pi plugin install serena"
 check   = { file = "~/.pi/agent/mcp.json", contains = "zeta" }
 install = "pi plugin install zeta"
 `
+
+test('project writes refuse a file that also belongs to the user tier', () => {
+  for (const alias of [false, true]) {
+    const f = fixture()
+    const projectRoot = alias ? path.join(path.dirname(f.home), 'home-link') : f.home
+    if (alias) fs.symlinkSync(f.home, projectRoot)
+    const config = { ...f.config, projectRoot }
+    write(userFile(f), 'version = 1\n')
+    const before = read(userFile(f))
+    const outcomes = [
+      defineProvision({ name: 'demo', harness: 'pi', tier: 'project', check: { file: 'x' }, install: 'run' }, config),
+      declareHarnesses({ tier: 'project', harnesses: ['pi'] }, config),
+    ]
+    for (const outcome of outcomes) {
+      assert.equal(outcome.kind, 'failed')
+      assert.match(why(outcome), /user.*project|project.*user/)
+    }
+    assert.equal(read(userFile(f)), before)
+    defined(declareHarnesses({ tier: 'user', harnesses: ['pi'] }, config))
+  }
+})
+
+test('environment writes replace complete files, preserve permissions, and follow symlinks', () => {
+  for (const operation of ['define', 'declare']) {
+    for (const symlink of [false, true]) {
+      const f = fixture()
+      const destination = symlink ? path.join(f.home, 'actual.toml') : userFile(f)
+      const before = 'version = 1\n'
+      write(destination, before)
+      fs.chmodSync(destination, 0o600)
+      if (symlink) fs.symlinkSync(destination, userFile(f))
+      const snapshot = path.join(f.home, 'snapshot.toml')
+      fs.linkSync(destination, snapshot)
+      const files = fs.readdirSync(f.home)
+      const outcome = operation === 'define'
+        ? defineProvision({ name: 'demo', harness: 'pi', tier: 'user', check: { file: 'x' }, install: 'run' }, f.config)
+        : declareHarnesses({ tier: 'user', harnesses: ['pi'] }, f.config)
+      assert.equal(defined(outcome).file, userFile(f))
+      assert.equal(read(snapshot), before)
+      assert.notEqual(read(destination), before)
+      assert.equal(fs.statSync(destination).mode & 0o777, 0o600)
+      assert.deepEqual(fs.readdirSync(f.home), files)
+      if (symlink) assert.ok(fs.lstatSync(userFile(f)).isSymbolicLink())
+    }
+  }
+})
+
+test('an environment symlink to a missing file keeps its destination', () => {
+  const f = fixture()
+  const destination = path.join(f.home, 'nested', 'actual.toml')
+  fs.symlinkSync(destination, userFile(f))
+  defined(declareHarnesses({ tier: 'user', harnesses: ['pi'] }, f.config))
+  assert.ok(fs.lstatSync(userFile(f)).isSymbolicLink())
+  assert.equal(read(destination), read(userFile(f)))
+})
+
+test('refusals and read failures leave the destination and write directory unchanged', () => {
+  const f = fixture()
+  write(userFile(f), 'version = 1\n')
+  const before = read(userFile(f))
+  const files = fs.readdirSync(f.home)
+  assert.equal(declareHarnesses({ tier: 'user', harnesses: [''] }, f.config).kind, 'refused')
+  assert.equal(read(userFile(f)), before)
+  assert.deepEqual(fs.readdirSync(f.home), files)
+  fs.unlinkSync(userFile(f))
+  fs.mkdirSync(userFile(f))
+  assert.equal(declareHarnesses({ tier: 'user', harnesses: ['pi'] }, f.config).kind, 'failed')
+  assert.ok(fs.statSync(userFile(f)).isDirectory())
+  assert.deepEqual(fs.readdirSync(f.home), files)
+  fs.rmdirSync(userFile(f))
+  defined(declareHarnesses({ tier: 'user', harnesses: ['pi'] }, f.config))
+  assert.deepEqual(fs.readdirSync(f.home), files)
+})
+
+test('concurrent definitions and harness declarations do not lose successful writes', async () => {
+  const f = fixture()
+  write(userFile(f), `version = 1\n${'# padding\n'.repeat(100_000)}`)
+  const gate = path.join(f.home, 'start')
+  const definition = { name: 'demo', harness: 'pi', tier: 'user', check: { file: 'x' }, install: 'run' } satisfies DefineRequest
+  const jobs = [
+    `defineProvision(${JSON.stringify(definition)}, config)`,
+    'declareHarnesses({ tier: "user", harnesses: ["pi"] }, config)',
+  ].map((call) => {
+    const child = spawn(process.execPath, ['--eval', `
+      import fs from 'node:fs'
+      import { defineProvision } from ${JSON.stringify(new URL('./define.ts', import.meta.url).href)}
+      import { declareHarnesses } from ${JSON.stringify(new URL('./declare.ts', import.meta.url).href)}
+      const config = ${JSON.stringify(f.config)}
+      console.log('ready')
+      while (!fs.existsSync(${JSON.stringify(gate)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+      console.log(JSON.stringify(${call}))
+    `], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let output = ''
+    let errors = ''
+    const ready = new Promise<void>((resolve, reject) => {
+      child.stdout.on('data', (chunk) => {
+        output += chunk.toString()
+        if (output.includes('ready\n')) resolve()
+      })
+      child.on('error', reject)
+      child.on('close', () => reject(new Error(errors || output)))
+    })
+    const result = new Promise<DefineOutcome>((resolve, reject) => {
+      child.stderr.on('data', (chunk) => { errors += chunk.toString() })
+      child.on('error', reject)
+      child.on('close', (code) => {
+        if (code !== 0) reject(new Error(errors || output))
+        else resolve(JSON.parse(output.trim().split('\n').at(-1) ?? 'null'))
+      })
+    })
+    return { child, ready, result }
+  })
+  try {
+    await Promise.all(jobs.map((job) => job.ready))
+    write(gate, '')
+    const outcomes = await Promise.all(jobs.map((job) => job.result))
+    assert.ok(outcomes.some((outcome) => outcome.kind === 'defined'))
+    const status = readStatus({}, f.config)
+    if (outcomes[0].kind === 'defined') assert.equal(status.provisions[0]?.name, 'demo')
+    if (outcomes[1].kind === 'defined') assert.deepEqual(status.harnesses.user, ['pi'])
+    for (const outcome of outcomes) {
+      if (outcome.kind !== 'defined') assert.match(why(outcome), /locked|busy/)
+    }
+    if (outcomes[0].kind !== 'defined') defined(defineProvision(definition, f.config))
+    if (outcomes[1].kind !== 'defined') defined(declareHarnesses({ tier: 'user', harnesses: ['pi'] }, f.config))
+    const retried = readStatus({}, f.config)
+    assert.equal(retried.provisions[0]?.name, 'demo')
+    assert.deepEqual(retried.harnesses.user, ['pi'])
+  } finally {
+    for (const job of jobs) job.child.kill()
+  }
+})
 
 test('a definition is a row status reports, with the Presence its Check answers', () => {
   const f = fixture()

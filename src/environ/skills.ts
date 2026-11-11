@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { z } from 'zod'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
-import { loadEnvironment } from './loader.ts'
+import { environmentFiles, loadEnvironment } from './loader.ts'
 import { printable } from './print.ts'
 import { shellWord } from './command.ts'
 import type { EnvironmentTier } from './types.ts'
@@ -94,6 +94,11 @@ export function parseSkillsLock(bytes: Uint8Array, file: string): SkillsLockRead
     const source = record.success && typeof record.data.source === 'string' ? record.data.source : undefined
     if (source === undefined || source === '') {
       warnings.push(`${file}: skill '${name}' has no source and was skipped`)
+      continue
+    }
+    if (source.trimStart().startsWith('-') || name.trimStart().startsWith('-')) {
+      const field = source.trimStart().startsWith('-') ? 'source' : 'name'
+      warnings.push(`${file}: skill '${name}' ${field} looks like a CLI option and was skipped`)
       continue
     }
     skills.push({ name, source })
@@ -258,12 +263,16 @@ function commandText(command: SkillsCommand): string {
 
 // The one spawn in the skills installer: argv goes to `npx` untouched — no shell, so a source or a
 // skill name is data, never text a shell could read. stdin is /dev/null like every ACM command.
-// `env` reaches the child as given so a test can put a fake `npx` first on PATH. A spawn that
+// User commands set HOME and USERPROFILE to their root so Node's os.homedir() agrees with
+// config.home on POSIX and Windows; project commands keep the caller's home. A spawn that
 // throws — a NUL byte in an argument, say — is one command's failure, reported the same as a
 // non-zero exit, and the groups after it still run.
 function runCommand(command: SkillsCommand, env: NodeJS.ProcessEnv): number | null {
   try {
-    const result = spawnSync('npx', command.argv, { cwd: command.cwd, env, stdio: ['ignore', 'inherit', 'inherit'] })
+    const childEnv = command.tier === 'user'
+      ? { ...env, HOME: path.resolve(command.cwd), USERPROFILE: path.resolve(command.cwd) }
+      : env
+    const result = spawnSync('npx', command.argv, { cwd: command.cwd, env: childEnv, stdio: ['ignore', 'inherit', 'inherit'] })
     return result.status
   } catch {
     return null
@@ -283,7 +292,16 @@ export function skillsInstallRun(
     user: readSkillsLock(paths.user, 'user'),
     project: readSkillsLock(paths.project, 'project'),
   }
-  for (const tier of ['user', 'project'] as const) {
+  let exitCode = 0
+  for (const location of environmentFiles(config)) {
+    const tier = location.tier
+    const refusal = environment.refusals.find((item) => path.resolve(item.source) === path.resolve(location.file))
+    if (refusal !== undefined) {
+      warn(`${printable(refusal.source)}:${refusal.line}:${refusal.column}: refused environment: ${printable(refusal.reason)}; skipping ${tier} skills\n`)
+      reads[tier] = { skills: [], warnings: [] }
+      exitCode = 1
+      continue
+    }
     for (const warning of reads[tier].warnings) warn(`${printable(warning)}\n`)
     if (reads[tier].skills.length === 0 && reads[tier].warnings.length === 0) {
       warn(`${printable(paths[tier])}: no skills installed for the ${tier} tier\n`)
@@ -297,9 +315,8 @@ export function skillsInstallRun(
   if (options.dryRun === true) {
     for (const command of commands) write(`${commandText(command)}\n`)
     write('dry run: nothing was run\n')
-    return 0
+    return exitCode
   }
-  let exitCode = 0
   for (const command of commands) {
     write(`${commandText(command)}\n`)
     const status = runCommand(command, env)

@@ -1,5 +1,5 @@
-import { commitEnvironmentWrite, openEnvironmentForWrite } from './define.ts'
-import type { DefineOutcome } from './define.ts'
+import { commitEnvironmentWrite, withEnvironmentWrite } from './define.ts'
+import type { DefineOutcome, EnvironmentWriteTarget } from './define.ts'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { deleteTomlKey, writePointer } from '../engine/edit.ts'
@@ -28,9 +28,10 @@ export function declareHarnesses(
   request: DeclareRequest,
   config: EngineConfig = resolveDefaultConfig(),
 ): DeclareOutcome {
-  const target = openEnvironmentForWrite(request.tier, config)
-  if ('kind' in target) return target
+  return withEnvironmentWrite(request.tier, config, (target) => declareAtTarget(request, target))
+}
 
+function declareAtTarget(request: DeclareRequest, target: EnvironmentWriteTarget): DeclareOutcome {
   // An empty list clears the key rather than writing `harnesses = []`: both read as no declared
   // harnesses, and a file that never had the key is byte-identical to one that had it removed.
   let written = target.text

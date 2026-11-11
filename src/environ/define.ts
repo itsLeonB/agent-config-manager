@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
@@ -51,10 +52,18 @@ export type DefineOutcome =
 
 const VERSION_ROOT = 'version = 1\n'
 
-// The write sequence a definition and a declaration share: the tier's file, its bytes or the
-// empty root a missing file reads as, and the file's own parse before a byte is touched. The
-// caller edits the returned text and lands it with commitEnvironmentWrite, so the read-validate-
-// write-validate steps cannot drift apart between the two faces' writes.
+function resolvedWritePath(file: string, seen = new Set<string>()): string {
+  const absolute = path.resolve(file)
+  if (existsSync(absolute)) return realpathSync(absolute)
+  if (seen.has(absolute)) throw new Error(`environment file has a symlink cycle: ${absolute}`)
+  seen.add(absolute)
+  if (lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    return resolvedWritePath(path.resolve(path.dirname(absolute), readlinkSync(absolute)), seen)
+  }
+  return path.join(resolvedWritePath(path.dirname(absolute), seen), path.basename(absolute))
+}
+
+// Both writers hold the same file lock from the first read through the validated atomic rename.
 export interface EnvironmentWriteTarget {
   file: string
   text: string
@@ -63,10 +72,11 @@ export interface EnvironmentWriteTarget {
   environment: Extract<ParseResult, { ok: true }>
 }
 
-export function openEnvironmentForWrite(
+export function withEnvironmentWrite(
   tier: EnvironmentTier,
-  config: EngineConfig = resolveDefaultConfig(),
-): EnvironmentWriteTarget | Exclude<DefineOutcome, { kind: 'defined' }> {
+  config: EngineConfig,
+  edit: (target: EnvironmentWriteTarget) => DefineOutcome,
+): DefineOutcome {
   const location = environmentFiles(config).find((candidate) => candidate.tier === tier)
   // A tier outside the closed list names no file, so the write is refused rather than thrown:
   // every other bad write answers with a reason, and this one does too.
@@ -74,7 +84,38 @@ export function openEnvironmentForWrite(
     return { kind: 'failed', reason: `no environment file for tier ${tier}` }
   }
 
-  const existing = existsSync(location.file) ? readFileSync(location.file, 'utf8') : ''
+  try {
+    const destination = resolvedWritePath(location.file)
+    const user = environmentFiles(config).find((candidate) => candidate.tier === 'user')
+    if (tier === 'project' && user !== undefined && destination === resolvedWritePath(user.file)) {
+      return { kind: 'failed', reason: 'the project environment file is also the user environment file; use the user tier' }
+    }
+    mkdirSync(path.dirname(destination), { recursive: true })
+    // shortcut: a killed writer leaves its lock; add stale-lock recovery if automatic retry is needed.
+    const lock = `${destination}.lock`
+    let descriptor: number
+    try {
+      descriptor = openSync(lock, 'wx', 0o600)
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+        return { kind: 'failed', reason: `environment file is locked: ${location.file}; retry after the other writer finishes` }
+      }
+      throw error
+    }
+    try {
+      const target = openEnvironmentForWrite(location.file)
+      return 'kind' in target ? target : edit(target)
+    } finally {
+      closeSync(descriptor)
+      unlinkSync(lock)
+    }
+  } catch (error) {
+    return { kind: 'failed', reason: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function openEnvironmentForWrite(file: string): EnvironmentWriteTarget | Exclude<DefineOutcome, { kind: 'defined' }> {
+  const existing = existsSync(file) ? readFileSync(file, 'utf8') : ''
   // A file that is not there declares nothing, and the loader reads a missing file that way. A file
   // with no bytes is the same nothing, so the root is written before the first definition rather
   // than the definition being refused by a version that was never anybody's fault.
@@ -84,7 +125,7 @@ export function openEnvironmentForWrite(
   // definition to, and its refusal already names the line to fix.
   const parsed = parseEnvironmentFile(text)
   if (!parsed.ok) return { kind: 'refused', refusal: parsed.refusal }
-  return { file: location.file, text, environment: parsed }
+  return { file, text, environment: parsed }
 }
 
 // The second half of the sequence: the candidate bytes get the same parse the loader runs, and
@@ -98,8 +139,22 @@ export function commitEnvironmentWrite(
   const after = parseEnvironmentFile(written)
   if (!after.ok) return { kind: 'refused', refusal: after.refusal }
 
-  mkdirSync(path.dirname(target.file), { recursive: true })
-  writeFileSync(target.file, written)
+  const destination = resolvedWritePath(target.file)
+  mkdirSync(path.dirname(destination), { recursive: true })
+  const temporary = path.join(path.dirname(destination), `.agents-environ-${randomUUID()}.tmp`)
+  const mode = existsSync(destination) ? statSync(destination).mode & 0o777 : undefined
+  const descriptor = openSync(temporary, 'wx', mode ?? 0o666)
+  try {
+    try {
+      writeFileSync(descriptor, written)
+      if (mode !== undefined) chmodSync(temporary, mode)
+    } finally {
+      closeSync(descriptor)
+    }
+    renameSync(temporary, destination)
+  } finally {
+    if (existsSync(temporary)) unlinkSync(temporary)
+  }
   return {
     kind: 'defined',
     tier,
@@ -113,8 +168,10 @@ export function defineProvision(
   request: DefineRequest,
   config: EngineConfig = resolveDefaultConfig(),
 ): DefineOutcome {
-  const target = openEnvironmentForWrite(request.tier, config)
-  if ('kind' in target) return target
+  return withEnvironmentWrite(request.tier, config, (target) => defineAtTarget(request, target))
+}
+
+function defineAtTarget(request: DefineRequest, target: EnvironmentWriteTarget): DefineOutcome {
   const before = target.environment
   const text = target.text
 
