@@ -27,8 +27,13 @@ Spec: [spec.md](../spec.md). Tickets: [issues/](issues/).
   `-g`, project groups from the Project root; failures warn and never stop the rest. Note: the
   lockfile paths follow the Answer's `$XDG_STATE_HOME`/`~/.agents` layout — the final review will
   assess that deviation.
+- [03 The declare_harnesses MCP tool](issues/03-declare-harnesses-mcp-tool.md): resolved on
+  `d71b052` (merged `c9d9c58`) — `src/environ/declare.ts` replaces or clears one tier's
+  `harnesses` key through the pointer editor, validates the candidate bytes before writing, and
+  `src/mcp/router.ts` registers `declare_harnesses`; `src/engine/edit.ts` gained root-key
+  write/delete support. See the ticket's `## Answer` for the full record.
 
 ## Fog
 
-- [03 The declare_harnesses MCP tool](issues/03-declare-harnesses-mcp-tool.md) is still running in
-  its own worktree; reviews pending. 04 is resolved above.
+- All tickets are resolved; the two-axis review is pending. The lockfile-path deviation noted
+  under 04 is pending the final review.
