@@ -9,6 +9,7 @@ import {
   latestRuns,
   readNativeConfig,
   readStatus,
+  skillsInstallRun,
   statusDocument,
 } from '../environ/service.ts'
 import type { EnvironmentTier } from '../environ/service.ts'
@@ -29,6 +30,11 @@ const USAGE = `usage: acm <command> [--project-root <dir>]
                     --force    run even what is already present
                     --only     restrict the run to Provisions with that name or tag; repeatable
                     --tier     restrict the run to one tier
+
+  skills install [--dry-run]
+                    converge the skills lockfiles: one npx skills add per source group, user
+                    lockfile first with -g, project lockfile from the project root
+                    --dry-run  print the commands and stop
 
   mcp serve  speak the MCP protocol over stdin/stdout
 `
@@ -88,8 +94,24 @@ function main(input: string[]): number | Promise<number> {
   if (command === 'status') return status(rest)
   if (command === 'read') return read(rest)
   if (command === 'install') return install(rest)
+  if (command === 'skills' && rest[0] === 'install') return skillsInstall(rest.slice(1))
   process.stderr.write(USAGE)
   return 1
+}
+
+// Skills converge the lockfiles, not the environment: the command prints each `npx skills add`
+// and its exit status, and any failure makes the exit status non-zero. Warnings go to stderr.
+function skillsInstall(rest: string[]): number {
+  const unknown = rest.find((arg) => arg !== '--dry-run')
+  if (unknown !== undefined) {
+    process.stderr.write(`skills install takes --dry-run, not ${unknown}\n`)
+    return 1
+  }
+  return skillsInstallRun(
+    (text) => process.stdout.write(text),
+    (text) => process.stderr.write(text),
+    { dryRun: rest.includes('--dry-run') },
+  )
 }
 
 // The same answer the `read_native_config` tool gives, printed as the document it is: a human and an

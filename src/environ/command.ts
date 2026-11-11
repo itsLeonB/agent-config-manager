@@ -6,7 +6,7 @@ import type { InstallCommand } from './types.ts'
 // spelling. Every word is quoted the way a shell reads it back, so an argument with a space or a
 // quote still arrives as one argv word and the preview shows exactly what runs; a payload path and a
 // plain argument keep their bare spelling.
-function shellWord(word: string): string {
+export function shellWord(word: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`
 }
 
