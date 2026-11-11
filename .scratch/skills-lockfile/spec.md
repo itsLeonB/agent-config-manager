@@ -1,6 +1,6 @@
 # Spec: skills from the lockfile, and two environment tiers
 
-Status: resolved
+Status: ready-for-agent
 Source: conversation of this branch. Vocabulary in [CONTEXT.md](../../CONTEXT.md).
 
 ## Problem Statement
@@ -40,8 +40,9 @@ otherwise. A new MCP tool, `declare_harnesses`, writes one tier's list; `define_
    fetched once instead of once per skill.
 4. As a human, I want the harness list from the environment file passed to `skills`, so that a skill is
    linked only to the harnesses this machine faces.
-5. As a human, I want no `--agent` flag when a tier declares no harnesses, so that `skills` detects the
-   installed harnesses instead of creating directories for harnesses I do not use.
+5. As a human, I want the command to refuse a tier that declares no harnesses, so that it never
+   guesses which agent directories to write and never delegates that choice to the `skills` CLI's
+   detector.
 6. As a human, I want `--dry-run` to print the exact commands, so that I can review what will run
    before it runs.
 7. As a human, I want a missing or unreadable lockfile to warn and continue, so that one absent file
@@ -74,6 +75,17 @@ otherwise. A new MCP tool, `declare_harnesses`, writes one tier's list; `define_
     shape is testable without `npx`.
 21. As a developer, I want the skills installer in its own module, so that the environment service
     stays about Provisions.
+22. As a human, I want `acm skills install` to default to the project tier and `-g` to select the user
+    tier, so that one run does one scope's work and the scope is never ambiguous.
+23. As a human, I want the default run on a terminal to print every command and ask before running
+    them, so that I review what will run on this machine.
+24. As a human, I want `-y` to print and run without asking, so that scripts and repeated runs stay
+    non-interactive.
+25. As a human, I want a non-interactive run with no `-y` to print the commands and stop, so that the
+    command is safe in pipes and CI the same way `acm install` is.
+26. As a human, I want a selected tier with no declared harnesses to warn and exit non-zero before any
+    command is built, so that a missing declaration is loud instead of silently installing to
+    whatever the `skills` CLI detects.
 
 ## Implementation Decisions
 
@@ -99,12 +111,17 @@ otherwise. A new MCP tool, `declare_harnesses`, writes one tier's list; `define_
   pure function over a lockfile's bytes: it returns the skill names and sources in file order, skips an
   entry with no `source` with a warning, and treats a missing or unreadable lockfile as empty with a
   warning. The installer reads the user lockfile and the project lockfile, groups each by `source`, and
-  runs one command per group: `npx -y skills@latest add <source> --skill <name>... [--agent
-  <harness>...] [-g] -y`. The user groups run first, with `-g`; the project groups run from the Project
-  root without it. A tier with no declared harnesses omits `--agent`.
-- **Execution and reporting.** Every group runs even if an earlier one fails. The command prints each
-  command and its exit status; `--dry-run` prints the commands and stops. Any failed command makes the
-  exit status non-zero. Nothing is written to the store: the lockfile is the skill history.
+  runs one command per group: `npx -y skills@latest add <source> --skill <name>... --agent
+  <harness>... [-g] -y`. One run covers one tier: the project tier by default, the user tier with `-g`
+  (accepting `--global`); both tiers means two invocations. The user groups run with `-g`; the project
+  groups run from the Project root without it. `--agent` is always present: a tier with no declared
+  harnesses never reaches the command builder — it warns and exits non-zero instead, whether the file
+  is absent or simply has no `harnesses` key.
+- **Execution and reporting.** Every group in the selected tier runs even if an earlier one fails. On a
+  TTY the command prints each command and asks before running them; `-y` (accepting `--yes`) skips the
+  ask, `--dry-run` prints and stops, and a non-TTY run without `-y` prints and stops the same way. A
+  declined prompt runs nothing and exits zero. Any failed command makes the exit status non-zero.
+  Nothing is written to the store: the lockfile is the skill history.
 - **Remove `project-local`.** The tier list, the loader's file table, `define`'s default tier, the
   service, the MCP enum, the tests, the gitignore entry, and the docs lose `project-local`.
   `agents_environ.local.toml` is no longer read; there is no data migration.
@@ -118,8 +135,9 @@ worthless.
 
 **Seam A — the skills service against a fixture (primary).** A temp home, a temp project root, and
 hand-written lockfiles. A fake `npx` on `PATH` records its argv and exits with a chosen status, so the
-test asserts the exact commands, their order, the `-g` placement, the `--agent` set, the omitted
-`--agent`, `--dry-run`, the warnings, and the exit status without a network or a real install. This is
+test asserts the exact commands, their order, the `-g` placement, the `--agent` set, `--dry-run`, the
+warnings, and the exit status without a network or a real install. The confirm prompt is an injected
+callback beside `write`/`warn`, so the prompt's yes/no/EOF paths are tested without a TTY. This is
 the same fixture-and-recorder pattern as the Install runner tests.
 
 **Seam B — pure functions over bytes (unit).** The lockfile reader over version 1 and version 3 files,
@@ -158,4 +176,5 @@ for Seam A, the parser tests for Seam B, and the CLI and MCP smoke tests for Sea
 - This spec supersedes the `project-local` parts of the environment spec and ADR 0009's rule that
   harness lists merge as a union across tiers. ADR 0010 and ADR 0011 record the decisions.
 - Suggested tickets: remove the `project-local` tier; per-tier harness lists, parser validation, and
-  `declare_harnesses`; the skills lockfile reader and `acm skills install`.
+  `declare_harnesses`; the skills lockfile reader and `acm skills install`; one tier per run with a
+  confirm prompt and the harness gate (issue 05).
