@@ -292,7 +292,10 @@ Tier, and command, then starts the commands whose Presence is not `present` (or 
   needs no executable bit. A Payload that cannot be read fails its entry without spawning anything.
 - A Section write replaces the text between a Section's heading and the next `## ` heading, creates
   the file when it is absent, and appends at end of file when the Section is. Nothing outside the
-  Section is touched, and the comparison strips trailing blank lines from both sides.
+  Section is touched, and the comparison strips trailing blank lines from both sides. A Payload whose
+  heading is not its first content, or that carries a second heading, is refused rather than
+  written: the text outside the span it owns would be dropped or duplicated on the next run, so the
+  write could never converge.
 - A failing command is recorded and the run continues. The exit status is non-zero if any command
   failed or any Presence is still not `present` afterwards. A dry run runs nothing and has no
   afterwards: it exits zero unless an environment file was refused, which leaves the answer partial.

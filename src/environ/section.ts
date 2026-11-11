@@ -4,20 +4,40 @@
 // a `## ` line inside a backtick-fenced code block neither starts nor ends one, and `### ` headings
 // do not end one.
 
-// The line that heads a Section: the Payload's first line starting with `## ` outside a backtick
-// fence, the same walk `readSection` makes, so the heading a Check looks up is the heading this
-// spells. Null when the Payload has none, which is a Check that cannot be answered and an install
-// that cannot be written.
-export function headingOf(text: string): string | null {
+// The heading a Payload spells, and the only Payload shape a Section write can converge with. A
+// write replaces the span from the heading to the next one, so text before the heading lands
+// outside the span it owns and is prepended again on every run, and a second heading would end the
+// Section early, so the file could never read back as the text that was written. Both are refused
+// here rather than written and then never converging.
+export type SectionHeading = { ok: true; heading: string } | { ok: false; reason: string }
+
+export function headingOf(text: string): SectionHeading {
+  const headings: string[] = []
   let fenced = false
+  // Any non-blank line outside a fence that is not a heading, before the first heading.
+  let before = false
   for (const line of text.split('\n')) {
     if (/^\s*`{3,}/.test(line)) {
       fenced = !fenced
+      if (headings.length === 0) before = true
       continue
     }
-    if (!fenced && line.trimStart().startsWith('## ')) return line.trimEnd()
+    if (fenced) continue
+    const content = line.trimEnd()
+    if (content.trim() === '') continue
+    if (!content.startsWith('## ')) {
+      if (headings.length === 0) before = true
+      continue
+    }
+    headings.push(content)
   }
-  return null
+  const first = headings[0]
+  if (first === undefined) return { ok: false, reason: "has no '## ' heading" }
+  if (before) return { ok: false, reason: "has text before its '## ' heading, which a write would put outside the Section" }
+  if (headings.length > 1) {
+    return { ok: false, reason: `has ${headings.length} '## ' headings, so its Section would end at the second` }
+  }
+  return { ok: true, heading: first }
 }
 
 // One Section's location: `start` is the heading line's first byte and `end` is just past the

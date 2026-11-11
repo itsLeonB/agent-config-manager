@@ -1,4 +1,4 @@
-import { isPayloadInstall, isSectionInstall } from './loader.ts'
+import { isSectionInstall } from './loader.ts'
 import type { InstallCommand } from './types.ts'
 
 // What a Payload runs as and what a Section write writes, the one spelling the preview prints and
@@ -11,7 +11,8 @@ function shellWord(word: string): string {
 }
 
 export function installCommand(install: InstallCommand): string {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- typeof is the union's own discriminator
+  if (typeof install === 'string') return install
   if (isSectionInstall(install)) return `write ${shellWord(install.file)} from ${shellWord(install.section)}`
-  if (!isPayloadInstall(install)) return install
   return ['sh', install.payload, ...(install.args ?? [])].map(shellWord).join(' ')
 }

@@ -716,3 +716,43 @@ install = "echo yes > after.marker"
   assert.equal(goneRun.exitCode, null)
   assert.equal(goneRun.presence, 'absent')
 })
+
+test('a failure reason is printed on one line, whatever the file spelled', () => {
+  const f = fixture()
+  // A newline the environment file spelled as an escape reaches the reason through a path, and the
+  // summary is one line per entry: the sanitiser every other printed value uses runs over this one.
+  environment(f, `version = 1
+
+[provision.sneaky.pi]
+check   = { file = "~/never.marker" }
+install = { payload = "a\\nb.sh" }
+`)
+  const { printed } = run(f)
+  assert.match(printed, /failed: sneaky \(pi\) .*a\?b\.sh could not be read/)
+  assert.equal(printed.includes('a\nb.sh'), false, 'a raw line break reached the summary')
+})
+
+// The write replaces the span from the heading to the next one, so a Payload that reaches past its
+// own heading is one the write could never make converge: the text before the heading would land
+// outside the Section and be prepended again on every run. It fails here instead of half-writing.
+test('a Section install whose Payload starts before its heading fails and writes nothing', () => {
+  const f = fixture()
+  const payload = path.join(f.home, 'preamble-style.md')
+  file(payload, 'Some preamble.\n\n## Output style\n\nBe terse.\n')
+  const agents = path.join(f.home, 'AGENTS.md')
+  file(agents, '# Agents\n\n## Output style\n\nOld text.\n')
+  const before = fs.readFileSync(agents)
+  environment(f, `version = 1
+
+[provision.preamble.pi]
+check   = { file = "~/AGENTS.md", section = "~/preamble-style.md" }
+install = { file = "~/AGENTS.md", section = "~/preamble-style.md" }
+`)
+  const { printed, outcome } = run(f)
+  assert.match(printed, /has text before its '## ' heading, which a write would put outside the Section/)
+  // Nothing was written: the file is the byte it was, and the entry records no exit status.
+  assert.deepEqual(fs.readFileSync(agents), before)
+  assert.equal(outcome.entries[0].commandExit, null)
+  assert.equal(outcome.entries[0].after, 'unknown')
+  assert.equal(outcome.exitCode, 1)
+})

@@ -253,7 +253,13 @@ function decodeInstall(
   at: SourceIndex,
 ): Decoded<InstallCommand> {
   const asString = stringValue(value)
-  if (asString !== null) return { ok: true, value: asString }
+  if (asString !== null) {
+    // An empty command is a Provision that says nothing to do, which is a declaration the file does
+    // not mean: every other declared string refuses empty, and an empty one spawns a shell that
+    // succeeds at nothing.
+    if (asString === '') return refused(place(at.declaration(block, INSTALL_KEY), 'install is empty'))
+    return { ok: true, value: asString }
+  }
   const table = tableValue(value)
   if (table === null) return refused(place(at.declaration(block, INSTALL_KEY), 'install must be a string or a table'))
   for (const key of Object.keys(table)) {

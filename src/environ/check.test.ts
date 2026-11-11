@@ -289,16 +289,18 @@ test('a fenced `## ` line neither starts nor ends a Section', () => {
   assert.equal(evaluateCheck(SECTION_CHECK, over(fencedHeading, [], { kind: 'read', bytes: INSTRUCTIONS })).presence, 'present')
 })
 
-// The Payload's heading is the first `## ` outside a fence, the same walk the file-side read makes,
-// so a fenced `## ` line is never the heading a Check looks up.
-test('a fenced `## ` in the Payload is not its heading', () => {
-  // The first unfenced `## ` heads the Section, so the answer names the Section the file has.
-  const fencedFirst = evaluateCheck(
+// A Section runs from the heading the Payload spells, so a Payload that reaches past that span in
+// either direction is refused: text before the heading is written outside it, and a second heading
+// would end the Section early. Either way the file could never read back as what was written.
+test('a Payload that reaches past its own heading answers unknown', () => {
+  // Text before the heading would land outside the Section a write replaces, and be prepended again
+  // on every run, so the Check refuses rather than answering for a text that cannot converge.
+  const before = evaluateCheck(
     SECTION_CHECK,
     over(AGENTS, [], { kind: 'read', bytes: '```\n## Fenced heading\n```\n\n## Output style\n\nBe terse.\n' }),
   )
-  assert.equal(fencedFirst.presence, 'absent')
-  assert.match(fencedFirst.detail ?? '', /AGENTS\.md's ## Output style Section is not the declared text/)
+  assert.equal(before.presence, 'unknown')
+  assert.match(before.detail ?? '', /starts before its '## ' heading|has text before its '## ' heading/)
   // Only fenced `## ` lines: no heading at all, which is a Check that cannot be answered.
   const onlyFenced = evaluateCheck(
     SECTION_CHECK,
@@ -306,6 +308,15 @@ test('a fenced `## ` in the Payload is not its heading', () => {
   )
   assert.equal(onlyFenced.presence, 'unknown')
   assert.match(onlyFenced.detail ?? '', /has no '## ' heading/)
+})
+
+test('a Payload with two headings answers unknown, because one Section cannot hold both', () => {
+  const twoHeadings = evaluateCheck(
+    SECTION_CHECK,
+    over(AGENTS, [], { kind: 'read', bytes: '## Output style\n\nBe terse.\n\n## Second\n\nmore\n' }),
+  )
+  assert.equal(twoHeadings.presence, 'unknown')
+  assert.match(twoHeadings.detail ?? '', /has 2 '## ' headings, so its Section would end at the second/)
 })
 
 test('a Payload with no `## ` heading answers unknown, with the Payload named', () => {

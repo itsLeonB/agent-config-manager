@@ -464,4 +464,10 @@ test('a malformed payload install refuses the file at the offending key', () => 
     refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = 3\n').reason,
     'install must be a string or a table',
   )
+  // An empty command is a Provision that says nothing to do: a declaration the file does not mean.
+  assert.deepEqual(refusalOf('version = 1\n\n[provision.serena.codex]\ncheck = { file = "y" }\ninstall = ""\n'), {
+    line: 5,
+    column: 1,
+    reason: 'install is empty',
+  })
 })

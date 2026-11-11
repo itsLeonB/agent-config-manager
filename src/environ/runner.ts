@@ -102,6 +102,13 @@ function joined(labels: string[]): string {
   return labels.length === 0 ? 'none' : labels.join(', ')
 }
 
+// A failure reason can carry a path read from the environment file and an operating system's own
+// message, so it reaches the summary through the same sanitiser a Provision name does: one line in,
+// one line out.
+function reason(entry: InstallEntry): string {
+  return entry.failure === null ? `exit ${entry.commandExit}` : printable(entry.failure)
+}
+
 function summaryText(entries: InstallEntry[], refusals: FileRefusal[]): string {
   const present = entries.filter((entry) => !entry.attempted)
   const ran = entries.filter((entry) => entry.attempted)
@@ -111,8 +118,8 @@ function summaryText(entries: InstallEntry[], refusals: FileRefusal[]): string {
     '',
     `summary: ${counted(entries.length, 'entry', 'entries')}, ${present.length} already present, ${ran.length} ran, ${failed.length} failed, ${absent.length} still absent`,
     `  already present: ${joined(present.map((entry) => label(entry.provision)))}`,
-    `  ran: ${joined(ran.map((entry) => `${label(entry.provision)} ${entry.failure ?? `exit ${entry.commandExit}`}`))}`,
-    `  failed: ${joined(failed.map((entry) => `${label(entry.provision)} ${entry.failure}`))}`,
+    `  ran: ${joined(ran.map((entry) => `${label(entry.provision)} ${reason(entry)}`))}`,
+    `  failed: ${joined(failed.map((entry) => `${label(entry.provision)} ${reason(entry)}`))}`,
     // An `unknown` is not an absence, so the value is printed beside the entry rather than folded
     // into a count a reader would take as "not installed".
     `  still absent: ${joined(absent.map((entry) => `${label(entry.provision)} ${entry.after}`))}`,
@@ -169,8 +176,9 @@ function sectionInstall(install: SectionInstall): CommandResult {
     const cause = error instanceof Error ? error.message : String(error)
     return { status: null, failure: `${install.section} could not be read: ${cause}` }
   }
-  const heading = headingOf(payload)
-  if (heading === null) return { status: null, failure: `${install.section} has no '## ' heading` }
+  const spelled = headingOf(payload)
+  if (!spelled.ok) return { status: null, failure: `${install.section} ${spelled.reason}` }
+  const heading = spelled.heading
   let existing: string
   try {
     existing = readFileSync(install.file, 'utf8')

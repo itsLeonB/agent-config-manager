@@ -125,8 +125,9 @@ function sectionAnswer(check: FileSectionCheck, bytes: string, inputs: CheckInpu
         : payload.detail
     return { presence: 'unknown', detail }
   }
-  const heading = headingOf(payload.bytes)
-  if (heading === null) return { presence: 'unknown', detail: `${check.section} has no '## ' heading` }
+  const spelled = headingOf(payload.bytes)
+  if (!spelled.ok) return { presence: 'unknown', detail: `${check.section} ${spelled.reason}` }
+  const heading = spelled.heading
   const read = readSection(bytes, heading)
   if (read.kind === 'ambiguous') return { presence: 'unknown', detail: `${check.file} has two Sections headed ${heading}` }
   if (read.kind === 'missing') return { presence: 'absent', detail: `${check.file} has no ${heading} Section` }
