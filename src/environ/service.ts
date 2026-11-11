@@ -1,7 +1,7 @@
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
-import { evaluate } from './check.ts'
+import { evaluateChecks } from './check.ts'
 import { entryKey, loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
 import type {
@@ -58,6 +58,7 @@ export interface Status {
   home: string
   projectRoot: string
   storePath: string
+  readFiles: { tier: EnvironmentTier; file: string }[]
 }
 
 export interface StatusDocument {
@@ -75,10 +76,11 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
     // order it declares them, and a repeated harness would be a duplicate key the file cannot hold.
     const row = rows.get(provision.name) ?? { name: provision.name, tags: provision.tags, harnesses: [] }
     rows.set(provision.name, row)
-    const answer = evaluate(provision.check)
+    const answer = evaluateChecks(provision.checks)
     row.harnesses.push({
       harness: provision.harness,
       tier: provision.tier,
+      source: provision.source,
       presence: answer.presence,
       detail: answer.detail,
     })
@@ -89,6 +91,9 @@ export function readStatus(filter: StatusFilter = {}, config: EngineConfig = res
     home: config.home,
     projectRoot: config.projectRoot,
     storePath: config.storePath,
+    // What the loader actually read, so the answer names the files behind it rather than a second
+    // guess at where they would have been.
+    readFiles: environment.readFiles,
   }
 }
 
@@ -132,20 +137,25 @@ function shorten(file: string, home: string): string {
 export function formatStatus(status: Status): string {
   const rows = status.provisions
   const harnessWidth = Math.max('harness'.length, ...rows.flatMap((row) => row.harnesses.map((entry) => entry.harness.length)))
+  const sourceWidth = Math.max('source'.length, ...rows.flatMap((row) => row.harnesses.map((entry) => shorten(entry.source, status.home).length)))
   const nameWidth = Math.max('provision'.length, ...rows.map((row) => printable(row.name).length))
   const lines: string[] = []
   if (rows.length === 0) {
     lines.push('no Provisions declared')
   } else {
-    lines.push(`${'provision'.padEnd(nameWidth)}  ${'harness'.padEnd(harnessWidth)}  presence`)
+    lines.push(`${'provision'.padEnd(nameWidth)}  ${'harness'.padEnd(harnessWidth)}  ${'source'.padEnd(sourceWidth)}  presence`)
     for (const row of rows) {
       for (const entry of row.harnesses) {
         const detail = entry.detail === null ? '' : `  ${printable(entry.detail)}`
         lines.push(
-          `${printable(row.name).padEnd(nameWidth)}  ${entry.harness.padEnd(harnessWidth)}  ${entry.presence}${detail}`,
+          `${printable(row.name).padEnd(nameWidth)}  ${entry.harness.padEnd(harnessWidth)}  ${shorten(entry.source, status.home).padEnd(sourceWidth)}  ${entry.presence}${detail}`,
         )
       }
     }
+  }
+  if (rows.length === 0 && status.readFiles.length) {
+    lines.push('tiers read:')
+    for (const location of status.readFiles) lines.push(`  ${location.tier} ${shorten(location.file, status.home)}`)
   }
   return `${lines.join('\n')}\n\n${footer(status)}\n`
 }

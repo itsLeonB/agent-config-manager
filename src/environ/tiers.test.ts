@@ -99,7 +99,15 @@ install = "./install.sh ${marker} installed.txt"
     {
       name: 'serena',
       tags: ['project-local'],
-      harnesses: [{ harness: 'codex', tier: 'project-local', presence: 'absent', detail: null }],
+      harnesses: [
+        {
+          harness: 'codex',
+          tier: 'project-local',
+          source: path.join(f.projectRoot, 'agents_environ.local.toml'),
+          presence: 'absent',
+          detail: `${path.join(f.projectRoot, 'installed.txt')} is not there`,
+        },
+      ],
     },
   ])
 
@@ -148,12 +156,28 @@ install = "echo project"
     {
       name: 'i-have-adhd',
       tags: ['prompt'],
-      harnesses: [{ harness: 'pi', tier: 'user', presence: 'absent', detail: null }],
+      harnesses: [
+        {
+          harness: 'pi',
+          tier: 'user',
+          source: path.join(f.home, 'agents_environ.toml'),
+          presence: 'absent',
+          detail: `${path.join(f.home, 'user-pi.json')} is not there`,
+        },
+      ],
     },
     {
       name: 'serena',
       tags: ['local'],
-      harnesses: [{ harness: 'codex', tier: 'project', presence: 'absent', detail: null }],
+      harnesses: [
+        {
+          harness: 'codex',
+          tier: 'project',
+          source: path.join(f.projectRoot, 'agents_environ.toml'),
+          presence: 'absent',
+          detail: `${path.join(f.projectRoot, 'project-codex.toml')} is not there`,
+        },
+      ],
     },
   ])
 })
@@ -243,7 +267,7 @@ install = "./install.sh project installed.txt"
   const missing: string[] = []
   const refused = installRun((text) => missing.push(text), { dryRun: false, tier: 'project', only: ['home-thing'] }, f.config)
   assert.equal(refused.exitCode, 1)
-  assert.match(missing.join(''), /no Provision named home-thing/)
+  assert.match(missing.join(''), /no Provision named or tagged home-thing/)
 })
 
 // Each file refuses on its own: the fault is reported with the file it is in, and the tiers that

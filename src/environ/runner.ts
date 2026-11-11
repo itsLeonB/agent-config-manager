@@ -1,16 +1,24 @@
 import { spawnSync } from 'node:child_process'
+import { accessSync, constants, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
-import { evaluate } from './check.ts'
+import { evaluateChecks } from './check.ts'
 import { recordRun } from './history.ts'
-import { loadEnvironment } from './loader.ts'
+import { installCommand } from './command.ts'
+import { isPayloadInstall, isSectionInstall, loadEnvironment } from './loader.ts'
 import { counted, printable } from './print.ts'
-import type { EnvironmentTier, FileRefusal, Presence, ResolvedProvision } from './types.ts'
+import { headingOf, rewriteSection } from './section.ts'
+import type { EnvironmentTier, FileRefusal, Presence, ResolvedProvision, SectionInstall } from './types.ts'
 
-// The run is the only place ACM executes anything. `install` is the single field that reaches a
-// shell, and the text printed is the text run: nothing is interpolated, re-quoted, or evaluated on
-// the way. A Check still only reads, so the Presence a run reports is the files' answer rather than
-// the command's own word for what it did.
+// The run is the only place ACM executes anything. `install` is the single field that acts, in one
+// of three spellings, and the preview prints what the run does. A string command is its own text —
+// nothing is interpolated or evaluated on the way — and that text is what runs. A Payload is spelled
+// `sh <payload> <args…>`, every word re-quoted the way a shell reads it back, and that spelling is
+// what runs. A Section install never reaches a shell: the preview prints the label
+// `write <file> from <section>` with no `$` prefix because there is no command text, and the write
+// is what happens. A Check still only reads, so the Presence a run reports is the files' answer
+// rather than the command's own word for what it did.
 //
 // A run is a function of the environment plus the filesystem: the preview is read and printed before
 // the first command starts, the commands go in loader order, and a Present Provision is left alone
@@ -21,7 +29,7 @@ export interface InstallOptions {
   // invocation cannot change the machine by accident.
   dryRun?: boolean
   force?: boolean
-  // Provision names to restrict the run to. Empty means the whole environment.
+  // Provision names or tags to restrict the run to. Empty means the whole environment.
   only?: string[]
   // Only the entries one tier owns after the merge. `--tier` restricts a run the way `--only` does.
   tier?: EnvironmentTier
@@ -62,9 +70,12 @@ function label(provision: ResolvedProvision): string {
   return `${printable(provision.name)} (${provision.harness})`
 }
 
-// Every Provision, harness, tier, and the exact command, all of it before anything runs. A Present
-// Provision is still printed: what a run will not do is part of what a human reviews.
-function previewText(previewed: Previewed[], dryRun: boolean): string {
+// Every Provision, harness, tier, and what it runs — the exact command, or the label a Section write
+// prints because it has no command text — all of it before anything runs. A Present
+// Provision is still printed: what a run will not do is part of what a human reviews. The selection
+// line names the `--only` values that produced this preview, so a tag-filtered run does not read as
+// the whole environment.
+function previewText(previewed: Previewed[], dryRun: boolean, only: string[]): string {
   if (previewed.length === 0) return 'preview: no Provisions declared\n'
   const nameWidth = Math.max(...previewed.map((item) => printable(item.provision.name).length))
   const harnessWidth = Math.max(...previewed.map((item) => item.provision.harness.length))
@@ -73,18 +84,29 @@ function previewText(previewed: Previewed[], dryRun: boolean): string {
   const lines = [
     `preview: ${counted(previewed.length, 'entry', 'entries')}, ${toRun} to run, ${previewed.length - toRun} already present${dryRun ? ' · dry run' : ''}`,
   ]
+  if (only.length > 0) lines.push(`selection: --only ${only.join(', ')}`)
   for (const item of previewed) {
     const action = item.skip ? 'present, skipped' : item.presence === 'present' ? 'present, forced' : item.presence
     lines.push(
       `  ${printable(item.provision.name).padEnd(nameWidth)}  ${item.provision.harness.padEnd(harnessWidth)}  ${item.provision.tier.padEnd(tierWidth)}  ${action}`,
     )
-    lines.push(`    $ ${printable(item.provision.install)}`)
+    const spelled = printable(installCommand(item.provision.install))
+    // `$ ` says the line is a command that runs; a Section write's label prints without it, because
+    // there is no command text for the prompt to mark.
+    lines.push(isSectionInstall(item.provision.install) ? `    ${spelled}` : `    $ ${spelled}`)
   }
   return `${lines.join('\n')}\n`
 }
 
 function joined(labels: string[]): string {
   return labels.length === 0 ? 'none' : labels.join(', ')
+}
+
+// A failure reason can carry a path read from the environment file and an operating system's own
+// message, so it reaches the summary through the same sanitiser a Provision name does: one line in,
+// one line out.
+function reason(entry: InstallEntry): string {
+  return entry.failure === null ? `exit ${entry.commandExit}` : printable(entry.failure)
 }
 
 function summaryText(entries: InstallEntry[], refusals: FileRefusal[]): string {
@@ -96,8 +118,8 @@ function summaryText(entries: InstallEntry[], refusals: FileRefusal[]): string {
     '',
     `summary: ${counted(entries.length, 'entry', 'entries')}, ${present.length} already present, ${ran.length} ran, ${failed.length} failed, ${absent.length} still absent`,
     `  already present: ${joined(present.map((entry) => label(entry.provision)))}`,
-    `  ran: ${joined(ran.map((entry) => `${label(entry.provision)} ${entry.failure ?? `exit ${entry.commandExit}`}`))}`,
-    `  failed: ${joined(failed.map((entry) => `${label(entry.provision)} ${entry.failure}`))}`,
+    `  ran: ${joined(ran.map((entry) => `${label(entry.provision)} ${reason(entry)}`))}`,
+    `  failed: ${joined(failed.map((entry) => `${label(entry.provision)} ${reason(entry)}`))}`,
     // An `unknown` is not an absence, so the value is printed beside the entry rather than folded
     // into a count a reader would take as "not installed".
     `  still absent: ${joined(absent.map((entry) => `${label(entry.provision)} ${entry.after}`))}`,
@@ -118,7 +140,20 @@ function notRun(provision: ResolvedProvision, presence: Presence): InstallEntry 
 // shell with the command text as a single argument, which is the text that was printed.
 // shortcut: no per-command timeout; add one when a real command hangs.
 function spawnInstall(provision: ResolvedProvision): CommandResult {
-  const result = spawnSync(provision.install, {
+  // A Section install writes bytes itself, so it never reaches a shell.
+  if (isSectionInstall(provision.install)) return sectionInstall(provision.install)
+  const command = installCommand(provision.install)
+  // A Payload that cannot be read fails its entry here, before the shell starts: `sh` would report
+  // the same fault, but only after a spawn the preview said nothing about.
+  if (isPayloadInstall(provision.install)) {
+    try {
+      accessSync(provision.install.payload, constants.R_OK)
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error)
+      return { status: null, failure: `${provision.install.payload} could not be read: ${cause}` }
+    }
+  }
+  const result = spawnSync(command, {
     cwd: provision.root,
     stdio: ['ignore', 'inherit', 'inherit'],
     shell: true,
@@ -128,6 +163,43 @@ function spawnInstall(provision: ResolvedProvision): CommandResult {
   // A signal, or a shell that never started at all: either way there is no status of its own.
   if (result.signal !== null) return { status: null, failure: `signal ${result.signal}` }
   return { status: null, failure: result.error === undefined ? 'did not start' : result.error.message }
+}
+
+// The one install that is a write rather than a spawn: the Payload's text replaces the Section its
+// heading names, appends it when the Section is missing, and creates the file when the file itself
+// is missing. Nothing outside the Section is touched.
+function sectionInstall(install: SectionInstall): CommandResult {
+  let payload: string
+  try {
+    payload = readFileSync(install.section, 'utf8')
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error)
+    return { status: null, failure: `${install.section} could not be read: ${cause}` }
+  }
+  const spelled = headingOf(payload)
+  if (!spelled.ok) return { status: null, failure: `${install.section} ${spelled.reason}` }
+  const heading = spelled.heading
+  let existing: string
+  try {
+    existing = readFileSync(install.file, 'utf8')
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+      const cause = error instanceof Error ? error.message : String(error)
+      return { status: null, failure: `${install.file} could not be read: ${cause}` }
+    }
+    // A missing file is the one read failure that is not a failure: the Section is missing too.
+    existing = ''
+  }
+  const written = rewriteSection(existing, payload, heading)
+  if (!written.ok) return { status: null, failure: `${install.file}: ${written.reason}` }
+  try {
+    mkdirSync(dirname(install.file), { recursive: true })
+    writeFileSync(install.file, written.text)
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error)
+    return { status: null, failure: `${install.file} could not be written: ${cause}` }
+  }
+  return { status: 0, failure: null }
 }
 
 export function installRun(
@@ -144,25 +216,26 @@ export function installRun(
     dryRun: isDryRun,
     exitCode,
   })
-  // The tier narrows the environment before anything else reads it, so a name it leaves out is a
-  // name this run cannot reach and says so instead of running nothing quietly.
+  // The tier narrows the environment before anything else reads it, so a name or tag it leaves out
+  // is one this run cannot reach and says so instead of running nothing quietly.
   const inTier =
     options.tier === undefined
       ? environment.provisions
       : environment.provisions.filter((entry) => entry.tier === options.tier)
-  // A name that matches no Provision is a typo, not an empty environment: running the rest would
-  // look like the named fix succeeded.
-  const missing = only.filter((name) => !inTier.some((entry) => entry.name === name))
+  // A value that matches no Provision name and no tag is a typo, not an empty environment: running
+  // the rest would look like the named fix succeeded.
+  const matches = (value: string, entry: ResolvedProvision): boolean => entry.name === value || entry.tags.includes(value)
+  const missing = only.filter((value) => !inTier.some((entry) => matches(value, entry)))
   if (missing.length > 0) {
-    write(`no Provision named ${missing.join(', ')}\n`)
+    write(`no Provision named or tagged ${missing.join(', ')} (each tried as a name and as a tag)\n`)
     return outcome([], 1, dryRun)
   }
-  const selected = only.length === 0 ? inTier : inTier.filter((entry) => only.includes(entry.name))
+  const selected = only.length === 0 ? inTier : inTier.filter((entry) => only.some((value) => matches(value, entry)))
   const previewed: Previewed[] = selected.map((provision) => {
-    const presence = evaluate(provision.check).presence
+    const presence = evaluateChecks(provision.checks).presence
     return { provision, presence, skip: presence === 'present' && options.force !== true }
   })
-  write(previewText(previewed, dryRun))
+  write(previewText(previewed, dryRun, only))
   if (dryRun) {
     write('\ndry run: nothing was run\n')
     return outcome(
@@ -181,7 +254,7 @@ export function installRun(
     const command = spawnInstall(item.provision)
     // The answer after the command, not before and not the command's report of itself: a command
     // that half-worked is present if its Check now passes.
-    const after = evaluate(item.provision.check).presence
+    const after = evaluateChecks(item.provision.checks).presence
     // Recorded now, before the next command starts: the row is committed on its own, so an
     // interrupted run keeps the history of the commands that had already finished.
     recordRun(item.provision, command.status, after, config)

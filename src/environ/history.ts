@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { openStore } from '../server/store.cjs'
+import { installCommand } from './command.ts'
 import type { Presence, ResolvedProvision, Run } from './types.ts'
 
 // The environment's one caller of the store, and the only place a Run is read or written. It is not
@@ -25,7 +26,10 @@ export function recordRun(
       provision: provision.name,
       harness: provision.harness,
       tier: provision.tier,
-      command: provision.install,
+      // The command that ran, spelled: the Payload path followed by its arguments, or the file and
+      // Payload pair a Section write named, when there is one. The bytes a Payload held are what
+      // ran, never what is recorded.
+      command: installCommand(provision.install),
       exitCode,
       presence,
     })

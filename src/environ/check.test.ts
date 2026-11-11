@@ -3,16 +3,20 @@ import assert from 'node:assert'
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkInputsOf, evaluateCheck } from './check.ts'
-import type { CheckInputs } from './check.ts'
+import { checkInputsOf, evaluateCheck, foldAnswers } from './check.ts'
+import type { CheckInputs, FileInput } from './check.ts'
 import type { Check } from './types.ts'
 
 // Seam B: the evaluator is a pure function of what it is handed, so the fixtures are strings and a
 // temp directory standing in for PATH. The filesystem enters only where a Check names it — a Check's
 // own file is read by the caller, and a directory that is not there is a cause of `unknown`.
 
-function over(bytes: string | null, pathDirs: readonly string[] = []): CheckInputs {
-  return { file: bytes === null ? { kind: 'absent' } : { kind: 'read', bytes }, pathDirs }
+function over(
+  bytes: string | null,
+  pathDirs: readonly string[] = [],
+  payload: FileInput = { kind: 'absent' },
+): CheckInputs {
+  return { file: bytes === null ? { kind: 'absent' } : { kind: 'read', bytes }, payload, pathDirs }
 }
 
 function presenceOf(check: Check, bytes: string | null) {
@@ -24,7 +28,10 @@ test('an exists check is present when the file was read and absent when it is no
     presence: 'present',
     detail: null,
   })
-  assert.deepEqual(evaluateCheck({ file: '/home/ann/.zshrc' }, over(null)), { presence: 'absent', detail: null })
+  assert.deepEqual(evaluateCheck({ file: '/home/ann/.zshrc' }, over(null)), {
+    presence: 'absent',
+    detail: '/home/ann/.zshrc is not there',
+  })
 })
 
 test('a contains check finds an export in a shell profile', () => {
@@ -39,7 +46,7 @@ test('a contains check reports absent when the pattern is not in the file', () =
   const profile = 'export PATH="$HOME/.bun/bin:$PATH"\n'
   assert.deepEqual(evaluateCheck({ file: '/home/ann/.zshrc', contains: 'OPENCODE_DISABLE_CLAUDE_CODE' }, over(profile)), {
     presence: 'absent',
-    detail: null,
+    detail: '/home/ann/.zshrc does not contain OPENCODE_DISABLE_CLAUDE_CODE',
   })
 })
 
@@ -90,6 +97,82 @@ test('a pointer check reports absent when the address is not in the document', (
   assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'mcp_servers.serena.command.flag' }, JSON_CONFIG), 'absent')
 })
 
+// `includes` answers whether the array at an address holds a value, which is how a plugin list is
+// addressed without a regex over the whole file.
+const PLUGINS_JSON = '{"plugins": ["i-have-adhd", "serena"]}\n'
+const PLUGINS_TOML = 'plugins = ["i-have-adhd", "serena"]\n'
+
+test('an includes check answers whether an array holds a string', () => {
+  const present = { file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins', includes: 'i-have-adhd' }
+  assert.deepEqual(evaluateCheck(present, over(PLUGINS_JSON)), { presence: 'present', detail: null })
+  assert.deepEqual(evaluateCheck({ ...present, file: '/home/ann/.codex/config.toml' }, over(PLUGINS_TOML)), {
+    presence: 'present',
+    detail: null,
+  })
+  const absent = evaluateCheck({ ...present, includes: 'rtk' }, over(PLUGINS_JSON))
+  assert.deepEqual(absent, {
+    presence: 'absent',
+    detail: "/home/ann/.config/opencode/opencode.json's plugins does not include the declared value",
+  })
+  // The address being missing is the same absence, named the same way every missing pointer is.
+  const missing = evaluateCheck({ ...present, pointer: 'hooks' }, over(PLUGINS_JSON))
+  assert.deepEqual(missing, {
+    presence: 'absent',
+    detail: '/home/ann/.config/opencode/opencode.json has no hooks',
+  })
+})
+
+test('an includes check compares array elements by deep equality, whatever the format', () => {
+  const serversJson = '{"servers": [{"name": "serena", "command": "uvx"}, {"name": "rtk"}]}\n'
+  const serversToml = '[[servers]]\nname = "serena"\ncommand = "uvx"\n\n[[servers]]\nname = "rtk"\n'
+  const expected = { name: 'serena', command: 'uvx' }
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'servers', includes: expected }, serversJson), 'present')
+  assert.equal(presenceOf({ file: '/home/ann/.codex/config.toml', pointer: 'servers', includes: expected }, serversToml), 'present')
+  // A value that is a part of an element is not the element: equality, not containment.
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'servers', includes: { name: 'serena' } }, serversJson), 'absent')
+})
+
+test('a numeric segment indexes an array element, and a quoted one is a key', () => {
+  assert.equal(presenceOf({ file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins.0', equals: 'i-have-adhd' }, PLUGINS_JSON), 'present')
+  assert.equal(presenceOf({ file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins.1', equals: 'serena' }, PLUGINS_JSON), 'present')
+  assert.equal(presenceOf({ file: '/home/ann/.codex/config.toml', pointer: 'plugins.1' }, PLUGINS_TOML), 'present')
+  // An index the array does not hold is as missing as a key the document does not hold.
+  const outOfRange = evaluateCheck({ file: '/home/ann/.codex/config.toml', pointer: 'plugins.2' }, over(PLUGINS_TOML))
+  assert.deepEqual(outOfRange, { presence: 'absent', detail: '/home/ann/.codex/config.toml has no plugins.2' })
+  // The unquoted segment indexes, so on an object it names nothing; `"0"` is the key named 0.
+  const objectWithZero = '{"plugins": {"0": "kept"}}\n'
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'plugins.0' }, objectWithZero), 'absent')
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'plugins."0"', equals: 'kept' }, objectWithZero), 'present')
+})
+
+test('a quoted key containing a dot addresses that key in JSON and TOML', () => {
+  const dottedJson = '{"mcp_servers": {"my.server": {"command": "uvx"}}}\n'
+  const dottedToml = '[mcp_servers."my.server"]\ncommand = "uvx"\n'
+  const pointer = 'mcp_servers."my.server".command'
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer, equals: 'uvx' }, dottedJson), 'present')
+  assert.equal(presenceOf({ file: '/home/ann/.codex/config.toml', pointer, equals: 'uvx' }, dottedToml), 'present')
+  // The unquoted spelling names a member `my`, which neither document holds.
+  assert.equal(presenceOf({ file: '/home/ann/.pi/mcp.json', pointer: 'mcp_servers.my.server.command' }, dottedJson), 'absent')
+  assert.equal(presenceOf({ file: '/home/ann/.codex/config.toml', pointer: 'mcp_servers.my.server.command' }, dottedToml), 'absent')
+})
+
+test('a pointer that cannot be spelled is unknown, never absent', () => {
+  const answer = evaluateCheck({ file: '/home/ann/.codex/config.toml', pointer: 'mcp_servers."my.server' }, over('[mcp_servers."my.server"]\n'))
+  assert.equal(answer.presence, 'unknown')
+  assert.match(answer.detail ?? '', /cannot be spelled/)
+})
+
+test('an includes check on a value that is not an array is unknown with the reason', () => {
+  const scalar = evaluateCheck({ file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins', includes: 'i-have-adhd' }, over('{"plugins": "i-have-adhd"}\n'))
+  assert.deepEqual(scalar, {
+    presence: 'unknown',
+    detail: "/home/ann/.config/opencode/opencode.json's plugins is not an array",
+  })
+  const table = evaluateCheck({ file: '/home/ann/.config/opencode/opencode.json', pointer: 'plugins', includes: 'i-have-adhd' }, over('{"plugins": {"name": "x"}}\n'))
+  assert.equal(table.presence, 'unknown')
+  assert.match(table.detail ?? '', /is not an array/)
+})
+
 // `equals` is the reason the predicate has a second form: an entry that is in the file but switched
 // off is not installed, so the value has to be the one the Provision means, not merely present.
 test('an equals check reports absent for an entry the file disables', () => {
@@ -127,9 +210,144 @@ test('a file that does not parse is unknown, with the file and the reason', () =
 test('a missing file is absent, addressing the file itself or a value inside it', () => {
   assert.deepEqual(evaluateCheck({ file: '/home/ann/.pi/mcp.json', pointer: ADDRESS }, over(null)), {
     presence: 'absent',
+    detail: '/home/ann/.pi/mcp.json is not there',
+  })
+  assert.deepEqual(evaluateCheck({ file: '/home/ann/.pi/mcp.json' }, over(null)), {
+    presence: 'absent',
+    detail: '/home/ann/.pi/mcp.json is not there',
+  })
+})
+
+// A Section Check compares two texts: the Payload's is the Section's, heading included, and only
+// trailing blank lines may differ between the two sides.
+const AGENTS = `# AGENTS.md
+
+## Output style
+
+Be terse.
+
+## Next heading
+
+More text.
+`
+const INSTRUCTIONS = `## Output style
+
+Be terse.
+`
+const SECTION_CHECK = { file: '/home/ann/.pi/agent/AGENTS.md', section: '/home/ann/.pi/agent/instructions/output-style.md' }
+
+test('a section check is present when the Section matches the Payload, trailing blank lines apart', () => {
+  assert.deepEqual(evaluateCheck(SECTION_CHECK, over(AGENTS, [], { kind: 'read', bytes: INSTRUCTIONS + '\n\n\n' })), {
+    presence: 'present',
     detail: null,
   })
-  assert.deepEqual(evaluateCheck({ file: '/home/ann/.pi/mcp.json' }, over(null)), { presence: 'absent', detail: null })
+  // The blank lines may sit on the file's side instead — inside the Section, before the next
+  // heading, which is where a drift of only blank lines lives.
+  assert.deepEqual(
+    evaluateCheck(
+      SECTION_CHECK,
+      over(AGENTS.replace('Be terse.\n\n## Next', 'Be terse.\n\n\n\n## Next'), [], { kind: 'read', bytes: INSTRUCTIONS }),
+    ),
+    { presence: 'present', detail: null },
+  )
+})
+
+test('a section check is absent when the Section drifted from the Payload', () => {
+  const drifted = AGENTS.replace('Be terse.', 'Be verbose.')
+  const answer = evaluateCheck(SECTION_CHECK, over(drifted, [], { kind: 'read', bytes: INSTRUCTIONS }))
+  assert.equal(answer.presence, 'absent')
+  assert.match(answer.detail ?? '', /AGENTS\.md's ## Output style Section is not the declared text/)
+})
+
+test('a section check is absent when the file has no such Section', () => {
+  const answer = evaluateCheck(
+    SECTION_CHECK,
+    over('# AGENTS.md\n\nNothing to style.\n', [], { kind: 'read', bytes: INSTRUCTIONS }),
+  )
+  assert.equal(answer.presence, 'absent')
+  assert.match(answer.detail ?? '', /AGENTS\.md has no ## Output style Section/)
+})
+
+test('a section check is absent when the native file is missing', () => {
+  assert.deepEqual(evaluateCheck(SECTION_CHECK, over(null, [], { kind: 'read', bytes: INSTRUCTIONS })), {
+    presence: 'absent',
+    detail: '/home/ann/.pi/agent/AGENTS.md is not there',
+  })
+})
+
+// The fence the native files actually use: a `## ` line inside a three-backtick block is body text,
+// so it neither starts a Section, ends one, nor shares a heading with one.
+test('a fenced `## ` line neither starts nor ends a Section', () => {
+  const payload = '## Output style\n\nBe terse.\n\n```\n## Not a heading\n```\n'
+  const fenced = `${payload}\n## After the fence\n\nMore.\n`
+  assert.deepEqual(evaluateCheck(SECTION_CHECK, over(fenced, [], { kind: 'read', bytes: payload })), {
+    presence: 'present',
+    detail: null,
+  })
+  // The heading fenced before the real Section is not a second Section sharing it.
+  const fencedHeading = '```\n## Output style\n```\n\n' + AGENTS
+  assert.equal(evaluateCheck(SECTION_CHECK, over(fencedHeading, [], { kind: 'read', bytes: INSTRUCTIONS })).presence, 'present')
+})
+
+// A Section runs from the heading the Payload spells, so a Payload that reaches past that span in
+// either direction is refused: text before the heading is written outside it, and a second heading
+// would end the Section early. Either way the file could never read back as what was written.
+test('a Payload that reaches past its own heading answers unknown', () => {
+  // Text before the heading would land outside the Section a write replaces, and be prepended again
+  // on every run, so the Check refuses rather than answering for a text that cannot converge.
+  const before = evaluateCheck(
+    SECTION_CHECK,
+    over(AGENTS, [], { kind: 'read', bytes: '```\n## Fenced heading\n```\n\n## Output style\n\nBe terse.\n' }),
+  )
+  assert.equal(before.presence, 'unknown')
+  assert.match(before.detail ?? '', /starts before its '## ' heading|has text before its '## ' heading/)
+  // Only fenced `## ` lines: no heading at all, which is a Check that cannot be answered.
+  const onlyFenced = evaluateCheck(
+    SECTION_CHECK,
+    over(AGENTS, [], { kind: 'read', bytes: '```\n## Fenced\n```\nno heading\n' }),
+  )
+  assert.equal(onlyFenced.presence, 'unknown')
+  assert.match(onlyFenced.detail ?? '', /has no '## ' heading/)
+  // A blank line before the heading is outside the Section span too: it would be prepended ahead of
+  // the heading on every run, so the Payload could never read back as the Section's text.
+  const afterBlank = evaluateCheck(
+    SECTION_CHECK,
+    over(AGENTS, [], { kind: 'read', bytes: '\n\n## Output style\n\nBe terse.\n' }),
+  )
+  assert.equal(afterBlank.presence, 'unknown')
+  assert.match(afterBlank.detail ?? '', /has text before its '## ' heading/)
+})
+
+test('a Payload with two headings answers unknown, because one Section cannot hold both', () => {
+  const twoHeadings = evaluateCheck(
+    SECTION_CHECK,
+    over(AGENTS, [], { kind: 'read', bytes: '## Output style\n\nBe terse.\n\n## Second\n\nmore\n' }),
+  )
+  assert.equal(twoHeadings.presence, 'unknown')
+  assert.match(twoHeadings.detail ?? '', /has 2 '## ' headings, so its Section would end at the second/)
+})
+
+test('a Payload with no `## ` heading answers unknown, with the Payload named', () => {
+  const answer = evaluateCheck(SECTION_CHECK, over(AGENTS, [], { kind: 'read', bytes: 'no heading here\n' }))
+  assert.equal(answer.presence, 'unknown')
+  assert.match(answer.detail ?? '', /output-style\.md has no '## ' heading/)
+})
+
+test('two Sections sharing the Payload\u2019s heading answer unknown', () => {
+  const twice = '## Output style\n\none\n\n## Output style\n\ntwo\n'
+  const answer = evaluateCheck(SECTION_CHECK, over(twice, [], { kind: 'read', bytes: INSTRUCTIONS }))
+  assert.equal(answer.presence, 'unknown')
+  assert.match(answer.detail ?? '', /AGENTS\.md has two Sections headed ## Output style/)
+})
+
+test('a Payload that cannot be read answers unknown, with the Payload named', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'acm-section-payload-'))
+  const native = join(directory, 'AGENTS.md')
+  writeFileSync(native, '# AGENTS.md\n')
+  const missing = join(directory, 'style.md')
+  const answer = evaluateCheck({ file: native, section: missing }, checkInputsOf({ file: native, section: missing }))
+  assert.equal(answer.presence, 'unknown')
+  assert.match(answer.detail ?? '', /style\.md could not be read: it is not there/)
 })
 
 // The read error that is not `ENOENT` is the case this pins: a directory passes an existence test and
@@ -142,6 +360,7 @@ test('a file that cannot be read is unknown with the cause, whatever predicate a
     { file: directory },
     { file: directory, contains: 'serena' },
     { file: directory, pointer: ADDRESS },
+    { file: directory, section: ADDRESS },
   ] satisfies Check[]) {
     const answer = evaluateCheck(check, checkInputsOf(check))
     assert.equal(answer.presence, 'unknown')
@@ -152,7 +371,7 @@ test('a file that cannot be read is unknown with the cause, whatever predicate a
   const missing = join(directory, 'not-there.toml')
   assert.deepEqual(evaluateCheck({ file: missing, pointer: ADDRESS }, checkInputsOf({ file: missing })), {
     presence: 'absent',
-    detail: null,
+    detail: `${missing} is not there`,
   })
 })
 
@@ -177,9 +396,18 @@ test('an onPath check is absent for a name that is missing or not executable', (
     { name: 'notes', mode: 0o644 },
     { name: 'rtk', mode: 0o644 },
   ])
-  assert.deepEqual(evaluateCheck({ onPath: 'notes' }, over(null, [directory])), { presence: 'absent', detail: null })
-  assert.deepEqual(evaluateCheck({ onPath: 'nothing-here' }, over(null, [directory])), { presence: 'absent', detail: null })
-  assert.deepEqual(evaluateCheck({ onPath: 'serena' }, over(null, [])), { presence: 'absent', detail: null })
+  assert.deepEqual(evaluateCheck({ onPath: 'notes' }, over(null, [directory])), {
+    presence: 'absent',
+    detail: 'notes is not on PATH',
+  })
+  assert.deepEqual(evaluateCheck({ onPath: 'nothing-here' }, over(null, [directory])), {
+    presence: 'absent',
+    detail: 'nothing-here is not on PATH',
+  })
+  assert.deepEqual(evaluateCheck({ onPath: 'serena' }, over(null, [])), {
+    presence: 'absent',
+    detail: 'serena is not on PATH',
+  })
   // A directory that carries the name is not the regular file a shell would run.
   mkdirSync(join(directory, 'opencode'))
   assert.equal(evaluateCheck({ onPath: 'opencode' }, over(null, [directory])).presence, 'absent')
@@ -198,4 +426,49 @@ test('a PATH entry that is not a directory is unknown too', () => {
   const answer = evaluateCheck({ onPath: 'serena' }, over(null, [join(directory, 'plain-file')]))
   assert.equal(answer.presence, 'unknown')
   assert.match(answer.detail ?? '', /is not a directory/)
+})
+
+// The fold is the entry's answer: `absent` over `unknown` over `present`, and the detail names
+// every Check that did not answer `present` with its own reason. The answers come from the same
+// evaluator and the same fixture bytes as every other test in this file.
+test('the fold answers absent when any Check is absent, and names the Check that failed', () => {
+  const answers = [
+    evaluateCheck({ file: '/home/ann/.pi/mcp.json', contains: 'serena' }, over('serena\n')),
+    evaluateCheck({ file: '/home/ann/.zshrc' }, over(null)),
+  ]
+  assert.deepEqual(foldAnswers(answers), {
+    presence: 'absent',
+    detail: '/home/ann/.zshrc is not there',
+  })
+})
+
+test('absent beats unknown: the fold answers absent and names both Checks', () => {
+  const answers = [
+    evaluateCheck({ file: '/home/ann/.zshrc' }, over(null)),
+    evaluateCheck({ onPath: 'serena' }, over(null, ['/home/ann/empty-bin'])),
+  ]
+  const answer = foldAnswers(answers)
+  assert.equal(answer.presence, 'absent')
+  assert.match(answer.detail ?? '', /\/home\/ann\/\.zshrc is not there/)
+  assert.match(answer.detail ?? '', /PATH could not be searched: \/home\/ann\/empty-bin/)
+})
+
+test('the fold answers unknown when a Check is unknown and none is absent, with that Check named', () => {
+  const directory = pathWith([{ name: 'plain-file', mode: 0o755 }])
+  const answers = [
+    evaluateCheck({ file: '/home/ann/.pi/mcp.json', contains: 'serena' }, over('serena\n')),
+    evaluateCheck({ onPath: 'serena' }, over(null, [join(directory, 'plain-file')])),
+  ]
+  assert.deepEqual(foldAnswers(answers), {
+    presence: 'unknown',
+    detail: `PATH could not be searched: ${join(directory, 'plain-file')} is not a directory`,
+  })
+})
+
+test('the fold answers present only when every Check is present', () => {
+  const answers = [
+    evaluateCheck({ file: '/home/ann/.pi/mcp.json', contains: 'serena' }, over('serena\n')),
+    evaluateCheck({ file: '/home/ann/.codex/config.toml', pointer: 'mcp_servers.serena' }, over('[mcp_servers.serena]\n')),
+  ]
+  assert.deepEqual(foldAnswers(answers), { presence: 'present', detail: null })
 })

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { EngineConfig } from '../engine/config.ts'
 import { parseEnvironmentFile } from './parse.ts'
-import type { Check, EnvironmentTier, FileRefusal, ResolvedProvision } from './types.ts'
+import type { Check, EnvironmentTier, FileRefusal, InstallCommand, PayloadInstall, ResolvedProvision, SectionInstall } from './types.ts'
 
 // The loader answers what the environment declares: one entry per Provision and harness, with its
 // tier, its resolved Check, its Install command, and the file it came from. It reads environment
@@ -45,15 +45,53 @@ export function resolveDeclaredPath(declared: string, root: string, home: string
 }
 
 // A Check's file is declared against the tier's root and every other part of the predicate is a
-// value, so re-pointing a Check is replacing the one path it holds; `onPath` names no file at all.
+// value, so re-pointing a Check is replacing the path(s) it holds; `onPath` names no file at all.
 function resolveCheck(check: Check, root: string, home: string): Check {
   if (!('file' in check)) return check
+  if ('section' in check) {
+    return {
+      ...check,
+      file: resolveDeclaredPath(check.file, root, home),
+      section: resolveDeclaredPath(check.section, root, home),
+    }
+  }
   return { ...check, file: resolveDeclaredPath(check.file, root, home) }
+}
+
+// The three forms of an Install command share no runtime tag — one is a string, the other two are
+// tables — so these tests are the branches the loader and the runner both make on the union the
+// parser closed. A Section install carries the native file it writes, a Payload install does not, so
+// each test names exactly one form rather than "not a string".
+export function isPayloadInstall(install: InstallCommand): install is PayloadInstall {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- typeof is the union's own discriminator
+  return typeof install !== 'string' && !('file' in install)
+}
+
+export function isSectionInstall(install: InstallCommand): install is SectionInstall {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- typeof is the union's own discriminator
+  return typeof install !== 'string' && 'file' in install
+}
+
+// A Payload's path and a Section write's two paths resolve the way a Check's file does; a string
+// command has nothing to resolve.
+function resolveInstall(install: InstallCommand, root: string, home: string): InstallCommand {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- typeof is the union's own discriminator
+  if (typeof install === 'string') return install
+  if (isSectionInstall(install)) {
+    return {
+      file: resolveDeclaredPath(install.file, root, home),
+      section: resolveDeclaredPath(install.section, root, home),
+    }
+  }
+  return { payload: resolveDeclaredPath(install.payload, root, home), args: install.args }
 }
 
 export interface Environment {
   provisions: ResolvedProvision[]
   refusals: FileRefusal[]
+  // The files this load read, in the order it read them: what a status with no matching rows names,
+  // so an empty answer is never mistaken for an empty environment.
+  readFiles: { tier: EnvironmentTier; file: string }[]
 }
 
 // The identity of one entry in the environment: `(provision, harness)`, which is the key the merge
@@ -86,8 +124,18 @@ function keyOf(provision: ResolvedProvision): string {
 export function loadEnvironment(config: EngineConfig): Environment {
   const won = new Map<string, PlacedProvision>()
   const refusals: FileRefusal[] = []
+  // The user file is read first, so when two tiers resolve to one path — a Project root that is
+  // `$HOME`, possibly reached through a path spelled differently — the file loads once under the
+  // farther tier's name, the one read first, and the later tier contributes nothing. The `user` tier
+  // keeps it, so the home file is never relabelled as a project declaration.
+  const readFiles: { tier: EnvironmentTier; file: string }[] = []
+  const seen = new Set<string>()
   for (const [precedence, location] of environmentFiles(config).entries()) {
+    const resolvedFile = path.resolve(location.file)
+    if (seen.has(resolvedFile)) continue
+    seen.add(resolvedFile)
     if (!existsSync(location.file)) continue
+    readFiles.push({ tier: location.tier, file: location.file })
     let text: string
     try {
       text = readFileSync(location.file, 'utf8')
@@ -113,8 +161,8 @@ export function loadEnvironment(config: EngineConfig): Environment {
           // of one command reads the same at two tiers.
           root: location.root,
           source: location.file,
-          check: resolveCheck(entry.check, location.root, config.home),
-          install: entry.install,
+          checks: entry.checks.map((check) => resolveCheck(check, location.root, config.home)),
+          install: resolveInstall(entry.install, location.root, config.home),
         }
         won.set(keyOf(provision), { provision, precedence, position })
         position += 1
@@ -124,5 +172,5 @@ export function loadEnvironment(config: EngineConfig): Environment {
   const ordered = [...won.values()].sort(
     (left, right) => left.precedence - right.precedence || left.position - right.position,
   )
-  return { provisions: ordered.map((placed) => placed.provision), refusals }
+  return { provisions: ordered.map((placed) => placed.provision), refusals, readFiles }
 }

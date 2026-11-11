@@ -27,6 +27,86 @@ function refused(outcome: Exclude<DefineOutcome, { kind: 'defined' }>) {
   return { content: [{ type: 'text' as const, text: `not defined: ${text}` }], isError: true }
 }
 
+// The six predicates and the three Install forms, as the tool's own schema: a client reading
+// tools/list sees every shape the environment file spells, each described with what it answers.
+// The members pass unknown keys through rather than stripping them, so a definition the shapes do
+// not forbid — two predicates in one Check, an unknown key — reaches the parser and comes back
+// refused with the reason the loader would give, never silently rewritten into a different Check.
+const CHECK_FILE = z
+  .string()
+  .describe('the file to read: ~ and / are absolute, anything else resolves against the tier\'s root')
+
+const CHECK = z.union([
+  z
+    .record(z.string(), z.json())
+    .and(z.object({ file: CHECK_FILE }))
+    .describe('answers whether the file exists'),
+  z
+    .record(z.string(), z.json())
+    .and(
+      z.object({
+        file: CHECK_FILE,
+        contains: z.string().describe('the pattern the file\'s text has to match'),
+      }),
+    )
+    .describe('answers whether the file\'s text matches the contains pattern'),
+  z
+    .record(z.string(), z.json())
+    .and(
+      z.object({
+        file: CHECK_FILE,
+        pointer: z.string().describe('the address inside the file: a JSON pointer and a TOML dotted key are spelled the same'),
+        equals: z.json().optional().describe('the value the address has to hold'),
+      }),
+    )
+    .describe('answers whether the value at the pointer equals the value given, or that a value sits there when equals is omitted'),
+  z
+    .record(z.string(), z.json())
+    .and(
+      z.object({
+        file: CHECK_FILE,
+        pointer: z.string().describe('the address inside the file: a JSON pointer and a TOML dotted key are spelled the same'),
+        includes: z.json().describe('the value the array at the address has to hold'),
+      }),
+    )
+    .describe('answers whether the array at the pointer includes the value'),
+  z
+    .record(z.string(), z.json())
+    .and(
+      z.object({
+        file: CHECK_FILE,
+        section: z.string().describe('the Payload whose Section the file has to hold'),
+      }),
+    )
+    .describe('answers whether the Section of the file holds the Payload\'s text'),
+  z
+    .record(z.string(), z.json())
+    .and(z.object({ onPath: z.string().describe('the executable name to look up on PATH') }))
+    .describe('answers whether the name is an executable file on PATH'),
+])
+
+const INSTALL = z.union([
+  z.string().describe('the Install command text, the only text ACM ever executes'),
+  z
+    .record(z.string(), z.json())
+    .and(
+      z.object({
+        payload: z.string().describe('the Payload\'s path, resolved like a Check path'),
+        args: z.array(z.string()).optional().describe('the arguments the Payload receives as argv'),
+      }),
+    )
+    .describe('a Payload: the file the command text lives in, resolved like a Check path, with the arguments that reach it as argv'),
+  z
+    .record(z.string(), z.json())
+    .and(
+      z.object({
+        file: z.string().describe('the native file whose Section is rewritten'),
+        section: z.string().describe('the Payload whose text rewrites the Section'),
+      }),
+    )
+    .describe('a Section write: the Payload rewrites one Section of the native file'),
+])
+
 // The tools land here one at a time as the tickets that own them arrive; declaring the capability in
 // the constructor is what makes `tools/list` answer with whatever is registered rather than "method
 // not found".
@@ -84,13 +164,11 @@ export function createRouter(): McpServer {
           .enum(ENVIRONMENT_TIERS)
           .optional()
           .describe('which environment file to write: user, project, or project-local (the default)'),
-        check: z
-          .record(z.string(), z.json())
-          .describe('the Check as the file spells it, for example { file, contains }'),
-        install: z
-          .string()
-          .min(1)
-          .describe('the idempotent Install command for this harness at this tier; an entry carries both fields'),
+        check: CHECK.optional().describe(
+          'one Check, the singular spelling the file writes as check = { \u2026 }',
+        ),
+        checks: z.array(CHECK).optional().describe('several Checks, written checks = [ \u2026 ]; every one of them has to hold'),
+        install: INSTALL.describe('required, and never run by the tool'),
         tags: z.array(z.string()).optional().describe('tags for the Provision, written when it has none'),
       },
       annotations: { readOnlyHint: false },

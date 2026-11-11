@@ -83,21 +83,27 @@ test('status answers one row per Provision, one entry per harness it declares', 
     {
       name: 'opencode-no-claude',
       tags: ['harness-switch'],
-      harnesses: [{ harness: 'opencode', tier: 'user', presence: 'present', detail: null }],
+      harnesses: [{ harness: 'opencode', tier: 'user', source: path.join(f.home, 'agents_environ.toml'), presence: 'present', detail: null }],
     },
     {
       name: 'i-have-adhd',
       tags: ['prompt'],
-      harnesses: [{ harness: 'pi', tier: 'user', presence: 'present', detail: null }],
+      harnesses: [{ harness: 'pi', tier: 'user', source: path.join(f.home, 'agents_environ.toml'), presence: 'present', detail: null }],
     },
     {
       name: 'serena',
       tags: ['mcp'],
       harnesses: [
-        { harness: 'codex', tier: 'user', presence: 'present', detail: null },
+        { harness: 'codex', tier: 'user', source: path.join(f.home, 'agents_environ.toml'), presence: 'present', detail: null },
         // The file this check names is not on the fixture, so the answer is an absence rather than
         // an invented entry: nothing is added for a harness the file does not mention.
-        { harness: 'pi', tier: 'user', presence: 'absent', detail: null },
+        {
+          harness: 'pi',
+          tier: 'user',
+          source: path.join(f.home, 'agents_environ.toml'),
+          presence: 'absent',
+          detail: `${path.join(f.home, '.pi', 'agent', 'mcp.json')} is not there`,
+        },
       ],
     },
   ])
@@ -121,8 +127,14 @@ test('a name filter keeps one Provision and every harness entry it has', () => {
       name: 'serena',
       tags: ['mcp'],
       harnesses: [
-        { harness: 'codex', tier: 'user', presence: 'present', detail: null },
-        { harness: 'pi', tier: 'user', presence: 'absent', detail: null },
+        { harness: 'codex', tier: 'user', source: path.join(f.home, 'agents_environ.toml'), presence: 'present', detail: null },
+        {
+          harness: 'pi',
+          tier: 'user',
+          source: path.join(f.home, 'agents_environ.toml'),
+          presence: 'absent',
+          detail: `${path.join(f.home, '.pi', 'agent', 'mcp.json')} is not there`,
+        },
       ],
     },
   ])
@@ -189,10 +201,10 @@ test('the printing is a function of the rows, and the JSON carries the same rows
   // No store was ever written here, so no entry carries history: the document is the rows.
   assert.deepEqual(statusDocument(status, []).provisions, status.provisions)
   const printed = formatStatus(status)
-  assert.match(printed, /^provision .*harness .*presence$/m)
-  assert.match(printed, /^serena\s+codex\s+present$/m)
-  assert.match(printed, /^serena\s+pi\s+absent$/m)
-  assert.match(printed, /^i-have-adhd\s+pi\s+present$/m)
+  assert.match(printed, /^provision .*harness .*source .*presence$/m)
+  assert.match(printed, /^serena\s+codex\s+~\/agents_environ\.toml\s+present$/m)
+  assert.match(printed, /^serena\s+pi\s+~\/agents_environ\.toml\s+absent\s+.*is not there$/m)
+  assert.match(printed, /^i-have-adhd\s+pi\s+~\/agents_environ\.toml\s+present$/m)
   // The footer names where acm thinks it is: the project it read and the store it would record in.
   assert.match(printed, new RegExp(`project ${f.projectRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
   assert.match(printed, /store \/.*dashboard\.db/)
@@ -207,6 +219,69 @@ test('a machine with no environment file declares nothing, which is not a fault'
     home: f.home,
     projectRoot: f.projectRoot,
     storePath: f.config.storePath,
+    readFiles: [],
   })
   assert.match(formatStatus(readStatus({}, f.config)), /^no Provisions declared\n\n0 entries over 0 provisions/)
+})
+
+test('a home project reads the shared environment file only as user, even through an equal path', () => {
+  const f = fixture()
+  f.config.projectRoot = path.join(f.home, '..', path.basename(f.home))
+  write(path.join(f.home, 'agents_environ.toml'), `version = 1\n\n[provision.home.pi]\ncheck = { file = "missing" }\ninstall = "true"\n`)
+  const status = readStatus({}, f.config)
+  assert.deepEqual(status.provisions[0].harnesses, [
+    {
+      harness: 'pi',
+      tier: 'user',
+      source: path.join(f.home, 'agents_environ.toml'),
+      presence: 'absent',
+      detail: `${path.join(f.home, 'missing')} is not there`,
+    },
+  ])
+})
+
+test('an unmatched tier reports the tiers and environment files read', () => {
+  const f = fixture()
+  installed(f)
+  // A project file too, so the answer names both files it read and neither tier the filter named.
+  write(path.join(f.projectRoot, 'agents_environ.toml'), 'version = 1\n')
+  const printed = formatStatus(readStatus({ tier: 'project-local' }, f.config))
+  assert.match(printed, /no Provisions declared/)
+  assert.match(printed, /user ~\/agents_environ\.toml/)
+  assert.match(printed, /project .*agents_environ\.toml/)
+  assert.doesNotMatch(printed, /project-local/)
+})
+
+// One entry, two Checks: the row's Presence is the fold, and its detail names the Check that did
+// not answer `present` with that Check's own reason.
+test('an entry with several Checks folds them into one row, with the failing Check named', () => {
+  const f = fixture()
+  write(
+    path.join(f.home, 'agents_environ.toml'),
+    `version = 1
+
+[provision.serena.pi]
+checks = [
+  { file = "~/.pi/agent/mcp.json", contains = "serena" },
+  { file = "~/.pi/agent/mcp.json", pointer = "mcpServers.serena.pinned" },
+]
+install = "true"
+`,
+  )
+  write(path.join(f.home, '.pi', 'agent', 'mcp.json'), '{"mcpServers": {"serena": {}}}\n')
+  assert.deepEqual(rows(f), [
+    {
+      name: 'serena',
+      tags: [],
+      harnesses: [
+        {
+          harness: 'pi',
+          tier: 'user',
+          source: path.join(f.home, 'agents_environ.toml'),
+          presence: 'absent',
+          detail: `${path.join(f.home, '.pi', 'agent', 'mcp.json')} has no mcpServers.serena.pinned`,
+        },
+      ],
+    },
+  ])
 })

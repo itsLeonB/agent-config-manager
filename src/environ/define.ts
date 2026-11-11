@@ -3,11 +3,11 @@ import path from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { digestOfBytes } from '../engine/digest.ts'
-import { tomlPath, writePointer } from '../engine/edit.ts'
+import { readPointer, tomlPath, writePointer } from '../engine/edit.ts'
 import type { NativeValue } from '../engine/native-value.ts'
 import { environmentFiles } from './loader.ts'
 import { parseEnvironmentFile } from './parse.ts'
-import type { EnvironmentTier, ProvisionDeclaration, Refusal } from './types.ts'
+import type { EnvironmentTier, InstallCommand, ProvisionDeclaration, Refusal } from './types.ts'
 
 // One Provision's Check and Install command for one harness, written into the environment file its
 // tier names. Nothing here runs the command or evaluates the Check: the only effect is bytes in a
@@ -17,13 +17,22 @@ export interface DefineRequest {
   name: string
   harness: string
   tier?: EnvironmentTier
-  // The Check as the file spells it, passed through rather than re-shaped here: the parser owns the
-  // closed predicate set, so an unknown one is refused with the reason the loader would give.
-  check: Record<string, NativeValue>
+  // One Check as the file spells it, written `check = { … }`: the singular spelling stays legal, so
+  // a file with one Check keeps the shape it had, and a same-key write against an entry that spells
+  // `checks` replaces that list with the one element. Passed through rather than re-shaped here: the
+  // parser owns the closed predicate set, so an unknown one is refused with the reason the loader
+  // would give.
+  check?: Record<string, NativeValue>
+  // Several Checks, written `checks = [ … ]`; a one-element list against an entry that spells
+  // `check` replaces that singular Check. A request names one of the two; the validator after
+  // the write refuses one that names both or neither, with that reason.
+  checks?: Record<string, NativeValue>[]
   // Required, and never optional: an entry is a Check and an Install command, so a definition that
   // named only the Check would write a subtree the loader refuses and an existing command would
-  // survive a write that said it replaced the entry.
-  install: string
+  // survive a write that said it replaced the entry. A Payload form `{ payload [, args] }` or a
+  // Section form `{ file, section }` is written as the table the file spells, and the validator
+  // after the write owns both shapes.
+  install: InstallCommand
   tags?: string[]
 }
 
@@ -60,6 +69,15 @@ export function defineProvision(
   const provision = ['provision', request.name]
   const entry = [...provision, request.harness]
   let written = text
+  // The editor's own reader answers which spelling the entry's Checks have now. A brand-new entry
+  // takes the request's spelling; an existing one keeps the file's: `check` found means the singular
+  // spelling (or a `check` table of its own, which the writer refuses as it always did), `missing`
+  // the list spelling.
+  const declared = before.provisions
+    .flatMap((provision) => (provision.name === request.name ? provision.entries : []))
+    .find((candidate) => candidate.harness === request.harness)
+  const spelledSingular =
+    declared !== undefined && readPointer(written, 'toml', tomlPath([...entry, 'check'])).kind === 'found'
   // `tags` filter and are not identity, so a write adds them where the Provision has none and never
   // takes one away: replacing a tag list is an edit for a human. They sit on the Provision's own
   // table, not on the harness entry the rest of this writes.
@@ -69,12 +87,49 @@ export function defineProvision(
     written = tagged.text
   }
 
-  // Two addresses, one entry: `check` is an inline table and `install` a string, so each is written
-  // as the value it is, into the one table that holds them. Both writes read the document the other
-  // produced, and the pair reaches disk as one file write.
-  const check = writePointer(written, 'toml', [...entry, 'check'], request.check)
-  if (check.kind === 'failed') return check
-  written = check.text
+  // Two addresses, one entry: the Checks are tables and `install` a string, so each is written as
+  // the value it is, into the one table that holds them. A same-key write keeps the entry's
+  // spelling: a singular `check` replaces a `checks` list with that list's one element, and a
+  // one-element `checks` replaces a singular `check` with that element, so the file never ends up
+  // holding both keys, which the parser refuses. A request that names both writes both, and the
+  // parser below refuses the file with its own reason rather than this module picking one. All the
+  // writes read the document the previous one produced, and the set reaches disk as one file write.
+  if (request.check !== undefined && request.checks !== undefined) {
+    const check = writePointer(written, 'toml', [...entry, 'check'], request.check)
+    if (check.kind === 'failed') return check
+    written = check.text
+    const checks = writePointer(written, 'toml', [...entry, 'checks'], request.checks)
+    if (checks.kind === 'failed') return checks
+    written = checks.text
+  } else if (request.check !== undefined) {
+    // An existing entry that spells a list keeps it, with the one Check as its single element; a new
+    // entry and a singular one take the spelling the request used.
+    const asList = declared !== undefined && !spelledSingular
+    const pointer = asList ? [...entry, 'checks'] : [...entry, 'check']
+    const value: NativeValue = asList ? [request.check] : request.check
+    const check = writePointer(written, 'toml', pointer, value)
+    if (check.kind === 'failed') return check
+    written = check.text
+  } else if (request.checks !== undefined) {
+    if (declared !== undefined && spelledSingular) {
+      // Several Checks cannot replace a singular spelling: the `check` key would have to be deleted,
+      // which the pointer editor does not do, so that write is refused as a hand edit.
+      const one = request.checks[0]
+      if (request.checks.length !== 1 || one === undefined) {
+        return {
+          kind: 'failed',
+          reason: `${tomlPath(entry)} spells its Check as one check = { … }; replacing it with several Checks is a hand edit`,
+        }
+      }
+      const check = writePointer(written, 'toml', [...entry, 'check'], one)
+      if (check.kind === 'failed') return check
+      written = check.text
+    } else {
+      const checks = writePointer(written, 'toml', [...entry, 'checks'], request.checks)
+      if (checks.kind === 'failed') return checks
+      written = checks.text
+    }
+  }
   const install = writePointer(written, 'toml', [...entry, 'install'], request.install)
   if (install.kind === 'failed') return install
   written = install.text

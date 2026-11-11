@@ -17,9 +17,11 @@ export type Presence = (typeof PRESENCES)[number]
 
 // A Check is the inline table the file spells. `{ file }` asks whether a file exists,
 // `{ file, contains }` whether its text matches a multiline pattern, `{ file, pointer [, equals] }`
-// whether a native config holds a value at an address, and `{ onPath }` whether a name is an
-// executable file on PATH. The set is closed: a predicate outside it refuses the file instead of
-// being ignored, and a fifth one is a schema change.
+// whether a native config holds a value at an address, `{ file, pointer, includes }` whether the
+// array at an address holds a value, `{ file, section }` whether a Section of the file holds the
+// Payload's text, and `{ onPath }` whether a name is an executable file on PATH. The set is closed:
+// a predicate outside it refuses the file instead of being ignored, and a new
+// one is a schema change.
 export interface FileExistsCheck {
   file: string
 }
@@ -30,13 +32,15 @@ export interface FileContainsCheck {
 }
 
 // `pointer` is the address inside `file`, spelled the same way for a JSON pointer and a TOML dotted
-// key because one reader derives the format from the file's extension. `equals` is any TOML value and
-// compares by deep equality, which is what keeps an entry that is there but switched off (`enabled =
-// false`) from counting as installed.
+// key because one reader derives the format from the file's extension. `equals` compares the value at
+// that address by deep equality, which is what keeps an entry that is there but switched off
+// (`enabled = false`) from counting as installed; `includes` asks whether the array at the address
+// holds a deeply equal element. Both are any TOML value, and one Check holds one of them.
 export interface FilePointerCheck {
   file: string
   pointer: string
   equals?: NativeValue
+  includes?: NativeValue
 }
 
 // The one predicate that names no file: a name looked up on PATH.
@@ -44,13 +48,44 @@ export interface OnPathCheck {
   onPath: string
 }
 
-export type Check = FileExistsCheck | FileContainsCheck | FilePointerCheck | OnPathCheck
+// `section` names a Payload: the Section of `file` whose `## ` heading is the Payload's first
+// `## ` line, compared with the Payload's text byte for byte after trailing blank lines are
+// stripped from both sides.
+export interface FileSectionCheck {
+  file: string
+  section: string
+}
 
-// One `(provision, harness)` as the file spells it, before any path is resolved against a tier root.
+export type Check = FileExistsCheck | FileContainsCheck | FilePointerCheck | FileSectionCheck | OnPathCheck
+
+// A Payload is where an Install command too long to read inline lives: the file its text is in, and
+// the arguments that reach it as argv, never substituted into its text. A type alias, not an
+// interface: the alias's implicit index signature is what lets the editor write one as a TOML value.
+export type PayloadInstall = {
+  payload: string
+  args?: string[]
+}
+
+// An install that rewrites one Section of a native file: the Payload's text replaces the Section
+// its heading spells, appends it when the Section is missing, and creates the file when the file
+// is missing. A type alias for the same editor reason as PayloadInstall.
+export type SectionInstall = {
+  file: string
+  section: string
+}
+
+// An Install command is either the text spelled in the file, the Payload that holds it, or the
+// native file and Payload a Section write names.
+export type InstallCommand = string | PayloadInstall | SectionInstall
+
+// One `(provision, harness)` as the file spells it, before any path is resolved against a tier
+// root. `checks` is one or more, and all of them have to hold; a file that spells a single
+// `check = { … }` is read as this list's one element. `install` is the command spelled in the file
+// or the Payload a too-long command lives in.
 export interface DeclaredEntry {
   harness: HarnessId
-  check: Check
-  install: string
+  checks: Check[]
+  install: InstallCommand
 }
 
 // One `[provision.<name>]` table. `tags` filter and are not identity.
@@ -60,8 +95,8 @@ export interface ProvisionDeclaration {
   entries: DeclaredEntry[]
 }
 
-// One `(provision, harness)` after the loader applied its tier's root: `check.file` is absolute and
-// `source` is the environment file the entry came from.
+// One `(provision, harness)` after the loader applied its tier's root: every Check's `file` and a
+// Payload's path are absolute and `source` is the environment file the entry came from.
 export interface ResolvedProvision {
   name: string
   tags: string[]
@@ -72,8 +107,8 @@ export interface ResolvedProvision {
   // instead of being derived a second time.
   root: string
   source: string
-  check: Check
-  install: string
+  checks: Check[]
+  install: InstallCommand
 }
 
 // A refusal locates the declaration at fault, so a typo is a line to edit rather than a file to
@@ -92,11 +127,12 @@ export type ParseResult =
   | { ok: true; provisions: ProvisionDeclaration[] }
   | { ok: false; refusal: Refusal }
 
-// One harness's answer for one Provision: where the entry came from, what a Check said, and why when
-// it could not say. A Provision with no entry for a harness has no such row at all.
+// One harness's answer for one Provision: where the entry came from, what its Checks said folded,
+// and why when a Check could not answer. A Provision with no entry for a harness has no such row.
 export interface HarnessPresence {
   harness: HarnessId
   tier: EnvironmentTier
+  source: string
   presence: Presence
   detail: string | null
 }
@@ -109,7 +145,8 @@ export interface ProvisionRow {
   harnesses: HarnessPresence[]
 }
 
-// One Check's answer, before the row learns which harness and tier it belongs to.
+// One Check's answer, and the same shape an entry's folded answer takes: `detail` is the reason a
+// Check did not answer `present` — why it is absent, or why it could not be evaluated.
 export interface CheckAnswer {
   presence: Presence
   detail: string | null

@@ -1,8 +1,9 @@
 import { parse, TomlError } from 'smol-toml'
 import { z } from 'zod'
 import { HARNESSES } from '../engine/adapters/types.ts'
+import { splitPointer } from '../engine/edit.ts'
 import type { HarnessId } from '../engine/adapters/types.ts'
-import type { Check, DeclaredEntry, ParseResult, ProvisionDeclaration, Refusal } from './types.ts'
+import type { Check, DeclaredEntry, InstallCommand, ParseResult, ProvisionDeclaration, Refusal } from './types.ts'
 
 // The parser is total against the closed environment-file schema: every value in the document is
 // either decoded into a Provision or refuses the whole file with the line and column of the part at
@@ -13,15 +14,28 @@ const VERSION_KEY = 'version'
 const PROVISION_KEY = 'provision'
 const TAGS_KEY = 'tags'
 const CHECK_KEY = 'check'
+const CHECKS_KEY = 'checks'
 const INSTALL_KEY = 'install'
+const PAYLOAD_KEY = 'payload'
+const ARGS_KEY = 'args'
 const FILE_KEY = 'file'
 const CONTAINS_KEY = 'contains'
 const POINTER_KEY = 'pointer'
 const EQUALS_KEY = 'equals'
+const INCLUDES_KEY = 'includes'
 const ON_PATH_KEY = 'onPath'
+const SECTION_KEY = 'section'
 // The closed predicate set: the keys a Check may carry besides `file`. Anything else is a typo and
 // refuses the file, so a Check ACM does not understand is never silently ignored.
-const PREDICATE_KEYS: ReadonlySet<string> = new Set([FILE_KEY, CONTAINS_KEY, POINTER_KEY, EQUALS_KEY, ON_PATH_KEY])
+const PREDICATE_KEYS: ReadonlySet<string> = new Set([
+  FILE_KEY,
+  CONTAINS_KEY,
+  POINTER_KEY,
+  EQUALS_KEY,
+  INCLUDES_KEY,
+  SECTION_KEY,
+  ON_PATH_KEY,
+])
 
 // TOML can hold dates and big integers; this schema describes strings, numbers, booleans, arrays, and
 // tables, which is every value an environment file is allowed to write.
@@ -109,11 +123,14 @@ function indexSource(text: string): SourceIndex {
   }
 }
 
-// A Check is spelled inline (`check = { file = ... }`) or as a table of its own
-// (`[provision.<name>.<harness>.check]`), and the scan indexed its members under one of those two
-// addresses, so both are tried before falling back to the top of the file.
+// A Check is spelled inline (`check = { file = ... }` or a member of `checks = [ … ]`) or as a table
+// of its own (`[provision.<name>.<harness>.check]`), and the scan indexed its members under one of
+// those addresses, so all three are tried before falling back to the top of the file.
 function decodeCheck(table: EnvironmentTable, block: readonly string[], at: SourceIndex): Decoded<Check> {
-  const checkAt = (name: string) => at.declaration(block, name) ?? at.declaration([...block, CHECK_KEY], name)
+  const checkAt = (name: string) =>
+    at.declaration(block, name) ??
+    at.declaration([...block, CHECK_KEY], name) ??
+    at.declaration([...block, CHECKS_KEY], name)
   for (const key of Object.keys(table)) {
     if (!PREDICATE_KEYS.has(key)) return refused(place(checkAt(key), `unknown predicate '${key}'`))
   }
@@ -131,20 +148,48 @@ function decodeCheck(table: EnvironmentTable, block: readonly string[], at: Sour
   const file = stringValue(table[FILE_KEY])
   if (file === null) return refused(place(checkAt(FILE_KEY), 'file must be a string'))
   if (file === '') return refused(place(checkAt(FILE_KEY), 'file is empty'))
-  // A Check is one of the four predicates, never two: `contains` and `pointer` answer the same
-  // question in two ways, so both spelled at once refuses rather than picking one.
+  // A Check is one of the six predicates, never two: `contains` and `pointer` answer the same
+  // question in two ways, so both spelled at once refuses rather than picking one. `equals` and
+  // `includes` are the two answers a pointer Check may give, so one Check holds one of them, and
+  // neither sits beside `contains` for the same reason. `section` names a Payload, so it stands
+  // alone with its `file`.
   if (has(table, CONTAINS_KEY) && has(table, POINTER_KEY)) {
     return refused(place(checkAt(POINTER_KEY), 'a check holds contains or pointer, not both'))
+  }
+  if (has(table, INCLUDES_KEY) && has(table, EQUALS_KEY)) {
+    return refused(place(checkAt(INCLUDES_KEY), 'a check holds equals or includes, not both'))
+  }
+  if (has(table, INCLUDES_KEY) && has(table, CONTAINS_KEY)) {
+    return refused(place(checkAt(INCLUDES_KEY), 'a check holds contains or includes, not both'))
+  }
+  if (has(table, SECTION_KEY)) {
+    const beside = Object.keys(table).find((key) => key !== FILE_KEY && key !== SECTION_KEY)
+    if (beside !== undefined) return refused(place(checkAt(beside), `a check holds section or ${beside}, not both`))
+    const section = stringValue(table[SECTION_KEY])
+    if (section === null) return refused(place(checkAt(SECTION_KEY), 'section must be a string'))
+    if (section === '') return refused(place(checkAt(SECTION_KEY), 'section is empty'))
+    return { ok: true, value: { file, section } }
   }
   if (has(table, POINTER_KEY)) {
     const pointer = stringValue(table[POINTER_KEY])
     if (pointer === null) return refused(place(checkAt(POINTER_KEY), 'pointer must be a string'))
     if (pointer === '') return refused(place(checkAt(POINTER_KEY), 'pointer is empty'))
+    // A pointer the splitter cannot spell is an address ACM cannot read, so the file refuses here
+    // rather than a Check answering `absent` for something it never looked at.
+    try {
+      splitPointer(pointer)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      return refused(place(checkAt(POINTER_KEY), `pointer cannot be spelled: ${reason}`))
+    }
+    if (has(table, INCLUDES_KEY)) return { ok: true, value: { file, pointer, includes: table[INCLUDES_KEY] } }
     return has(table, EQUALS_KEY)
       ? { ok: true, value: { file, pointer, equals: table[EQUALS_KEY] } }
       : { ok: true, value: { file, pointer } }
   }
-  // `equals` compares a value at an address, so on its own it names nothing to compare.
+  // `equals` and `includes` compare what sits at an address, so on their own they name nothing to
+  // compare.
+  if (has(table, INCLUDES_KEY)) return refused(place(checkAt(INCLUDES_KEY), 'includes needs a pointer'))
   if (has(table, EQUALS_KEY)) return refused(place(checkAt(EQUALS_KEY), 'equals needs a pointer'))
   if (!has(table, CONTAINS_KEY)) return { ok: true, value: { file } }
   const contains = stringValue(table[CONTAINS_KEY])
@@ -153,8 +198,9 @@ function decodeCheck(table: EnvironmentTable, block: readonly string[], at: Sour
   return { ok: true, value: { file, contains } }
 }
 
-// One `[provision.<name>.<harness>]` table. `check` and `install` are both required: a Provision is a
-// check and a command, and one without the other cannot be converged.
+// One `[provision.<name>.<harness>]` table. Its Checks — `check = { … }` or `checks = [ … ]`, one or
+// more of them — and `install` are both required: a Provision is a check and a command, and one
+// without the other cannot be converged.
 function decodeEntry(
   harness: HarnessId,
   table: EnvironmentTable,
@@ -162,17 +208,90 @@ function decodeEntry(
   at: SourceIndex,
 ): Decoded<DeclaredEntry> {
   for (const key of Object.keys(table)) {
-    if (key !== CHECK_KEY && key !== INSTALL_KEY) return refused(place(at.declaration(block, key), `unknown key '${key}'`))
+    if (key !== CHECK_KEY && key !== CHECKS_KEY && key !== INSTALL_KEY) {
+      return refused(place(at.declaration(block, key), `unknown key '${key}'`))
+    }
   }
   if (!has(table, INSTALL_KEY)) return refused(place(at.header(block), 'missing install'))
-  const install = stringValue(table[INSTALL_KEY])
-  if (install === null) return refused(place(at.declaration(block, INSTALL_KEY), 'install must be a string'))
-  if (!has(table, CHECK_KEY)) return refused(place(at.header(block), 'missing check'))
-  const checkTable = tableValue(table[CHECK_KEY])
-  if (checkTable === null) return refused(place(at.declaration(block, CHECK_KEY), 'check must be an inline table'))
-  const check = decodeCheck(checkTable, block, at)
-  if (!check.ok) return check
-  return { ok: true, value: { harness, check: check.value, install } }
+  const install = decodeInstall(table[INSTALL_KEY], block, at)
+  if (!install.ok) return install
+  if (has(table, CHECK_KEY) && has(table, CHECKS_KEY)) {
+    return refused(place(at.declaration(block, CHECKS_KEY), 'an entry holds check or checks, not both'))
+  }
+  if (has(table, CHECK_KEY)) {
+    // `check` is the one-element spelling: an older file keeps loading, and the parser reads the
+    // same list either way.
+    const checkTable = tableValue(table[CHECK_KEY])
+    if (checkTable === null) return refused(place(at.declaration(block, CHECK_KEY), 'check must be an inline table'))
+    const check = decodeCheck(checkTable, block, at)
+    if (!check.ok) return check
+    return { ok: true, value: { harness, checks: [check.value], install: install.value } }
+  }
+  if (!has(table, CHECKS_KEY)) return refused(place(at.header(block), 'missing check'))
+  const checksList = z.array(TOML_TABLE).safeParse(table[CHECKS_KEY])
+  if (!checksList.success) {
+    return refused(place(at.declaration(block, CHECKS_KEY), 'checks must be an array of tables'))
+  }
+  if (checksList.data.length === 0) return refused(place(at.declaration(block, CHECKS_KEY), 'checks is empty'))
+  const checks: Check[] = []
+  for (const checkTable of checksList.data) {
+    const check = decodeCheck(checkTable, block, at)
+    if (!check.ok) return check
+    checks.push(check.value)
+  }
+  return { ok: true, value: { harness, checks, install: install.value } }
+}
+
+// `install` is the one command ACM ever executes, and it is either spelled in the file, a
+// Payload, or a Section write: `{ payload = "<path>" [, args = [ … ]] }` or
+// `{ file = "<native file>", section = "<payload>" }`. The set of keys is closed the way a Check's
+// predicates are, so a shape the parser does not understand refuses the file rather than being
+// half-read.
+function decodeInstall(
+  value: EnvironmentValue | undefined,
+  block: readonly string[],
+  at: SourceIndex,
+): Decoded<InstallCommand> {
+  const asString = stringValue(value)
+  if (asString !== null) {
+    // An empty command is a Provision that says nothing to do, which is a declaration the file does
+    // not mean: every other declared string refuses empty, and an empty one spawns a shell that
+    // succeeds at nothing.
+    if (asString === '') return refused(place(at.declaration(block, INSTALL_KEY), 'install is empty'))
+    return { ok: true, value: asString }
+  }
+  const table = tableValue(value)
+  if (table === null) return refused(place(at.declaration(block, INSTALL_KEY), 'install must be a string or a table'))
+  for (const key of Object.keys(table)) {
+    if (key !== PAYLOAD_KEY && key !== ARGS_KEY && key !== FILE_KEY && key !== SECTION_KEY) {
+      return refused(place(at.declaration(block, key), `unknown install key '${key}'`))
+    }
+  }
+  // The Section shape is `{ file, section }`, nothing beside it: a Payload beside it contradicts,
+  // and arguments have no Payload to reach.
+  if (has(table, FILE_KEY)) {
+    const beside = Object.keys(table).find((key) => key !== FILE_KEY && key !== SECTION_KEY)
+    if (beside !== undefined) {
+      return refused(place(at.declaration(block, beside), `a section install holds file and section, not ${beside}`))
+    }
+    if (!has(table, SECTION_KEY)) return refused(place(at.declaration(block, INSTALL_KEY), 'install has no section'))
+    const file = stringValue(table[FILE_KEY])
+    if (file === null) return refused(place(at.declaration(block, FILE_KEY), 'file must be a string'))
+    if (file === '') return refused(place(at.declaration(block, FILE_KEY), 'file is empty'))
+    const section = stringValue(table[SECTION_KEY])
+    if (section === null) return refused(place(at.declaration(block, SECTION_KEY), 'section must be a string'))
+    if (section === '') return refused(place(at.declaration(block, SECTION_KEY), 'section is empty'))
+    return { ok: true, value: { file, section } }
+  }
+  if (has(table, SECTION_KEY)) return refused(place(at.declaration(block, SECTION_KEY), 'section needs a file'))
+  if (!has(table, PAYLOAD_KEY)) return refused(place(at.declaration(block, INSTALL_KEY), 'install has no payload'))
+  const payload = stringValue(table[PAYLOAD_KEY])
+  if (payload === null) return refused(place(at.declaration(block, PAYLOAD_KEY), 'payload must be a string'))
+  if (payload === '') return refused(place(at.declaration(block, PAYLOAD_KEY), 'payload is empty'))
+  if (!has(table, ARGS_KEY)) return { ok: true, value: { payload } }
+  const args = stringList(table[ARGS_KEY])
+  if (args === null) return refused(place(at.declaration(block, ARGS_KEY), 'args must be an array of strings'))
+  return { ok: true, value: { payload, args } }
 }
 
 function decodeProvision(name: string, table: EnvironmentTable, at: SourceIndex): Decoded<ProvisionDeclaration> {

@@ -12,6 +12,54 @@ export function formatOf(file: string): NativeFormat {
   return file.endsWith('.toml') ? 'toml' : 'json'
 }
 
+// One segment of a pointer: a key spelled literally, or an array element an unquoted numeric segment
+// indexes. The same spelling serves a JSON member and a TOML dotted key, because the format still
+// comes from the file's extension.
+export type PointerSegment = { kind: 'key'; name: string } | { kind: 'index'; index: number }
+
+// The one spelling of a pointer, shared by the reader and the validator: a segment in double quotes
+// is a key spelled literally (dots and all), an unquoted all-digit segment indexes an array element,
+// and any other unquoted segment is a key. Whitespace is skipped wherever a TOML table header may
+// carry it, because the writer reads headers with this same splitter. Anything else refuses — an
+// address ACM cannot spell must never answer for a value.
+export function splitPointer(pointer: string): PointerSegment[] {
+  const segments: PointerSegment[] = []
+  let at = 0
+  let segmentOwed = false
+  for (;;) {
+    while (at < pointer.length && (pointer[at] === ' ' || pointer[at] === '\t')) at += 1
+    if (at >= pointer.length) {
+      if (segmentOwed) throw new Error('a pointer segment is empty')
+      if (segments.length === 0) throw new Error('a pointer has no segments')
+      return segments
+    }
+    if (pointer[at] === '.') throw new Error('a pointer segment is empty')
+    const quoted = /^"((?:[^"\\]|\\.)*)"/.exec(pointer.slice(at))
+    if (quoted !== null) {
+      try {
+        segments.push({ kind: 'key', name: JSON.parse(`"${quoted[1]}"`) })
+      } catch {
+        throw new Error('a quoted segment cannot be read')
+      }
+      at += quoted[0].length
+    } else if (pointer[at] === '"') {
+      throw new Error('an unterminated quote')
+    } else {
+      const bare = /^[A-Za-z0-9_-]+/.exec(pointer.slice(at))
+      if (bare === null) throw new Error(`'${pointer[at]}' cannot start a pointer segment`)
+      const name = bare[0]
+      at += name.length
+      // `"0"` spells the key named 0; the bare spelling is the index.
+      segments.push(/^\d+$/.test(name) ? { kind: 'index', index: Number(name) } : { kind: 'key', name })
+    }
+    while (at < pointer.length && (pointer[at] === ' ' || pointer[at] === '\t')) at += 1
+    if (at >= pointer.length) return segments
+    if (pointer[at] !== '.') throw new Error('a dot or the end was expected after a segment')
+    at += 1
+    segmentOwed = true
+  }
+}
+
 // One pointer write, applied to the text as it stands now: each write re-reads the document the
 // previous one produced, because an inserted parent moves every address below it.
 export function writePointer(
@@ -43,14 +91,22 @@ export function parses(text: string, format: NativeFormat): boolean {
 }
 
 // One address read by the same reader a write walks: the format comes from the extension, a JSON
-// member and a TOML key are both one segment, and an address the writer could not create is missing
-// here too. `invalid` is a document nothing could be read from, which is never an absence.
+// member and a TOML key are both one segment, a numeric segment indexes an array element, and an
+// address the writer could not create is missing here too. `invalid` is a document nothing could
+// be read from or a pointer that cannot be spelled, which is never an absence.
 export type PointerRead =
   | { kind: 'found'; value: NativeValue }
   | { kind: 'missing' }
   | { kind: 'invalid'; reason: string }
 
-export function readPointer(text: string, format: NativeFormat, segments: string[]): PointerRead {
+export function readPointer(text: string, format: NativeFormat, pointer: string): PointerRead {
+  let segments: PointerSegment[]
+  try {
+    segments = splitPointer(pointer)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    return { kind: 'invalid', reason: `pointer '${pointer}' cannot be spelled: ${reason}` }
+  }
   try {
     return format === 'toml' ? readToml(text, segments) : readJson(text, segments)
   } catch (error) {
@@ -60,31 +116,37 @@ export function readPointer(text: string, format: NativeFormat, segments: string
   }
 }
 
-function readJson(text: string, segments: string[]): PointerRead {
-  let node: JsonNode = parseJsonDocument(text)
+// One walk for both formats: a key segment reads a member, an index segment reads an element, and
+// either below a node of the wrong kind is as missing as one the document does not hold.
+function readDocument(document: NativeValue, segments: PointerSegment[]): PointerRead {
+  let node: NativeValue = document
   for (const segment of segments) {
-    if (node.kind !== 'object') return { kind: 'missing' }
-    const member = node.members.get(segment)
+    if (segment.kind === 'index') {
+      if (!Array.isArray(node)) return { kind: 'missing' }
+      const element = node[segment.index]
+      if (element === undefined) return { kind: 'missing' }
+      node = element
+      continue
+    }
+    const object = nativeObjectSchema.safeParse(node)
+    if (!object.success) return { kind: 'missing' }
+    const member = object.data[segment.name]
     if (member === undefined) return { kind: 'missing' }
-    node = member.value
+    node = member
   }
-  return { kind: 'found', value: node.value }
+  return { kind: 'found', value: node }
 }
 
-function readToml(text: string, segments: string[]): PointerRead {
+function readJson(text: string, segments: PointerSegment[]): PointerRead {
+  return readDocument(parseJsonDocument(text).value, segments)
+}
+
+function readToml(text: string, segments: PointerSegment[]): PointerRead {
   const document = nativeObjectSchema.safeParse(parseToml(text))
   if (!document.success) {
     return { kind: 'invalid', reason: 'a value outside strings, numbers, booleans, arrays, and tables' }
   }
-  let node: NativeValue = document.data
-  for (const segment of segments) {
-    const object = nativeObjectSchema.safeParse(node)
-    if (!object.success) return { kind: 'missing' }
-    const next = object.data[segment]
-    if (next === undefined) return { kind: 'missing' }
-    node = next
-  }
-  return { kind: 'found', value: node }
+  return readDocument(document.data, segments)
 }
 
 interface JsonObject {
@@ -329,20 +391,16 @@ function tomlTables(lines: string[]): TomlTable[] {
     const header = /^\s*\[([^[\]]+)\]/.exec(line)
     if (header === null) continue
     if (open !== undefined) open.bodyEnd = index - 1
-    open = { path: parseTomlPath(header[1] ?? ''), header: index, bodyStart: index + 1, bodyEnd: lines.length - 1 }
+    open = { path: headerNames(header[1] ?? ''), header: index, bodyStart: index + 1, bodyEnd: lines.length - 1 }
     tables.push(open)
   }
   return tables
 }
 
-// The segments a table header names, unquoted: `mcp_servers."my.server"` is two of them.
-function parseTomlPath(path: string): string[] {
-  const segments: string[] = []
-  const token = /(?:"((?:[^"\\]|\\.)*)"|([A-Za-z0-9_-]+))/g
-  for (const match of path.matchAll(token)) {
-    segments.push(match[1] === undefined ? (match[2] ?? '') : JSON.parse(`"${match[1]}"`))
-  }
-  return segments
+// The segments a table header names, as the names a write compares: a header is always keys, so a
+// digit spelled bare there is the key named 0, not an array element.
+function headerNames(path: string): string[] {
+  return splitPointer(path).map((segment) => (segment.kind === 'index' ? String(segment.index) : segment.name))
 }
 
 function writeToml(text: string, segments: string[], value: NativeValue): EditResult {

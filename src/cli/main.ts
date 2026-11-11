@@ -23,11 +23,11 @@ const USAGE = `usage: acm <command> [--project-root <dir>]
 
   read <harness> [tier]  print what that harness declares at its native paths, secret-free
 
-  install [--dry-run] [--force] [--only <name>]... [--tier <tier>]
+  install [--dry-run] [--force] [--only <name|tag>]... [--tier <tier>]
                     run every Install command whose Presence is not present
                     --dry-run  print the preview and stop (the default when stdin is not a TTY)
                     --force    run even what is already present
-                    --only     restrict the run to the named Provision; repeatable
+                    --only     restrict the run to Provisions with that name or tag; repeatable
                     --tier     restrict the run to one tier
 
   mcp serve  speak the MCP protocol over stdin/stdout
@@ -164,7 +164,7 @@ function install(input: string[]): number {
     if (arg === '--only') {
       const value = rest[at + 1]
       if (value === undefined || value.startsWith('--')) {
-        process.stderr.write('--only needs a Provision name\n')
+        process.stderr.write('--only needs a Provision name or a tag\n')
         return 1
       }
       only.push(value)

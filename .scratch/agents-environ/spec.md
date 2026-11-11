@@ -121,8 +121,8 @@ unstored input for authoring). Everything else in the mirror engine is deleted, 
     Provision does not stop the other thirty.
 35. As a human, I want a non-zero exit status when anything failed or stayed absent, so that a wrapper
     script and my own eye agree about success.
-36. As a human, I want `--only <name>` to restrict a run to named Provisions, so that I can fix one
-    thing without re-checking the world.
+36. As a human, I want `--only <name>` to restrict a run to Provisions of that name or tag, so
+    that I can fix one thing without re-checking the world.
 37. As a human, I want `--force` to run even what is already `present`, so that a repaired command can
     be re-applied.
 38. As a human, I want a summary at the end naming what was already present, what ran, what failed,
@@ -270,9 +270,10 @@ never relabelled as a project declaration.
 
 ### Presence
 
-`Presence` is `present | absent | unknown`, with an optional `detail` explaining an `unknown`
-(unreadable file, unparseable file, missing binary directory, invalid regex). Checks read; they never
-spawn. `onPath` walks `PATH` and requires a regular executable file. `pointer` presence means a value
+`Presence` is `present | absent | unknown`, with an optional `detail`: the reason a Check could not be
+answered (unreadable file, unparseable file, missing binary directory, invalid regex) or, for an
+entry that declared several Checks, every Check that did not answer `present` named with its own
+reason. Checks read; they never spawn. `onPath` walks `PATH` and requires a regular executable file. `pointer` presence means a value
 exists at that address; with `equals`, the value must also match by deep equality; with `includes`,
 the array at that address must hold an element deeply equal to it. An entry's Presence folds its
 Checks: any `absent` answers `absent`, otherwise any `unknown` answers `unknown`, otherwise
@@ -291,12 +292,17 @@ Tier, and command, then starts the commands whose Presence is not `present` (or 
   needs no executable bit. A Payload that cannot be read fails its entry without spawning anything.
 - A Section write replaces the text between a Section's heading and the next `## ` heading, creates
   the file when it is absent, and appends at end of file when the Section is. Nothing outside the
-  Section is touched, and the comparison strips trailing blank lines from both sides.
+  Section is touched, and the comparison strips trailing blank lines from both sides. A Payload whose
+  heading is not its first content, or that carries a second heading, is refused rather than
+  written: the text outside the span it owns would be dropped or duplicated on the next run, so the
+  write could never converge.
 - A failing command is recorded and the run continues. The exit status is non-zero if any command
-  failed or any Presence is still not `present` afterwards.
+  failed or any Presence is still not `present` afterwards. A dry run runs nothing and has no
+  afterwards: it exits zero unless an environment file was refused, which leaves the answer partial.
 - No per-command timeout in this slice: a hung command holds the run until interrupted.
   `shortcut: no per-command timeout; add one when a real command hangs.`
-- `--dry-run` is the default when stdin is not a TTY. `--only` and `--tier` filter; `--force` re-runs.
+- `--dry-run` is the default when stdin is not a TTY. `--only` (a Provision name or a tag) and
+  `--tier` filter; `--force` re-runs.
 - Presence is re-evaluated after each command, and that answer is what the run records. A command that
   half-worked reports `present` if its Checks pass. The recorded command is what ran, spelled: the
   Payload path followed by its arguments when there is one.

@@ -7,6 +7,7 @@ import type { EngineConfig } from '../engine/config.ts'
 import { digestOfBytes } from '../engine/digest.ts'
 import { defineProvision, readNativeConfig, readStatus } from './service.ts'
 import type { DefineOutcome, DefineRequest } from './service.ts'
+import type { NativeValue } from '../engine/native-value.ts'
 import type { Refusal } from './types.ts'
 
 // Seam A: a definition against a fixture home and a fixture project root, and then the rows `acm
@@ -119,7 +120,7 @@ test('a definition is a row status reports, with the Presence its Check answers'
     {
       name: 'rtk',
       tags: [],
-      harnesses: [{ harness: 'pi', tier: 'project-local', presence: 'present', detail: null }],
+      harnesses: [{ harness: 'pi', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'present', detail: null }],
     },
   ])
 })
@@ -195,8 +196,14 @@ install = "pi plugin install zeta"
   assert.deepEqual(
     readStatus({ name: 'serena' }, f.config).provisions.flatMap((row) => row.harnesses),
     [
-      { harness: 'codex', tier: 'project-local', presence: 'present', detail: null },
-      { harness: 'pi', tier: 'project-local', presence: 'absent', detail: null },
+      { harness: 'codex', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'present', detail: null },
+      {
+        harness: 'pi',
+        tier: 'project-local',
+        source: path.join(f.projectRoot, 'agents_environ.local.toml'),
+        presence: 'absent',
+        detail: `${path.join(f.home, '.pi', 'agent', 'mcp.json')} is not there`,
+      },
     ],
   )
 })
@@ -225,6 +232,89 @@ test('a same-key definition replaces the Install command the entry already carri
   // The sibling harness entry and every other Provision are the bytes the human wrote.
   assert.match(written, /^install = "python3 scripts\/merge-codex-mcp\.py serena"$/m)
   assert.match(written, /^install = "pi plugin install zeta"$/m)
+})
+
+// A same-key write keeps the entry's Check spelling: a singular Check replaces a `checks` list with
+// that list's one element, so the file never holds both keys, which the parser refuses.
+test('a singular Check replaces a checks list with its one element, keeping the list spelling', () => {
+  const f = fixture()
+  write(
+    localFile(f),
+    `version = 1
+
+[provision.serena.pi]
+checks = [{ file = "~/.pi/mcp.json", contains = "old" }, { file = "~/.pi/other.json" }]
+install = "old command"
+`,
+  )
+  write(path.join(f.home, '.pi', 'mcp.json'), '{ "mcpServers": {} }')
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        check: { file: '~/.pi/mcp.json', contains: 'new' },
+        install: 'new command',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.serena.pi')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.serena.pi]
+checks = [{ file = "~/.pi/mcp.json", contains = "new" }]
+install = "new command"
+`,
+  )
+  // The replacement is the definition in force: status folds the one Check that landed.
+  const rows = readStatus({}, f.config).provisions.flatMap((row) => row.harnesses)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0]?.presence, 'absent')
+  assert.match(rows[0]?.detail ?? '', /does not contain new/)
+})
+
+// The other direction: a one-element checks list replaces a singular `check` with that element,
+// keeping the singular spelling the entry already had.
+test('a one-element checks list replaces a singular check, keeping the singular spelling', () => {
+  const f = fixture()
+  write(
+    localFile(f),
+    `version = 1
+
+[provision.serena.pi]
+check = { file = "~/.pi/mcp.json", contains = "old" }
+install = "old command"
+`,
+  )
+  write(path.join(f.home, '.pi', 'mcp.json'), '{ "mcpServers": {} }')
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        checks: [{ file: '~/.pi/mcp.json', contains: 'new' }],
+        install: 'new command',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.serena.pi')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.serena.pi]
+check = { file = "~/.pi/mcp.json", contains = "new" }
+install = "new command"
+`,
+  )
+  const rows = readStatus({}, f.config).provisions.flatMap((row) => row.harnesses)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0]?.presence, 'absent')
+  assert.match(rows[0]?.detail ?? '', /does not contain new/)
 })
 
 test('an unreviewed definition lands in the gitignored file, and an explicit tier writes that file', () => {
@@ -359,6 +449,52 @@ test('a definition never evaluates its Check: no Presence is computed and nothin
   assert.match(entry?.detail ?? '', /invalid pattern \(/)
 })
 
+// A definition that declares several Checks writes the list spelling, and status reads the fold of
+// what landed rather than the request's own word for it.
+test('a definition with a checks list writes checks, and status folds the Checks', () => {
+  const f = fixture()
+  write(path.join(f.home, 'AGENTS.md'), '# AGENTS\n\n@RTK\n')
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'rtk',
+        harness: 'pi',
+        checks: [
+          { file: '~/AGENTS.md', contains: '^@RTK' },
+          { file: '~/AGENTS.md', contains: '^## Output style' },
+        ],
+        install: 'npx rtk init --quiet',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.rtk.pi')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.rtk.pi]
+checks = [{ file = "~/AGENTS.md", contains = "^@RTK" }, { file = "~/AGENTS.md", contains = "^## Output style" }]
+install = "npx rtk init --quiet"
+`,
+  )
+  assert.deepEqual(readStatus({}, f.config).provisions, [
+    {
+      name: 'rtk',
+      tags: [],
+      harnesses: [
+        {
+          harness: 'pi',
+          tier: 'project-local',
+          source: path.join(f.projectRoot, 'agents_environ.local.toml'),
+          presence: 'absent',
+          detail: `${path.join(f.home, 'AGENTS.md')} does not contain ^## Output style`,
+        },
+      ],
+    },
+  ])
+})
+
 test('a definition adds tags to a Provision it creates, and leaves a declared list alone', () => {
   const f = fixture()
   const outcome = defined(
@@ -475,10 +611,113 @@ install = "opencode mcp add serena"
       name: 'serena',
       tags: ['mcp'],
       harnesses: [
-        { harness: 'pi', tier: 'project', presence: 'present', detail: null },
-        { harness: 'codex', tier: 'project', presence: 'present', detail: null },
-        { harness: 'opencode', tier: 'project-local', presence: 'present', detail: null },
+        { harness: 'pi', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'present', detail: null },
+        { harness: 'codex', tier: 'project', source: path.join(f.projectRoot, 'agents_environ.toml'), presence: 'present', detail: null },
+        { harness: 'opencode', tier: 'project-local', source: path.join(f.projectRoot, 'agents_environ.local.toml'), presence: 'present', detail: null },
       ],
     },
   ])
 })
+
+test('a definition with a payload install writes the table form the file spells, and it loads', () => {
+  const f = fixture()
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'codex',
+        check: { file: '~/.codex/config.toml', contains: 'serena' },
+        install: { payload: 'install/codex-mcp.sh', args: ['serena'] },
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.serena.codex')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.serena.codex]
+check = { file = "~/.codex/config.toml", contains = "serena" }
+install = { payload = "install/codex-mcp.sh", args = ["serena"] }
+`,
+  )
+  // The written form is one the loader accepts: the entry is read back with its Presence, not
+  // reported as a file that refuses to load.
+  const status = readStatus({ name: 'serena' }, f.config)
+  assert.equal(status.refusals.length, 0)
+  assert.equal(status.provisions[0].harnesses[0].presence, 'absent')
+})
+
+test('a definition with a section install writes the table form the file spells, and it loads', () => {
+  const f = fixture()
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'i-have-adhd',
+        harness: 'pi',
+        check: { file: '~/.pi/agent/AGENTS.md', section: 'instructions/output-style.md' },
+        install: { file: '~/.pi/agent/AGENTS.md', section: 'instructions/output-style.md' },
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.i-have-adhd.pi')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.i-have-adhd.pi]
+check = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+`,
+  )
+  // The written form is one the loader accepts: the entry is read back with its Presence, not
+  // reported as a file that refuses to load.
+  const status = readStatus({ name: 'i-have-adhd' }, f.config)
+  assert.equal(status.refusals.length, 0)
+  assert.equal(status.provisions[0].harnesses[0].presence, 'absent')
+})
+
+// A Payload shape the parser refuses is refused with that reason, and the file is left as it was:
+// the write never reaches disk.
+test('a payload definition the loader would refuse is refused with that reason and writes nothing', () => {
+  const f = fixture()
+  write(localFile(f), REVIEWED)
+  const notAString = refused(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        check: { file: '~/.pi/agent/mcp.json' },
+        install: brokenInstall({ payload: 1 }),
+      },
+      f.config,
+    ),
+  )
+  assert.equal(notAString.reason, 'payload must be a string')
+  assert.equal(read(localFile(f)), REVIEWED, 'the refused definition changed the file')
+
+  const missing = refused(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        check: { file: '~/.pi/agent/mcp.json' },
+        install: brokenInstall({}),
+      },
+      f.config,
+    ),
+  )
+  assert.equal(missing.reason, 'install has no payload')
+  assert.equal(read(localFile(f)), REVIEWED, 'the refused definition changed the file')
+})
+
+// A definition can name an Install shape the file parser must refuse, the way a loose client could:
+// the request type will not spell it, so the test smuggles one past it on purpose. The parameter is
+// the file's own value domain, which is what a boundary would have handed over.
+function brokenInstall(value: Record<string, NativeValue>): DefineRequest['install'] {
+  // SAFETY: the test deliberately names a shape the file parser must refuse.
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- the broken shape is the point of the test
+  return value as unknown as DefineRequest['install']
+}

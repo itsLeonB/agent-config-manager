@@ -70,11 +70,13 @@ decisions.
   shared by every project — while the **project root** is the working directory the harness or
   shell opened `acm` in (or `ACM_PROJECT_ROOT` / `CLAUDE_PROJECT_DIR`, canonicalised, never walked
   up), so one installed `acm` reads whatever repository it was started in. `src/environ/` holds the
-  declared environment: `types.ts` is its vocabulary — the closed Tier and Presence lists, the four
+  declared environment: `types.ts` is its vocabulary — the closed Tier and Presence lists, the six
   Check predicates, the rows, and one Run — `parse.ts` validates one environment file totally against
   a closed schema and refuses the whole file with a line and column, `check.ts` evaluates a Check over
   the bytes it names (a Check reads and never spawns; an unreadable file answers `unknown`, never
-  `absent`), `loader.ts` is the only module that knows where a tier's file lives and what its root is
+  `absent`), `section.ts` is the one place that decides where a Section starts and ends — the Check
+  that compares one and the install that rewrites one both ask it — `loader.ts` is the only module
+  that knows where a tier's file lives and what its root is
   — `~/agents_environ.toml`, the committed `<project>/agents_environ.toml`, and the gitignored
   `<project>/agents_environ.local.toml`, merged per `(provision, harness)` so the nearer file replaces
   the farther one whole, `tags` included — `runner.ts` is the install run, the only place a command is

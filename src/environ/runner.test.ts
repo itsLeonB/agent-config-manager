@@ -6,7 +6,7 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { EngineConfig } from '../engine/config.ts'
-import { installRun } from './service.ts'
+import { installRun, latestRuns } from './service.ts'
 import type { InstallOptions, InstallOutcome } from './service.ts'
 
 // Seam A: one run against a fixture. A temp home, a temp project root, a hand-written environment
@@ -67,6 +67,10 @@ function logLines(f: Fixture): string[] {
 
 function sawDirectory(f: Fixture, marker: string): string {
   return fs.readFileSync(`${f.log}.${marker}.cwd`, 'utf8').trim()
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 interface Observation {
@@ -234,6 +238,28 @@ install = "echo two > two.marker"
   )
 })
 
+// Several Checks: one failing Check is enough to run the entry, and afterwards every Check has to
+// pass for the entry to be present — the run reads the fold, not one Check of its choosing.
+test('an entry with several Checks runs when any Check fails, and is present when all of them pass', () => {
+  const f = fixture()
+  file(path.join(f.home, 'first.marker'), 'one\n')
+  environment(f, `version = 1
+
+[provision.two-things.pi]
+checks = [
+  { file = "~/first.marker", contains = "one" },
+  { file = "~/second.marker", contains = "two" },
+]
+install = "echo one > first.marker; echo two > second.marker"
+`)
+  const { printed, outcome } = run(f)
+  assert.match(printed, /^  two-things\s+pi\s+user\s+absent$/m)
+  assert.equal(fs.readFileSync(path.join(f.home, 'second.marker'), 'utf8'), 'two\n')
+  assert.equal(outcome.entries[0].after, 'present')
+  assert.match(printed, /^summary: 1 entry, 0 already present, 1 ran, 0 failed, 0 still absent$/m)
+  assert.equal(outcome.exitCode, 0)
+})
+
 test('Presence is re-evaluated after the command, so a half-worked command that passes its Check is present', () => {
   const f = fixture()
   environment(f, `version = 1
@@ -291,14 +317,81 @@ install = "${command} two; echo x > two.marker"
   const narrowed = run(f, { only: ['one'] })
   assert.deepEqual(logLines(f), ['one'])
   assert.match(narrowed.printed, /^preview: 1 entry, 1 to run, 0 already present$/m)
+  assert.match(narrowed.printed, /^selection: --only one$/m)
   assert.equal(narrowed.outcome.exitCode, 0)
 
   fs.rmSync(f.log)
   // A typo is a typo: running the rest would look like the named fix succeeded.
   const refused = run(f, { only: ['nope'] })
-  assert.match(refused.printed, /^no Provision named nope$/m)
+  assert.match(refused.printed, /^no Provision named or tagged nope \(each tried as a name and as a tag\)$/m)
   assert.equal(fs.existsSync(f.log), false)
   assert.equal(refused.outcome.exitCode, 1)
+})
+
+test('--only selects a tag as well as a name, and the preview names the selection', () => {
+  const f = fixture()
+  const command = recorder(f)
+  environment(f, `version = 1
+
+[provision.one]
+tags = ["alpha"]
+
+[provision.one.pi]
+check   = { file = "~/one.marker" }
+install = "${command} one-pi; echo x > one.marker"
+
+[provision.one.codex]
+check   = { file = "~/one-codex.marker" }
+install = "${command} one-codex; echo x > one-codex.marker"
+
+[provision.two]
+tags = ["shared"]
+
+[provision.two.pi]
+check   = { file = "~/two.marker" }
+install = "${command} two; echo x > two.marker"
+
+[provision.three.pi]
+check   = { file = "~/three.marker" }
+install = "${command} three; echo x > three.marker"
+`)
+
+  // A tag selects every entry of the Provision that carries it, across harnesses.
+  const byTag = run(f, { only: ['alpha'] })
+  assert.deepEqual(logLines(f), ['one-pi', 'one-codex'])
+  assert.match(byTag.printed, /^selection: --only alpha$/m)
+  assert.match(byTag.printed, /^preview: 2 entries, 2 to run, 0 already present$/m)
+  assert.equal(byTag.outcome.exitCode, 0)
+
+  fs.rmSync(f.log)
+  // A tag and a name in one call select their union.
+  const both = run(f, { only: ['shared', 'three'] })
+  assert.deepEqual(logLines(f), ['two', 'three'])
+  assert.match(both.printed, /^selection: --only shared, three$/m)
+  assert.equal(both.outcome.exitCode, 0)
+})
+
+test('--only leaves a present entry it selects by tag alone, unless --force', () => {
+  const f = fixture()
+  const command = recorder(f)
+  file(path.join(f.home, '.zshrc'), 'export READY=1\n')
+  environment(f, `version = 1
+
+[provision.done]
+tags = ["shared"]
+
+[provision.done.opencode]
+check   = { file = "~/.zshrc", contains = "READY" }
+install = "${command} done"
+`)
+  const skipped = run(f, { only: ['shared'] })
+  assert.deepEqual(logLines(f), [])
+  assert.match(skipped.printed, /^preview: 1 entry, 0 to run, 1 already present$/m)
+  assert.equal(skipped.outcome.exitCode, 0)
+
+  const forced = run(f, { only: ['shared'], force: true })
+  assert.deepEqual(logLines(f), ['done'])
+  assert.match(forced.printed, /^  ran: done \(opencode\) exit 0$/m)
 })
 
 test('a run never writes an environment file', () => {
@@ -367,4 +460,299 @@ install = "./reads.sh"
   assert.match(out, /failed: asks \(pi\) exit 3/)
   // The command saw end of input rather than a question it could ask.
   assert.deepEqual(logLines(f), ['eof'])
+})
+
+// A Payload is read at run time and runs as `sh <payload> <args…>`: the declared path resolves
+// against the tier root, the arguments arrive as argv and are never part of the text, and no
+// executable bit is needed.
+test('a Payload runs as sh payload args, and its arguments arrive as argv', () => {
+  const f = fixture()
+  // No chmod anywhere in this test: the shell reads the text, so the executable bit is not part of
+  // the contract.
+  file(
+    path.join(f.home, 'payloads', 'with-args.sh'),
+    '#!/bin/sh\nprintf "%s\\n" "$@" > argv.dump\ntouch payload.marker\n',
+  )
+  environment(f, `version = 1
+
+[provision.payloaded.pi]
+check   = { file = "~/payload.marker" }
+install = { payload = "payloads/with-args.sh", args = ["one", "two"] }
+`)
+  const { printed, outcome } = run(f)
+  const resolved = path.join(f.home, 'payloads', 'with-args.sh')
+  // The preview is the command that will run, spelled: the payload path followed by its arguments.
+  assert.match(printed, new RegExp(`^    \\$ sh ${escapeRegex(resolved)} one two$`, 'm'))
+  // The payload's text reached the shell, and its arguments reached the payload as argv.
+  assert.equal(fs.readFileSync(path.join(f.home, 'argv.dump'), 'utf8'), 'one\ntwo\n')
+  assert.equal(outcome.entries[0].after, 'present')
+  assert.equal(outcome.exitCode, 0)
+  // The record holds the same spelling — the path followed by its arguments — never the bytes the
+  // file held.
+  const recorded = latestRuns(f.config)
+  assert.equal(recorded.length, 1)
+  assert.equal(recorded[0].command, `sh ${resolved} one two`)
+  assert.equal(recorded[0].command.includes('printf'), false)
+  assert.equal(recorded[0].exitCode, 0)
+  assert.equal(recorded[0].presence, 'present')
+})
+
+// One argument that holds a space or a quote is still one argv word: the spelling is quoted the way
+// a shell reads it back, so the preview stays the command that runs.
+test('a Payload argument with a space or a quote arrives as one argv word', () => {
+  const f = fixture()
+  file(
+    path.join(f.home, 'payloads', 'argv.sh'),
+    '#!/bin/sh\nprintf "%s\\n" "$@" > argv.dump\ntouch payload.marker\n',
+  )
+  environment(f, `version = 1
+
+[provision.payloaded.pi]
+check   = { file = "~/payload.marker" }
+install = { payload = "payloads/argv.sh", args = ["a b", "it's"] }
+`)
+  const { printed } = run(f)
+  // The preview is the same quoted spelling the shell is handed.
+  assert.match(printed, /'a b' 'it'\\''s'$/m)
+  assert.equal(fs.readFileSync(path.join(f.home, 'argv.dump'), 'utf8'), "a b\nit's\n")
+})
+
+// A Payload that cannot be read fails its entry without spawning anything, and the run goes on: the
+// Presence is still re-evaluated afterwards, and the row records the spelling with no exit code
+// because nothing ran.
+test('a Payload that cannot be read fails its entry and spawns nothing', () => {
+  const f = fixture()
+  environment(f, `version = 1
+
+[provision.gone.pi]
+check   = { file = "~/gone.marker" }
+install = { payload = "~/gone.sh" }
+
+[provision.after.pi]
+check   = { file = "~/after.marker" }
+install = "echo yes > after.marker"
+`)
+  const { printed, outcome } = run(f)
+  const resolved = path.join(f.home, 'gone.sh')
+  assert.match(printed, new RegExp(`^    \\$ sh ${escapeRegex(resolved)}$`, 'm'))
+  assert.match(printed, new RegExp(`failed: gone \\(pi\\) ${escapeRegex(resolved)} could not be read: `))
+  // The next entry still ran: a missing Payload is one broken entry, not a stopped run.
+  assert.equal(fs.readFileSync(path.join(f.home, 'after.marker'), 'utf8'), 'yes\n')
+  const gone = outcome.entries.find((entry) => entry.provision.name === 'gone')
+  assert.ok(gone !== undefined)
+  assert.equal(gone.attempted, true)
+  assert.equal(gone.commandExit, null)
+  assert.equal(gone.after, 'absent')
+  assert.equal(outcome.exitCode, 1)
+  const recorded = latestRuns(f.config)
+  const goneRun = recorded.find((entry) => entry.provision === 'gone')
+  assert.ok(goneRun !== undefined)
+  assert.equal(goneRun.command, `sh ${resolved}`)
+  assert.equal(goneRun.exitCode, null)
+  assert.equal(goneRun.presence, 'absent')
+})
+
+// A Section install writes the Payload's text where its `## ` heading names: the Section is
+// replaced in place, appended when it is missing, and the file created when that file is missing.
+// It never spawns, and every byte outside the Section is the byte it was.
+test('a Section install rewrites the drifted Section and leaves every other byte alone', () => {
+  const f = fixture()
+  const agents = path.join(f.home, '.pi', 'agent', 'AGENTS.md')
+  file(
+    agents,
+    '# AGENTS.md\n\n## Output style\n\nOld text that drifted.\n\n## Next section\n\nKeep me.\n\n```\n## Fenced heading stays\n```\n',
+  )
+  file(path.join(f.home, 'instructions', 'output-style.md'), '## Output style\n\nBe terse.\n')
+  environment(f, `version = 1
+
+[provision.i-have-adhd.pi]
+check   = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style.md" }
+`)
+  const { printed, outcome } = run(f)
+  assert.equal(
+    fs.readFileSync(agents, 'utf8'),
+    '# AGENTS.md\n\n## Output style\n\nBe terse.\n## Next section\n\nKeep me.\n\n```\n## Fenced heading stays\n```\n',
+  )
+  const resolved = path.join(f.home, 'instructions', 'output-style.md')
+  // The preview and the record spell the path pair, never the bytes the Payload holds.
+  assert.match(printed, new RegExp(`^    write ${escapeRegex(agents)} from ${escapeRegex(resolved)}$`, 'm'))
+  assert.match(printed, /^  ran: i-have-adhd \(pi\) exit 0$/m)
+  assert.equal(outcome.exitCode, 0)
+  assert.equal(outcome.entries[0].after, 'present')
+  const recorded = latestRuns(f.config)
+  assert.equal(recorded.length, 1)
+  assert.equal(recorded[0].command, `write ${agents} from ${resolved}`)
+  assert.equal(recorded[0].command.includes('Be terse'), false)
+  assert.equal(recorded[0].exitCode, 0)
+  assert.equal(recorded[0].presence, 'present')
+})
+
+test('a Section install appends the Section when it is missing and creates the file when that file is missing', () => {
+  const f = fixture()
+  file(path.join(f.home, 'style.md'), '## Output style\n\nBe terse.\n')
+  file(path.join(f.home, '.pi', 'agent', 'AGENTS.md'), '# AGENTS.md\n\n## Other\n\nKept.\n')
+  environment(f, `version = 1
+
+[provision.append.pi]
+check   = { file = "~/.pi/agent/AGENTS.md", section = "style.md" }
+install = { file = "~/.pi/agent/AGENTS.md", section = "style.md" }
+
+[provision.create.codex]
+check   = { file = "~/.codex/AGENTS.md", section = "style.md" }
+install = { file = "~/.codex/AGENTS.md", section = "style.md" }
+`)
+  const { outcome } = run(f)
+  assert.equal(
+    fs.readFileSync(path.join(f.home, '.pi', 'agent', 'AGENTS.md'), 'utf8'),
+    '# AGENTS.md\n\n## Other\n\nKept.\n## Output style\n\nBe terse.\n',
+  )
+  assert.equal(fs.readFileSync(path.join(f.home, '.codex', 'AGENTS.md'), 'utf8'), '## Output style\n\nBe terse.\n')
+  assert.deepEqual(
+    outcome.entries.map((entry) => entry.after),
+    ['present', 'present'],
+  )
+  assert.equal(outcome.exitCode, 0)
+})
+
+// The write is a function of the two files only, so the second write is byte-identical to the
+// first: no re-serialisation and nothing accumulated.
+test('a Section install is idempotent: writing twice leaves the same bytes', () => {
+  const f = fixture()
+  const agents = path.join(f.home, 'AGENTS.md')
+  file(agents, '# AGENTS.md\n\n## Output style\n\nOld.\n\n## Next\n\nTail.\n')
+  file(path.join(f.home, 'style.md'), '## Output style\n\nBe terse.\n')
+  environment(f, `version = 1
+
+[provision.idem.pi]
+check   = { file = "~/AGENTS.md", section = "style.md" }
+install = { file = "~/AGENTS.md", section = "style.md" }
+`)
+  const first = run(f)
+  const once = fs.readFileSync(agents, 'utf8')
+  const second = run(f, { force: true })
+  assert.equal(fs.readFileSync(agents, 'utf8'), once)
+  assert.equal(first.outcome.exitCode, 0)
+  assert.equal(second.outcome.exitCode, 0)
+})
+
+// A Payload whose last byte is not a newline still writes a whole Section: the writer terminates the
+// Payload before the next heading, so the foreign Section is byte-identical, the Check converges,
+// and a second run writes the same bytes.
+test('a Payload without a trailing newline writes a whole Section and converges', () => {
+  const f = fixture()
+  const agents = path.join(f.home, 'AGENTS.md')
+  const foreign = '## Next\n\nForeign bytes.\n'
+  file(agents, `# AGENTS.md\n\n## Output style\n\nOld.\n\n${foreign}`)
+  file(path.join(f.home, 'style.md'), '## Output style\n\nBe terse.')
+  environment(f, `version = 1
+
+[provision.trim.pi]
+check   = { file = "~/AGENTS.md", section = "style.md" }
+install = { file = "~/AGENTS.md", section = "style.md" }
+`)
+  const first = run(f)
+  assert.equal(fs.readFileSync(agents, 'utf8'), `# AGENTS.md\n\n## Output style\n\nBe terse.\n${foreign}`)
+  assert.equal(first.outcome.entries[0].after, 'present')
+  assert.equal(first.outcome.exitCode, 0)
+  const once = fs.readFileSync(agents, 'utf8')
+  const second = run(f, { force: true })
+  assert.equal(fs.readFileSync(agents, 'utf8'), once)
+  assert.equal(second.outcome.entries[0].after, 'present')
+  assert.equal(second.outcome.exitCode, 0)
+})
+
+test('a Section install restores a hand-edited Section and leaves the rest of the edit alone', () => {
+  const f = fixture()
+  const agents = path.join(f.home, 'AGENTS.md')
+  file(agents, '# AGENTS.md\n\n## Output style\n\nOld.\n\n## Next\n\nTail.\n')
+  file(path.join(f.home, 'style.md'), '## Output style\n\nBe terse.\n')
+  environment(f, `version = 1
+
+[provision.hand.pi]
+check   = { file = "~/AGENTS.md", section = "style.md" }
+install = { file = "~/AGENTS.md", section = "style.md" }
+`)
+  run(f)
+  // A human edits the Section and adds a sibling heading afterwards: the next run replaces only the
+  // Section and keeps the added heading byte for byte.
+  fs.writeFileSync(agents, '# AGENTS.md\n\n## Output style\n\nHuman words.\n\n## Hand added\n\nMine.\n')
+  const { outcome } = run(f)
+  assert.equal(fs.readFileSync(agents, 'utf8'), '# AGENTS.md\n\n## Output style\n\nBe terse.\n## Hand added\n\nMine.\n')
+  assert.equal(outcome.entries[0].after, 'present')
+  assert.equal(outcome.exitCode, 0)
+})
+
+test('a Section install whose Payload cannot be read fails its entry, records the failure, and the run goes on', () => {
+  const f = fixture()
+  environment(f, `version = 1
+
+[provision.gone.pi]
+check   = { file = "~/AGENTS.md", section = "~/gone-style.md" }
+install = { file = "~/AGENTS.md", section = "~/gone-style.md" }
+
+[provision.after.codex]
+check   = { file = "~/after.marker" }
+install = "echo yes > after.marker"
+`)
+  const { printed, outcome } = run(f)
+  const agents = path.join(f.home, 'AGENTS.md')
+  const resolved = path.join(f.home, 'gone-style.md')
+  assert.match(printed, new RegExp(`^    write ${escapeRegex(agents)} from ${escapeRegex(resolved)}$`, 'm'))
+  assert.match(printed, new RegExp(`failed: gone \\(pi\\) ${escapeRegex(resolved)} could not be read: `))
+  // The next entry still ran: a missing Payload is one broken entry, not a stopped run.
+  assert.equal(fs.readFileSync(path.join(f.home, 'after.marker'), 'utf8'), 'yes\n')
+  assert.equal(fs.existsSync(agents), false, 'the failed write created the file')
+  const gone = outcome.entries.find((entry) => entry.provision.name === 'gone')
+  assert.ok(gone !== undefined)
+  assert.equal(gone.attempted, true)
+  assert.equal(gone.commandExit, null)
+  assert.equal(gone.after, 'absent')
+  assert.equal(outcome.exitCode, 1)
+  const recorded = latestRuns(f.config)
+  const goneRun = recorded.find((entry) => entry.provision === 'gone')
+  assert.ok(goneRun !== undefined)
+  assert.equal(goneRun.command, `write ${agents} from ${resolved}`)
+  assert.equal(goneRun.exitCode, null)
+  assert.equal(goneRun.presence, 'absent')
+})
+
+test('a failure reason is printed on one line, whatever the file spelled', () => {
+  const f = fixture()
+  // A newline the environment file spelled as an escape reaches the reason through a path, and the
+  // summary is one line per entry: the sanitiser every other printed value uses runs over this one.
+  environment(f, `version = 1
+
+[provision.sneaky.pi]
+check   = { file = "~/never.marker" }
+install = { payload = "a\\nb.sh" }
+`)
+  const { printed } = run(f)
+  assert.match(printed, /failed: sneaky \(pi\) .*a\?b\.sh could not be read/)
+  assert.equal(printed.includes('a\nb.sh'), false, 'a raw line break reached the summary')
+})
+
+// The write replaces the span from the heading to the next one, so a Payload that reaches past its
+// own heading is one the write could never make converge: the text before the heading would land
+// outside the Section and be prepended again on every run. It fails here instead of half-writing.
+test('a Section install whose Payload starts before its heading fails and writes nothing', () => {
+  const f = fixture()
+  const payload = path.join(f.home, 'preamble-style.md')
+  file(payload, 'Some preamble.\n\n## Output style\n\nBe terse.\n')
+  const agents = path.join(f.home, 'AGENTS.md')
+  file(agents, '# Agents\n\n## Output style\n\nOld text.\n')
+  const before = fs.readFileSync(agents)
+  environment(f, `version = 1
+
+[provision.preamble.pi]
+check   = { file = "~/AGENTS.md", section = "~/preamble-style.md" }
+install = { file = "~/AGENTS.md", section = "~/preamble-style.md" }
+`)
+  const { printed, outcome } = run(f)
+  assert.match(printed, /has text before its '## ' heading, which a write would put outside the Section/)
+  // Nothing was written: the file is the byte it was, and the entry records no exit status.
+  assert.deepEqual(fs.readFileSync(agents), before)
+  assert.equal(outcome.entries[0].commandExit, null)
+  assert.equal(outcome.entries[0].after, 'unknown')
+  assert.equal(outcome.exitCode, 1)
 })
