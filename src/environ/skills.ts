@@ -219,18 +219,14 @@ export interface SkillsCommand {
 }
 
 export interface SkillsInstallOptions {
-  // `-g`/`--global`: install the user tier's lockfile instead of the project tier's.
   global?: boolean
-  // `-y`/`--yes`: print and run without asking.
   yes?: boolean
   dryRun?: boolean
 }
 
 // One `npx skills add` per source group: `npx -y skills@latest add <source> --skill <name>...
 // [--agent <harness>...] [-g] -y`. Groups keep first-seen source order and file order inside a
-// group. A tier with no declared harnesses omits `--agent` so the CLI detects installed harnesses
-// itself. The user groups run from the home directory with `-g`; the project groups run from the
-// Project root without it.
+// group; the tier's root is the caller's choice, passed in.
 export function skillsCommands(
   tier: EnvironmentTier,
   read: SkillsLockRead,
@@ -280,10 +276,9 @@ function runCommand(command: SkillsCommand, env: NodeJS.ProcessEnv): number | nu
   }
 }
 
-// `confirm` is the injected prompt: it receives the question line and answers whether the run
-// may proceed. The CLI passes a real TTY reader only when stdin is a terminal and neither `-y`
-// nor `--dry-run` was given; every other caller passes `undefined` and the run either runs
-// unasked (`-y`) or prints and stops (non-TTY). A declined answer or EOF runs nothing, exit 0.
+// `confirm` is the injected prompt: the CLI passes a real TTY reader only where asking is right,
+// so `undefined` already means a decided outcome — `-y` runs unasked, a non-TTY run prints and
+// stops. A declined answer or EOF runs nothing, exit 0.
 export function skillsInstallRun(
   write: (text: string) => void,
   warn: (text: string) => void,

@@ -102,8 +102,7 @@ function main(input: string[]): number | Promise<number> {
 
 // Skills converge the lockfiles, not the environment: the command prints each `npx skills add`
 // and its exit status, and any failure makes the exit status non-zero. Warnings go to stderr.
-// The TTY confirm prompt: one line on stdout, one line from stdin. EOF or anything but y/yes
-// declines, and the caller runs nothing.
+// EOF or a read error declines: an unanswerable prompt must not run anything.
 function confirmTty(message: string): boolean {
   process.stdout.write(message)
   const line = Buffer.alloc(1024)
