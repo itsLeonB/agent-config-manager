@@ -154,7 +154,7 @@ export function createRouter(): McpServer {
     'define_provision',
     {
       description:
-        'Define one Provision\'s Check and Install command for one harness, written as [provision.<name>.<harness>] in the environment file of the chosen tier. Comments and sibling Provisions survive; a same-key write replaces only that entry\'s check and install. The default tier is project-local, which git ignores. Never runs the Install command and never evaluates the Check: the only effect is the file. Answers the pointer written and the file\'s digest, or the reason the loader would refuse the result.',
+        'Define one Provision\'s Check and Install command for one harness, written as [provision.<name>.<harness>] in the environment file of the chosen tier, with optional shared Checks and Install command written on [provision.<name>] for every entry to inherit. Comments and sibling Provisions survive; a same-key write replaces only the keys it names. The default tier is project-local, which git ignores. Never runs the Install command and never evaluates the Check: the only effect is the file. Answers the pointer written and the file\'s digest, or the reason the loader would refuse the result.',
       inputSchema: {
         name: z.string().min(1).describe('the Provision name, such as serena'),
         // Deliberately not an enum: the file's own validator names an unknown harness, and that is
@@ -168,7 +168,9 @@ export function createRouter(): McpServer {
           'one Check, the singular spelling the file writes as check = { \u2026 }',
         ),
         checks: z.array(CHECK).optional().describe('several Checks, written checks = [ \u2026 ]; every one of them has to hold'),
-        install: INSTALL.describe('required, and never run by the tool'),
+        install: INSTALL.optional().describe('the entry\'s own Install command, when it has one; never run by the tool'),
+        sharedChecks: z.array(CHECK).optional().describe('shared Checks written on the Provision, inherited by every harness entry'),
+        sharedInstall: INSTALL.optional().describe('the Provision\'s shared Install command, inherited by every harness entry'),
         tags: z.array(z.string()).optional().describe('tags for the Provision, written when it has none'),
       },
       annotations: { readOnlyHint: false },

@@ -202,10 +202,9 @@ check = { file = "~/.config/opencode/opencode.json", contains = "serena" }
 install = "opencode mcp add serena"
 `
 
-// `install` is required in the tool's own schema, not only in the loader: a definition that named
-// only the Check would land a subtree the loader refuses and, on an existing entry, would silently
-// keep the old command while its answer said the entry had been replaced.
-test('define_provision refuses a definition with no Install command, before writing anything', async () => {
+// A definition with no effective Install command is refused by the loader before anything is
+// written: the shared Install command or the entry's own has to cover it.
+test('define_provision refuses a definition with no effective Install command, before writing anything', async () => {
   const project = somewhere()
   const client = await connect({ ACM_PROJECT_ROOT: project })
   try {
@@ -308,6 +307,8 @@ test('tools/list spells every predicate and every install form in the definition
             check: z.object({ anyOf: z.array(z.object({}).passthrough()).length(6) }).passthrough(),
             checks: z.object({ type: z.literal('array') }).passthrough(),
             install: z.object({ anyOf: z.array(z.object({}).passthrough()).length(3) }).passthrough(),
+            sharedChecks: z.object({ type: z.literal('array') }).passthrough(),
+            sharedInstall: z.object({ anyOf: z.array(z.object({}).passthrough()).length(3) }).passthrough(),
           })
           .passthrough(),
       })
@@ -323,6 +324,8 @@ test('tools/list spells every predicate and every install form in the definition
       'the Install command text, the only text ACM ever executes',
       'a Payload: the file the command text lives in, resolved like a Check path, with the arguments that reach it as argv',
       'a Section write: the Payload rewrites one Section of the native file',
+      'shared Checks written on the Provision, inherited by every harness entry',
+      'the Provision\'s shared Install command, inherited by every harness entry',
     ]) {
       assert.ok(JSON.stringify(schema).includes(description), `the schema does not say: ${description}`)
     }
@@ -597,6 +600,82 @@ install = { file = "~/.pi/agent/AGENTS.md", section = "instructions/output-style
   }
 })
 
+// Shared declarations are the Provision's own keys: one call writes them beside an empty harness
+// entry, a second declares the next harness with no fields of its own, and `acm status` folds the
+// shared Check into both rows.
+test('shared declarations round-trip through the tool and every declared harness entry reports Presence', async () => {
+  const project = somewhere()
+  const home = somewhere()
+  const client = await connect({ ACM_PROJECT_ROOT: project, ACM_HOME: home })
+  const file = path.join(project, 'agents_environ.local.toml')
+  try {
+    const first = DELTA_DEFINED.parse(
+      JSON.parse(
+        answered(
+          await client.callTool({
+            name: 'define_provision',
+            arguments: {
+              name: 'delta',
+              harness: 'pi',
+              sharedChecks: [{ file: '~/AGENTS.md', contains: '^@RTK' }],
+              sharedInstall: 'npx rtk init --quiet',
+            },
+          }),
+        ),
+      ),
+    )
+    assert.equal(first.pointer, 'provision.delta.pi')
+    assert.equal(
+      fs.readFileSync(file, 'utf8'),
+      `version = 1
+
+[provision.delta]
+checks = [{ file = "~/AGENTS.md", contains = "^@RTK" }]
+install = "npx rtk init --quiet"
+
+[provision.delta.pi]
+`,
+    )
+
+    const second = DELTA_DEFINED.parse(
+      JSON.parse(
+        answered(
+          await client.callTool({
+            name: 'define_provision',
+            arguments: { name: 'delta', harness: 'codex' },
+          }),
+        ),
+      ),
+    )
+    assert.equal(second.pointer, 'provision.delta.codex')
+    assert.equal(
+      fs.readFileSync(file, 'utf8'),
+      `version = 1
+
+[provision.delta]
+checks = [{ file = "~/AGENTS.md", contains = "^@RTK" }]
+install = "npx rtk init --quiet"
+
+[provision.delta.pi]
+
+[provision.delta.codex]
+`,
+    )
+    assert.deepEqual(statusJson({ ACM_PROJECT_ROOT: project, ACM_HOME: home }), [
+      {
+        name: 'delta',
+        tags: [],
+        harnesses: [
+          { harness: 'pi', tier: 'project-local', source: file, presence: 'absent', detail: `${path.join(home, 'AGENTS.md')} is not there` },
+          { harness: 'codex', tier: 'project-local', source: file, presence: 'absent', detail: `${path.join(home, 'AGENTS.md')} is not there` },
+        ],
+      },
+    ])
+  } finally {
+    await client.close()
+  }
+})
+
 // A refused definition is a failure the caller fixes, and the reason is the parser's own — the
 // one the next read of that file would report. One case per refusal reason a definition written
 // through the tool can reach, each naming the request and the reason the loader gives back.
@@ -610,7 +689,9 @@ type DefineArguments = {
   tier?: string
   check?: Record<string, NativeValue>
   checks?: Record<string, NativeValue>[]
-  install: string | Record<string, NativeValue>
+  install?: string | Record<string, NativeValue>
+  sharedChecks?: Record<string, NativeValue>[]
+  sharedInstall?: string | Record<string, NativeValue>
   tags?: string[]
 }
 

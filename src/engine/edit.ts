@@ -75,6 +75,20 @@ export function writePointer(
   }
 }
 
+// A TOML table with no keys is a declaration too — an environment entry that takes its Provision's
+// shared declarations whole is exactly that. The header is appended only when the document does not
+// already define the path, inline or as a table; anything the parser would refuse is left for the
+// caller's own validation.
+export function ensureTomlTable(text: string, segments: string[]): EditResult {
+  if (segments.length === 0) return { kind: 'failed', reason: 'a table needs a pointer below the document root' }
+  const tables = tomlTables(text.split('\n'))
+  if (tables.some((table) => samePath(table.path, segments)) || definesPath(text, segments)) {
+    return { kind: 'ok', text }
+  }
+  const separator = text === '' ? '' : text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n'
+  return { kind: 'ok', text: `${text}${separator}[${tomlPath(segments)}]\n` }
+}
+
 // Whether a document the editor produced is still a document the harness can read. Checked before
 // anything reaches disk, so a bad insertion fails the write instead of corrupting the file.
 export function parses(text: string, format: NativeFormat): boolean {
@@ -416,14 +430,20 @@ function writeToml(text: string, segments: string[], value: NativeValue): EditRe
     if (shadowed !== undefined) {
       throw new Error(`${segments.join('.')} is a table of its own, not a value this engine writes`)
     }
-    // A parent defined inline (`env = { A = "1" }`) cannot be extended line by line, and appending a
-    // second `[mcp_servers.x.env]` table would be a duplicate key the harness rejects.
-    if (definesPath(text, parent)) {
-      throw new Error(`${parent.join('.')} is an inline table, so ${segments.join('.')} needs a hand edit`)
-    }
     const header = `[${tomlPath(parent)}]`
     // A blank line before an appended table, so the new section is visibly its own.
     const separator = text === '' ? '' : text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n'
+    // A parent defined by a value — an inline table, a dotted key, or a scalar — cannot be extended
+    // line by line: appending its header would redefine it. A parent that exists only because a
+    // dotted header implied it, as `[provision.foo.pi]` implies `[provision.foo]`, can still be
+    // defined explicitly, so the candidate header is parsed rather than trusted to be a duplicate.
+    if (definesPath(text, parent)) {
+      try {
+        parseToml(`${text}${separator}${header}\n`)
+      } catch {
+        throw new Error(`${parent.join('.')} is an inline table, so ${segments.join('.')} needs a hand edit`)
+      }
+    }
     return { kind: 'ok', text: `${text}${separator}${header}\n${tomlKey(key)} = ${rendered}\n` }
   }
   const body = lines.slice(table.bodyStart, table.bodyEnd + 1)

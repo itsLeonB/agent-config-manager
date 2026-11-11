@@ -317,6 +317,205 @@ install = "new command"
   assert.match(rows[0]?.detail ?? '', /does not contain new/)
 })
 
+test('shared declarations write the Provision table and an empty harness entry', () => {
+  const f = fixture()
+  write(path.join(f.home, '.agents', '.skill-lock.json'), '{ "skills": { "mattpocock": {} } }')
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'skills-mattpocock',
+        harness: 'pi',
+        sharedChecks: [{ file: '~/.agents/.skill-lock.json', contains: 'mattpocock' }],
+        sharedInstall: 'npx skills add mattpocock/skills -g -y',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.skills-mattpocock.pi')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.skills-mattpocock]
+checks = [{ file = "~/.agents/.skill-lock.json", contains = "mattpocock" }]
+install = "npx skills add mattpocock/skills -g -y"
+
+[provision.skills-mattpocock.pi]
+`,
+  )
+  assert.deepEqual(readStatus({}, f.config).provisions, [
+    {
+      name: 'skills-mattpocock',
+      tags: [],
+      harnesses: [
+        {
+          harness: 'pi',
+          tier: 'project-local',
+          source: path.join(f.projectRoot, 'agents_environ.local.toml'),
+          presence: 'present',
+          detail: null,
+        },
+      ],
+    },
+  ])
+})
+
+test('shared and entry fields write together, and a repeat shared write replaces only the shared keys', () => {
+  const f = fixture()
+  write(
+    localFile(f),
+    `version = 1
+
+# shared declarations are reviewed by hand
+[provision.serena]
+tags = ["mcp"]
+checks = [{ file = "~/.old-shared" }]
+install = "old shared install"
+
+[provision.serena.pi]
+check = { file = "~/.pi/agent/mcp.json" }
+install = "pi plugin install serena"
+
+# zeta stays put
+[provision.zeta.pi]
+check = { file = "~/.pi/agent/mcp.json", contains = "zeta" }
+install = "pi plugin install zeta"
+`,
+  )
+  defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'codex',
+        sharedChecks: [{ file: '~/.new-shared' }],
+        sharedInstall: 'new shared install',
+        check: { file: '~/.codex/config.toml', contains: 'serena' },
+        install: 'codex mcp add serena',
+      },
+      f.config,
+    ),
+  )
+  defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        sharedChecks: [{ file: '~/.newer-shared', contains: 'serena' }],
+        sharedInstall: 'newer shared install',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+# shared declarations are reviewed by hand
+[provision.serena]
+tags = ["mcp"]
+checks = [{ file = "~/.newer-shared", contains = "serena" }]
+install = "newer shared install"
+
+[provision.serena.pi]
+check = { file = "~/.pi/agent/mcp.json" }
+install = "pi plugin install serena"
+
+# zeta stays put
+[provision.zeta.pi]
+check = { file = "~/.pi/agent/mcp.json", contains = "zeta" }
+install = "pi plugin install zeta"
+
+[provision.serena.codex]
+check = { file = "~/.codex/config.toml", contains = "serena" }
+install = "codex mcp add serena"
+`,
+  )
+})
+
+test('a shared checks list keeps the Provision\'s singular check spelling', () => {
+  const f = fixture()
+  write(
+    localFile(f),
+    `version = 1
+
+[provision.serena]
+check = { file = "~/.old-shared" }
+install = "old shared install"
+
+[provision.serena.pi]
+`,
+  )
+  defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'pi',
+        sharedChecks: [{ file: '~/.new-shared' }],
+      },
+      f.config,
+    ),
+  )
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.serena]
+check = { file = "~/.new-shared" }
+install = "old shared install"
+
+[provision.serena.pi]
+`,
+  )
+})
+
+test('shared declarations can be added to a provision that only has harness entries', () => {
+  const f = fixture()
+  write(
+    localFile(f),
+    `version = 1
+
+[provision.serena.pi]
+check = { file = "~/.pi/agent/mcp.json" }
+install = "pi plugin install serena"
+`,
+  )
+  const outcome = defined(
+    defineProvision(
+      {
+        name: 'serena',
+        harness: 'codex',
+        sharedChecks: [{ file: '~/.local/bin/serena' }],
+        sharedInstall: 'uv tool install serena-agent',
+        check: { file: '~/.codex/config.toml', contains: 'serena' },
+        install: 'codex mcp add serena',
+      },
+      f.config,
+    ),
+  )
+  assert.equal(outcome.pointer, 'provision.serena.codex')
+  assert.equal(
+    read(localFile(f)),
+    `version = 1
+
+[provision.serena.pi]
+check = { file = "~/.pi/agent/mcp.json" }
+install = "pi plugin install serena"
+
+[provision.serena]
+checks = [{ file = "~/.local/bin/serena" }]
+install = "uv tool install serena-agent"
+
+[provision.serena.codex]
+check = { file = "~/.codex/config.toml", contains = "serena" }
+install = "codex mcp add serena"
+`,
+  )
+  assert.deepEqual(
+    readStatus({ name: 'serena' }, f.config).provisions[0]?.harnesses.map((entry) => entry.harness),
+    ['pi', 'codex'],
+  )
+})
+
 test('an unreviewed definition lands in the gitignored file, and an explicit tier writes that file', () => {
   const f = fixture()
   const user = `version = 1\n\n[provision.rtk.pi]\ncheck = { file = "~/AGENTS.md" }\ninstall = "npx rtk init"\n`
@@ -392,6 +591,16 @@ const REFUSAL_CASES: readonly RefusalCase[] = [
     what: 'an unknown predicate',
     request: { name: 'delta', harness: 'codex', check: { file: '~/.codex/config.toml', grep: 'serena' }, install: 'x' },
     handWritten: `version = 1\n\n[provision.delta.codex]\ncheck = { file = "~/.codex/config.toml", grep = "serena" }\ninstall = "x"\n`,
+  },
+  {
+    what: 'shared install with no effective Check',
+    request: { name: 'delta', harness: 'pi', sharedInstall: 'x' },
+    handWritten: `version = 1\n\n[provision.delta]\ninstall = "x"\n\n[provision.delta.pi]\n`,
+  },
+  {
+    what: 'shared checks with no effective Install command',
+    request: { name: 'delta', harness: 'pi', sharedChecks: [{ file: '~/.x' }] },
+    handWritten: `version = 1\n\n[provision.delta]\nchecks = [{ file = "~/.x" }]\n\n[provision.delta.pi]\n`,
   },
 ]
 
