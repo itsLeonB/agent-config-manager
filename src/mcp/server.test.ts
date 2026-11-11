@@ -102,13 +102,16 @@ test('a client that initialises and lists tools sees every tool, with the writer
   try {
     const listed = await client.listTools()
     assert.deepEqual(
-      listed.tools.map((tool) => ({ name: tool.name, readOnly: tool.annotations?.readOnlyHint })),
+      listed.tools
+        .map((tool) => ({ name: tool.name, readOnly: tool.annotations?.readOnlyHint }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
       [
-        { name: 'list_provisions', readOnly: true },
-        { name: 'read_native_config', readOnly: true },
+        { name: 'acm_instructions', readOnly: true },
+        { name: 'declare_harnesses', readOnly: false },
         { name: 'define_provision', readOnly: false },
         { name: 'list_harnesses', readOnly: true },
-        { name: 'acm_instructions', readOnly: true },
+        { name: 'list_provisions', readOnly: true },
+        { name: 'read_native_config', readOnly: true },
       ],
     )
   } finally {
@@ -203,6 +206,103 @@ test('list_harnesses answers each tier\'s declared harness list', async () => {
   try {
     const listed: unknown = JSON.parse(answered(await client.callTool({ name: 'list_harnesses', arguments: {} })))
     assert.deepEqual(listed, { user: ['pi', 'custom-agent'], project: [] })
+  } finally {
+    await client.close()
+  }
+})
+
+// `declare_harnesses` writes one tier's list through the pointer editor: the bytes land at the top
+// of the named file, `list_harnesses` answers them per tier, an empty list clears the key, and a
+// list that would strand an entry's harness is refused with the file unchanged.
+test('declare_harnesses writes, reads back per tier, clears, and refuses a stranded entry', async () => {
+  const home = somewhere()
+  const project = somewhere()
+  const client = await connect({ ACM_HOME: home, ACM_PROJECT_ROOT: project })
+  const projectFile = path.join(project, 'agents_environ.toml')
+  const userFile = path.join(home, 'agents_environ.toml')
+  try {
+    // tools/list spells the tool with a required tier and the harness array.
+    const tool = (await client.listTools()).tools.find((candidate) => candidate.name === 'declare_harnesses')
+    assert.ok(tool !== undefined, 'declare_harnesses is not registered')
+    const schema = z
+      .object({
+        properties: z.object({
+          tier: z.object({ enum: z.array(z.string()) }).passthrough(),
+          harnesses: z.object({ type: z.literal('array') }).passthrough(),
+        }).passthrough(),
+      })
+      .passthrough()
+      .parse(tool.inputSchema)
+    assert.deepEqual(schema.properties.tier.enum.sort(), ['project', 'user'])
+
+    // The write lands at the top of the project file and reads back for that tier only.
+    const written = z
+      .object({ kind: z.literal('defined'), tier: z.literal('project'), file: z.string(), pointer: z.literal('harnesses') })
+      .parse(
+        JSON.parse(
+          answered(
+            await client.callTool({
+              name: 'declare_harnesses',
+              arguments: { tier: 'project', harnesses: ['pi', 'codex'] },
+            }),
+          ),
+        ),
+      )
+    assert.equal(written.file, projectFile)
+    assert.equal(
+      fs.readFileSync(projectFile, 'utf8'),
+      'version = 1\n\nharnesses = ["pi", "codex"]\n',
+    )
+    const listed: unknown = JSON.parse(answered(await client.callTool({ name: 'list_harnesses', arguments: {} })))
+    assert.deepEqual(listed, { user: [], project: ['pi', 'codex'] })
+
+    // An entry that names a harness outside the new list strands it: refused, file unchanged.
+    write(
+      projectFile,
+      `version = 1
+
+harnesses = ["pi", "codex"]
+
+[provision.delta.codex]
+check = { file = "x" }
+install = "y"
+`,
+    )
+    const refusedResult = await client.callTool({
+      name: 'declare_harnesses',
+      arguments: { tier: 'project', harnesses: ['pi'] },
+    })
+    assert.equal(CallToolResultSchema.parse(refusedResult).isError, true)
+    assert.match(answered(refusedResult), /not declared: .*harness 'codex' is not one of this file's harnesses/)
+    assert.equal(fs.readFileSync(projectFile, 'utf8').includes('harnesses = ["pi"]'), false)
+
+    // An empty list clears the key: the file keeps its entry and declares no harnesses.
+    const cleared = z
+      .object({ kind: z.literal('defined'), pointer: z.literal('harnesses') })
+      .parse(
+        JSON.parse(
+          answered(
+            await client.callTool({
+              name: 'declare_harnesses',
+              arguments: { tier: 'project', harnesses: [] },
+            }),
+          ),
+        ),
+      )
+    assert.equal(cleared.pointer, 'harnesses')
+    assert.equal(
+      fs.readFileSync(projectFile, 'utf8'),
+      `version = 1
+
+
+[provision.delta.codex]
+check = { file = "x" }
+install = "y"
+`,
+    )
+    const after: unknown = JSON.parse(answered(await client.callTool({ name: 'list_harnesses', arguments: {} })))
+    assert.deepEqual(after, { user: [], project: [] })
+    assert.equal(fs.existsSync(userFile), false, 'the user file was written by a project-tier declaration')
   } finally {
     await client.close()
   }

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert'
 import { parse as parseToml } from 'smol-toml'
 import { stripJsonc } from './adapters/opencode/read.ts'
-import { parses, splitPointer, writePointer } from './edit.ts'
+import { deleteTomlKey, parses, splitPointer, writePointer } from './edit.ts'
 import type { NativeValue } from './native-value.ts'
 
 function json(text: string, pointer: string, value: NativeValue): string {
@@ -11,7 +11,7 @@ function json(text: string, pointer: string, value: NativeValue): string {
   return result.kind === 'ok' ? result.text : ''
 }
 
-function toml(text: string, pointer: string, value: string | number): string {
+function toml(text: string, pointer: string, value: NativeValue): string {
   const result = writePointer(text, 'toml', pointer.split('.'), value)
   assert.equal(result.kind, 'ok', result.kind === 'failed' ? result.reason : '')
   return result.kind === 'ok' ? result.text : ''
@@ -99,4 +99,64 @@ test('an address this writer cannot reach fails instead of writing something els
   assert.match(inline.kind === 'failed' ? inline.reason : '', /inline table/)
   const missing = writePointer('{\n}\n', 'json', ['a', 'b'], 'x')
   assert.equal(missing.kind, 'ok')
+})
+
+// A root key is written before the first table header: the key belongs to the document, not to a
+// table, and a table it followed would make it a member of that table instead.
+test('a TOML root key is written before the first table header, comments and siblings kept', () => {
+  const before = `version = 1
+
+# the entries below are reviewed by hand
+[provision.serena.pi]
+check = { file = "x" }
+install = "y"
+`
+  const after = toml(before, 'harnesses', ['pi', 'codex'])
+  assert.equal(
+    after,
+    `version = 1
+harnesses = ["pi", "codex"]
+
+# the entries below are reviewed by hand
+[provision.serena.pi]
+check = { file = "x" }
+install = "y"
+`,
+  )
+  // A file with no tables gets the key appended like any other.
+  const bare = toml('version = 1\n', 'harnesses', ['pi'])
+  assert.equal(bare, 'version = 1\n\nharnesses = ["pi"]\n')
+  assert.equal(parses(after, 'toml'), true)
+})
+
+// A key with no owner table is removed whole: its line, and the lines of a value that spans more
+// than one. Comments and siblings stay, and a key that was never there is a no-op.
+test('deleteTomlKey removes a root key and its multi-line value, leaving everything else', () => {
+  const before = `version = 1
+# the harnesses this file faces
+harnesses = [
+  "pi", # inline comment
+  "codex",
+]
+
+[provision.serena.pi]
+check = { file = "x" }
+install = "y"
+`
+  const after = deleteTomlKey(before, 'harnesses')
+  assert.equal(
+    after,
+    `version = 1
+# the harnesses this file faces
+
+[provision.serena.pi]
+check = { file = "x" }
+install = "y"
+`,
+  )
+  assert.equal(deleteTomlKey('version = 1\n', 'harnesses'), 'version = 1\n')
+  // A key inside a table belongs to that table: the root key is untouched.
+  const nested = deleteTomlKey('[provision.x.pi]\nharnesses = ["pi"]\n', 'harnesses')
+  assert.equal(nested, '[provision.x.pi]\nharnesses = ["pi"]\n')
+  assert.equal(parses(after, 'toml'), true)
 })

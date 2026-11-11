@@ -34,6 +34,11 @@ export { readNativeConfig } from './native-read.ts'
 export { defineProvision } from './define.ts'
 export type { DefineOutcome, DefineRequest } from './define.ts'
 
+// A declaration writes one tier's harness list and nothing else, through the same outcome shape a
+// definition answers with: the bytes are the only effect, and the parser decides whether they load.
+export { declareHarnesses } from './declare.ts'
+export type { DeclareOutcome, DeclareRequest } from './declare.ts'
+
 // The run is the one command that executes anything, and it answers through this module like every
 // other part of the environment. It is a CLI surface only: nothing the MCP face registers can start
 // one.

@@ -390,6 +390,52 @@ export function tomlPath(segments: string[]): string {
   return segments.map(tomlKey).join('.')
 }
 
+// A root key is written before the first table header: `harnesses = […]` belongs to the document,
+// and appending it after a table would make it a member of that table instead. An array-table
+// header counts as a table too.
+const FIRST_TABLE = /^\s*(?!#)\[\[?[^\]]+\]\]?/
+
+// A key with no owning table is removed whole: its line, plus every line a multi-line value runs
+// over. Comments and siblings stay, and a key that is not there is a no-op.
+// The lines one root-level key's value runs over: the assignment line, plus every line an
+// unbalanced `[`/`{` keeps open. A `#` inside a string does not end the scan.
+function rootKeyEnd(lines: string[], found: number): number {
+  let last = found
+  let depth = 0
+  for (let index = found; index < lines.length; index += 1) {
+    const line = lines[index] ?? ''
+    for (let at = 0; at < line.length; at += 1) {
+      const char = line[at]
+      if (char === '"') {
+        while (at + 1 < line.length && line[at + 1] !== '"') at += line[at + 1] === '\\' ? 2 : 1
+        at += 1
+        continue
+      }
+      if (char === '#' && depth === 0) break
+      if (char === '[' || char === '{') depth += 1
+      if (char === ']' || char === '}') depth -= 1
+    }
+    last = index
+    if (depth <= 0) break
+  }
+  return last
+}
+
+export function deleteTomlKey(text: string, key: string): string {
+  const lines = text.split('\n')
+  // The key is a document key only before the first table header: the same spelling inside a table
+  // belongs to that table and is left alone.
+  const firstTable = lines.findIndex((line) => FIRST_TABLE.test(line))
+  const found = lines
+    .slice(0, firstTable === -1 ? lines.length : firstTable)
+    .findIndex((line) => tomlLineKey(line) === key)
+  if (found === -1) return text
+  lines.splice(found, rootKeyEnd(lines, found) - found + 1)
+  // The removed block owned the blank line after it, so a table that followed keeps exactly one.
+  if (FIRST_TABLE.test(lines[found] ?? '') && lines[found - 1]?.trim() === '') lines.splice(found - 1, 1)
+  return lines.join('\n')
+}
+
 interface TomlTable {
   path: string[]
   header: number
@@ -426,6 +472,34 @@ function writeToml(text: string, segments: string[], value: NativeValue): EditRe
   const rendered = tomlValue(value)
   const table = tables.find((candidate) => samePath(candidate.path, parent))
   if (table === undefined) {
+    // A root key has no parent table: it goes before the first table header, or at the end when the
+    // document is all root keys. Without this, `[]` would be written as a table header.
+    if (parent.length === 0) {
+      const headerAt = lines.findIndex((line) => FIRST_TABLE.test(line))
+      const rootEnd = headerAt === -1 ? lines.length : headerAt
+      // A root key that already exists is replaced in place — its comment stays — and a
+      // multi-line value collapses into the one line the write renders.
+      const existing = lines
+        .slice(0, rootEnd)
+        .findIndex((line) => tomlLineKey(line) === key)
+      if (existing !== -1) {
+        const end = rootKeyEnd(lines, existing)
+        const indent = /^[ \t]*/.exec(lines[existing] ?? '')?.[0] ?? ''
+        const comment = tomlTrailingComment(lines[existing] ?? '')
+        lines.splice(existing, end - existing + 1, `${indent}${tomlKey(key)} = ${rendered}${comment === null ? '' : ` ${comment}`}`)
+        return { kind: 'ok', text: lines.join('\n') }
+      }
+      if (headerAt === -1) {
+        const separator = text === '' ? '' : text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n'
+        return { kind: 'ok', text: `${text}${separator}${tomlKey(key)} = ${rendered}\n` }
+      }
+      // A comment or blank line above the header belongs to that table: the key goes before them,
+      // after the last root-level key.
+      let at = headerAt
+      while (at > 0 && ((lines[at - 1] ?? '').trim() === '' || (lines[at - 1] ?? '').trimStart().startsWith('#'))) at -= 1
+      lines.splice(at, 0, `${tomlKey(key)} = ${rendered}`)
+      return { kind: 'ok', text: lines.join('\n') }
+    }
     const shadowed = tables.find((candidate) => samePath(candidate.path, segments))
     if (shadowed !== undefined) {
       throw new Error(`${segments.join('.')} is a table of its own, not a value this engine writes`)
