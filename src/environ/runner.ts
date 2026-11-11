@@ -92,7 +92,7 @@ interface CommandResult {
 }
 
 function label(provision: ResolvedProvision): string {
-  return `${printable(provision.name)} (${provision.harness})`
+  return `${printable(provision.name)} (${printable(provision.harness)})`
 }
 
 // Every Provision, harness, tier, and what it runs — the exact command, or the label a Section write
@@ -103,7 +103,7 @@ function label(provision: ResolvedProvision): string {
 function previewText(previewed: Previewed[], dryRun: boolean, only: string[]): string {
   if (previewed.length === 0) return 'preview: no Provisions declared\n'
   const nameWidth = Math.max(...previewed.map((item) => printable(item.provision.name).length))
-  const harnessWidth = Math.max(...previewed.map((item) => item.provision.harness.length))
+  const harnessWidth = Math.max(...previewed.map((item) => printable(item.provision.harness).length))
   const tierWidth = Math.max(...previewed.map((item) => item.provision.tier.length))
   const toRun = previewed.filter((item) => !item.skip).length
   const lines = [
@@ -114,7 +114,7 @@ function previewText(previewed: Previewed[], dryRun: boolean, only: string[]): s
   for (const [index, item] of previewed.entries()) {
     const action = item.skip ? 'present, skipped' : item.presence === 'present' ? 'present, forced' : item.presence
     lines.push(
-      `  ${printable(item.provision.name).padEnd(nameWidth)}  ${item.provision.harness.padEnd(harnessWidth)}  ${item.provision.tier.padEnd(tierWidth)}  ${action}`,
+      `  ${printable(item.provision.name).padEnd(nameWidth)}  ${printable(item.provision.harness).padEnd(harnessWidth)}  ${item.provision.tier.padEnd(tierWidth)}  ${action}`,
     )
     // The shared command prints once, labeled, above the first entry that runs it; the entry's own
     // command prints under its row as before.

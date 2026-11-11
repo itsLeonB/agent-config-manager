@@ -123,7 +123,7 @@ export function createRouter(): McpServer {
       description:
         'List every Provision the environment files declare, with the Presence (present, absent, or unknown) of each harness entry and a detail when a Check could not answer. Read-only.',
       inputSchema: {
-        harness: z.enum(HARNESSES).optional().describe('only the entries declared for this harness'),
+        harness: z.string().min(1).optional().describe('only the entries declared for this harness'),
         name: z.string().min(1).optional().describe('only the Provision with this name'),
         tier: z.enum(ENVIRONMENT_TIERS).optional().describe('only the entries this tier owns'),
       },

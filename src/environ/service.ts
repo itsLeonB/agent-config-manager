@@ -118,9 +118,10 @@ export function statusDocument(status: Status, runs: Run[] = []): StatusDocument
   }
 }
 
-export function listHarnesses(config: EngineConfig = resolveDefaultConfig()): string[] {
+export function listHarnesses(config: EngineConfig = resolveDefaultConfig()) {
   const environment = loadEnvironment(config)
-  return environment.harnesses.length > 0 ? environment.harnesses : ['pi', 'codex', 'opencode']
+  const harnesses = environment.harnesses.length > 0 ? environment.harnesses : ['pi', 'codex', 'opencode']
+  return { harnesses, refusals: environment.refusals }
 }
 
 export function formatRefusal(refusal: FileRefusal): string {
@@ -143,7 +144,7 @@ function shorten(file: string, home: string): string {
 // than printing from inside a command.
 export function formatStatus(status: Status): string {
   const rows = status.provisions
-  const harnessWidth = Math.max('harness'.length, ...rows.flatMap((row) => row.harnesses.map((entry) => entry.harness.length)))
+  const harnessWidth = Math.max('harness'.length, ...rows.flatMap((row) => row.harnesses.map((entry) => printable(entry.harness).length)))
   const sourceWidth = Math.max('source'.length, ...rows.flatMap((row) => row.harnesses.map((entry) => shorten(entry.source, status.home).length)))
   const nameWidth = Math.max('provision'.length, ...rows.map((row) => printable(row.name).length))
   const lines: string[] = []
@@ -155,7 +156,7 @@ export function formatStatus(status: Status): string {
       for (const entry of row.harnesses) {
         const detail = entry.detail === null ? '' : `  ${printable(entry.detail)}`
         lines.push(
-          `${printable(row.name).padEnd(nameWidth)}  ${entry.harness.padEnd(harnessWidth)}  ${shorten(entry.source, status.home).padEnd(sourceWidth)}  ${entry.presence}${detail}`,
+          `${printable(row.name).padEnd(nameWidth)}  ${printable(entry.harness).padEnd(harnessWidth)}  ${shorten(entry.source, status.home).padEnd(sourceWidth)}  ${entry.presence}${detail}`,
         )
       }
     }

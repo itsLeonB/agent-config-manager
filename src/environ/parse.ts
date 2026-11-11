@@ -320,7 +320,14 @@ function decodeProvision(name: string, table: EnvironmentTable, at: SourceIndex)
 
   const entries: DeclaredEntry[] = []
   for (const key of Object.keys(table)) {
-    if (key === TAGS_KEY || key === CHECK_KEY || key === CHECKS_KEY || key === INSTALL_KEY) continue
+    const value = table[key]
+    const entryTable = tableValue(value)
+    const looksLikeEntry =
+      entryTable !== null &&
+      (has(entryTable, CHECK_KEY) || has(entryTable, CHECKS_KEY) || has(entryTable, INSTALL_KEY))
+    const isSharedKey =
+      (key === TAGS_KEY || key === CHECK_KEY || key === CHECKS_KEY || key === INSTALL_KEY) && !looksLikeEntry
+    if (isSharedKey) continue
     if (key === '' || key.includes('\u0000')) {
       return refused(place(at.declaration(block, key), `harness '${key}' must be non-empty and NUL-free`))
     }
