@@ -321,6 +321,9 @@ function decodeProvision(name: string, table: EnvironmentTable, at: SourceIndex)
   const entries: DeclaredEntry[] = []
   for (const key of Object.keys(table)) {
     if (key === TAGS_KEY || key === CHECK_KEY || key === CHECKS_KEY || key === INSTALL_KEY) continue
+    if (key === '' || key.includes('\u0000')) {
+      return refused(place(at.declaration(block, key), `harness '${key}' must be non-empty and NUL-free`))
+    }
     const harness = key
     const entry = tableValue(table[key])
     if (entry === null) return refused(place(at.declaration(block, key), `the ${key} entry is not a table`))

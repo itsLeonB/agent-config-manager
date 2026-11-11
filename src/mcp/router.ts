@@ -211,7 +211,7 @@ export function createRouter(): McpServer {
           'Harnesses are free-form labels in the environment layer: any non-empty, NUL-free string is a legal target. Only read_native_config validates against the closed set (pi, codex, opencode).',
           '',
           'Check/Install contract: a Provision entry needs at least one Check and one Install command (shared or own). Checks answer present/absent/unknown; Install commands are text ACM executes only when asked.',
-        ].join('\\n'),
+        ].join('\n'),
       ),
   )
 

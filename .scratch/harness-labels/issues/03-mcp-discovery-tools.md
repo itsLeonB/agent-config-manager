@@ -6,9 +6,9 @@
 
 **Status:** resolved
 
-- [ ] `list_harnesses` MCP tool registered and returns the merged list
-- [ ] `acm_instructions` MCP tool registered and returns the static guide
-- [ ] Both tools route through the service only
+- [x] `list_harnesses` MCP tool registered and returns the merged list
+- [x] `acm_instructions` MCP tool registered and returns the static guide
+- [x] Both tools route through the service only
 ## Answer
 
 Implemented on main working tree. See diff.
