@@ -578,11 +578,6 @@ interface RefusalCase {
 
 const REFUSAL_CASES: readonly RefusalCase[] = [
   {
-    what: 'an unknown harness',
-    request: { name: 'delta', harness: 'gemini', check: { file: '~/.gemini/settings.json' }, install: 'gemini mcp add delta' },
-    handWritten: `version = 1\n\n[provision.delta.gemini]\ncheck = { file = "~/.gemini/settings.json" }\ninstall = "gemini mcp add delta"\n`,
-  },
-  {
     what: 'an empty contains',
     request: { name: 'delta', harness: 'codex', check: { file: '~/.codex/config.toml', contains: '' }, install: 'x' },
     handWritten: `version = 1\n\n[provision.delta.codex]\ncheck = { file = "~/.codex/config.toml", contains = "" }\ninstall = "x"\n`,
@@ -625,7 +620,7 @@ test('a definition the loader would refuse is refused with that reason and write
   const f = fixture()
   refused(
     defineProvision(
-      { name: 'delta', harness: 'gemini', check: { file: '~/.gemini/settings.json' }, install: 'gemini mcp add delta' },
+      { name: 'delta', harness: 'pi', check: { file: '~/.x', grep: 'serena' }, install: 'x' },
       f.config,
     ),
   )

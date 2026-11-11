@@ -321,12 +321,9 @@ test('an unknown key refuses the file at that key', () => {
   })
 })
 
-test('an unknown harness id refuses the file at the table that names it', () => {
-  assert.deepEqual(refusalOf('version = 1\n\n[provision.serena.gpt]\ncheck = { file = "y" }\ninstall = "x"\n'), {
-    line: 3,
-    column: 1,
-    reason: "unknown harness 'gpt'",
-  })
+test('an unknown harness name loads without refusal', () => {
+  const declarations = provisionsOf('version = 1\n\n[provision.serena.gpt]\ncheck = { file = "y" }\ninstall = "x"\n')
+  assert.equal(declarations[0].entries[0].harness, 'gpt')
 })
 
 test('a missing install command refuses the file at the entry table', () => {

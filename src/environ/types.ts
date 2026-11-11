@@ -1,4 +1,3 @@
-import type { HarnessId } from '../engine/adapters/types.ts'
 import type { NativeValue } from '../engine/native-value.ts'
 
 // The environment file is the source of truth, so the types below follow it: what one file
@@ -83,7 +82,7 @@ export type InstallCommand = string | PayloadInstall | SectionInstall
 // effective Check or Install command refuses the file. `check = { … }` is read as a one-element
 // list, so a file written before that spelling keeps loading.
 export interface DeclaredEntry {
-  harness: HarnessId
+  harness: string
   checks: Check[]
   install: InstallCommand | null
 }
@@ -107,7 +106,7 @@ export interface ProvisionDeclaration {
 export interface ResolvedProvision {
   name: string
   tags: string[]
-  harness: HarnessId
+  harness: string
   tier: EnvironmentTier
   // The Tier's root, which is what a relative path in this entry means and where its Install
   // command starts. The loader is the only module that knows it, so it travels with the entry
@@ -132,13 +131,13 @@ export interface FileRefusal extends Refusal {
 }
 
 export type ParseResult =
-  | { ok: true; provisions: ProvisionDeclaration[] }
+  | { ok: true; provisions: ProvisionDeclaration[]; harnesses: string[] }
   | { ok: false; refusal: Refusal }
 
 // One harness's answer for one Provision: where the entry came from, what its Checks said folded,
 // and why when a Check could not answer. A Provision with no entry for a harness has no such row.
 export interface HarnessPresence {
-  harness: HarnessId
+  harness: string
   tier: EnvironmentTier
   source: string
   presence: Presence
@@ -166,7 +165,7 @@ export interface CheckAnswer {
 export interface Run {
   at: string
   provision: string
-  harness: HarnessId
+  harness: string
   tier: EnvironmentTier
   command: string
   exitCode: number | null

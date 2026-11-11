@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `DeclaredEntry`, `ResolvedProvision`, `HarnessPresence`, and `Run` use `string` for `harness`
 - [ ] `StatusFilter.harness` uses `string`
@@ -12,3 +12,6 @@
 - [ ] `HarnessId` import removed from the environment layer
 - [ ] Native-read tests unchanged: unknown harness still refused
 - [ ] Environment-layer tests updated for free-form names
+## Answer
+
+Implemented on main working tree. See diff.

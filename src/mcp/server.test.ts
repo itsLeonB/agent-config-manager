@@ -107,6 +107,8 @@ test('a client that initialises and lists tools sees every tool, with the writer
         { name: 'list_provisions', readOnly: true },
         { name: 'read_native_config', readOnly: true },
         { name: 'define_provision', readOnly: false },
+        { name: 'list_harnesses', readOnly: true },
+        { name: 'acm_instructions', readOnly: true },
       ],
     )
   } finally {
@@ -250,10 +252,10 @@ test('define_provision writes the entry into the project-local file and answers 
     // A definition the loader would refuse is an error the caller fixes, and the file is untouched.
     const refusedResult = await client.callTool({
       name: 'define_provision',
-      arguments: { name: 'serena', harness: 'gemini', check: { file: '~/.gemini/settings.json' }, install: 'x' },
+      arguments: { name: 'serena', harness: 'pi', check: { file: '~/.x', grep: 'serena' }, install: 'x' },
     })
     assert.equal(CallToolResultSchema.parse(refusedResult).isError, true)
-    assert.match(answered(refusedResult), /unknown harness 'gemini'/)
+    assert.match(answered(refusedResult), /unknown predicate 'grep'/)
     assert.equal(fs.readFileSync(file, 'utf8'), LOCAL, 'the refused definition changed the file')
   } finally {
     await client.close()
@@ -708,13 +710,6 @@ interface RefusalCase {
 function refusalCases(): readonly RefusalCase[] {
   const check = { file: '~/.x' }
   return [
-    {
-      what: 'an unknown harness',
-      request: { name: 'delta', harness: 'gemini', check: { file: '~/.gemini/settings.json' }, install: 'x' },
-      line: 3,
-      column: 1,
-      reason: "unknown harness 'gemini'",
-    },
     {
       what: 'an unknown predicate',
       request: { name: 'delta', harness: 'pi', check: { file: '~/.x', grep: 'serena' }, install: 'x' },
