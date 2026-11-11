@@ -39,6 +39,12 @@ export type { DefineOutcome, DefineRequest } from './define.ts'
 export { declareHarnesses } from './declare.ts'
 export type { DeclareOutcome, DeclareRequest } from './declare.ts'
 
+// The skills installer is a CLI surface only, like the run: it converges the lockfiles and no MCP
+// tool can start it. `readSkillsLock` and `skillsCommands` stay below the service for the same
+// reason — a face asks for the run, never for a lockfile's bytes.
+export { skillsInstallRun } from './skills.ts'
+export type { SkillsInstallOptions } from './skills.ts'
+
 // The run is the one command that executes anything, and it answers through this module like every
 // other part of the environment. It is a CLI surface only: nothing the MCP face registers can start
 // one.

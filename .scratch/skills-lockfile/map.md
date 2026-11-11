@@ -21,10 +21,14 @@ Spec: [spec.md](../spec.md). Tickets: [issues/](issues/).
   resolved on `4d509a2` — `Environment.harnessesByTier`/`Status.harnesses` are per-tier records;
   the parser refuses an entry outside the file's own list; `define_provision` checks the target
   file's list before writing; `acm status` footer and `list_harnesses` answer per tier.
+- [04 Install skills from the lockfiles](issues/04-install-skills-from-the-lockfiles.md): resolved
+  on `66e19c2` — `acm skills install [--dry-run]` reads both skills lockfiles, groups by source,
+  and runs `npx -y skills@latest add` per group with the tier's harness list; user groups run with
+  `-g`, project groups from the Project root; failures warn and never stop the rest. Note: the
+  lockfile paths follow the Answer's `$XDG_STATE_HOME`/`~/.agents` layout — the final review will
+  assess that deviation.
 
 ## Fog
 
-- [03 The declare_harnesses MCP tool](issues/03-declare-harnesses-mcp-tool.md) and
-  [04 Install skills from the lockfiles](issues/04-install-skills-from-the-lockfiles.md) are
-  unblocked (both list `Blocked by: 02`, now resolved). 03 can start first; 04 depends only on
-  02 as well, so either order works.
+- [03 The declare_harnesses MCP tool](issues/03-declare-harnesses-mcp-tool.md) is still running in
+  its own worktree; reviews pending. 04 is resolved above.

@@ -42,9 +42,9 @@ function childEnv(extra: Record<string, string>) {
   return { ...Object.fromEntries(inherited), ...extra }
 }
 
-function run(entry: string, home: string, args: string[], extra: Record<string, string> = {}) {
+function run(entry: string, home: string, args: string[], extra: Record<string, string> = {}, cwd?: string) {
   return spawnSync(process.execPath, [entry, ...args], {
-    cwd: somewhere(),
+    cwd: cwd ?? somewhere(),
     env: childEnv({ ACM_HOME: home, ...extra }),
     encoding: 'utf8',
   })
@@ -240,4 +240,43 @@ test('the built bundle run from a foreign directory finds its own package root',
   assert.equal(result.status, 0, result.stderr)
   const store = path.join(root, 'database', 'dashboard.db')
   assert.ok(result.stdout.includes(`store ${store}`), `expected the footer to name ${store}:\n${result.stdout}`)
+})
+
+// Seam C's skills half: the built bundle spawned on `acm skills install --dry-run` against fixture
+// lockfiles. The printed commands are the assertion — user groups first with -g, project groups
+// from the project root without it, and a tier with no declared harnesses omits --agent.
+test('acm skills install --dry-run prints one command per source group and runs nothing', () => {
+  const home = somewhere()
+  const projectRoot = somewhere()
+  write(
+    path.join(home, '.agents', '.skill-lock.json'),
+    JSON.stringify({
+      version: 3,
+      skills: {
+        alpha: { source: 'repo/one', sourceType: 'github' },
+        beta: { source: 'repo/two', sourceType: 'github' },
+        gamma: { source: 'repo/one', sourceType: 'github' },
+      },
+    }),
+  )
+  write(
+    path.join(projectRoot, 'skills-lock.json'),
+    JSON.stringify({ version: 1, skills: { local: { source: 'repo/proj', sourceType: 'github' } } }),
+  )
+  write(
+    path.join(home, 'agents_environ.toml'),
+    `version = 1
+
+harnesses = ["pi", "codex"]
+`,
+  )
+  write(path.join(projectRoot, 'agents_environ.toml'), 'version = 1\n')
+  const result = run(binPath(), home, ['skills', 'install', '--dry-run'], { ACM_PROJECT_ROOT: projectRoot }, projectRoot)
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /^npx -y skills@latest add repo\/one --skill alpha --skill gamma --agent pi --agent codex -g -y$/m)
+  assert.match(result.stdout, /^npx -y skills@latest add repo\/two --skill beta --agent pi --agent codex -g -y$/m)
+  assert.match(result.stdout, /^npx -y skills@latest add repo\/proj --skill local -y$/m)
+  assert.match(result.stdout, /dry run: nothing was run/)
+  // The project lockfile exists, so the only warning is none; a missing tier warns on stderr.
+  assert.equal(result.stderr, '')
 })
