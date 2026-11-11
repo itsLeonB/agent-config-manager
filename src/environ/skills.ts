@@ -10,8 +10,8 @@ import { shellWord } from './command.ts'
 import type { EnvironmentTier } from './types.ts'
 
 // Skills come from the skills CLI's lockfiles, never from Provisions: `acm skills install` is the
-// converge command, reads `~/.agents/.skill-lock.json` (user scope, `-g`) and the project's
-// `skills-lock.json` (project scope), groups each file's entries by `source`, and runs one
+// converge command and runs one tier per invocation — the project tier by default, the user tier
+// with `-g`. It reads that tier's lockfile, groups its entries by `source`, and runs one
 // `npx skills add` per group with the harness list the matching environment file declares. The
 // lockfile is the source of truth and stays untouched — nothing here writes the store either.
 
@@ -35,10 +35,6 @@ export interface SkillsLockRead {
 export interface SkillsLockPaths {
   user: string
   project: string
-}
-export interface SkillsLockReads {
-  user: SkillsLockRead
-  project: SkillsLockRead
 }
 
 export function skillsLockPaths(config: EngineConfig): SkillsLockPaths {
@@ -223,6 +219,10 @@ export interface SkillsCommand {
 }
 
 export interface SkillsInstallOptions {
+  // `-g`/`--global`: install the user tier's lockfile instead of the project tier's.
+  global?: boolean
+  // `-y`/`--yes`: print and run without asking.
+  yes?: boolean
   dryRun?: boolean
 }
 
@@ -232,24 +232,25 @@ export interface SkillsInstallOptions {
 // itself. The user groups run from the home directory with `-g`; the project groups run from the
 // Project root without it.
 export function skillsCommands(
-  reads: SkillsLockReads,
-  harnessesByTier: Record<EnvironmentTier, string[]>,
-  roots: SkillsLockPaths,
+  tier: EnvironmentTier,
+  read: SkillsLockRead,
+  harnesses: string[],
+  root: string,
 ): SkillsCommand[] {
   const commands: SkillsCommand[] = []
-  for (const tier of ['user', 'project'] as const) {
-    const bySource = new Map<string, string[]>()
-    for (const skill of reads[tier].skills) {
-      bySource.set(skill.source, [...(bySource.get(skill.source) ?? []), skill.name])
-    }
-    for (const [source, names] of bySource) {
-      const argv = ['-y', 'skills@latest', 'add', source]
-      for (const name of names) argv.push('--skill', name)
-      for (const harness of harnessesByTier[tier]) argv.push('--agent', harness)
-      if (tier === 'user') argv.push('-g')
-      argv.push('-y')
-      commands.push({ argv, cwd: roots[tier], tier })
-    }
+  const bySource = new Map<string, string[]>()
+  for (const skill of read.skills) {
+    bySource.set(skill.source, [...(bySource.get(skill.source) ?? []), skill.name])
+  }
+  for (const [source, names] of bySource) {
+    const argv = ['-y', 'skills@latest', 'add', source]
+    for (const name of names) argv.push('--skill', name)
+    // --agent is always present: the gate refused the run before this builder when the tier
+    // declared no harnesses, so the skills CLI's detector is never consulted.
+    for (const harness of harnesses) argv.push('--agent', harness)
+    if (tier === 'user') argv.push('-g')
+    argv.push('-y')
+    commands.push({ argv, cwd: root, tier })
   }
   return commands
 }
@@ -279,46 +280,60 @@ function runCommand(command: SkillsCommand, env: NodeJS.ProcessEnv): number | nu
   }
 }
 
+// `confirm` is the injected prompt: it receives the question line and answers whether the run
+// may proceed. The CLI passes a real TTY reader only when stdin is a terminal and neither `-y`
+// nor `--dry-run` was given; every other caller passes `undefined` and the run either runs
+// unasked (`-y`) or prints and stops (non-TTY). A declined answer or EOF runs nothing, exit 0.
 export function skillsInstallRun(
   write: (text: string) => void,
   warn: (text: string) => void,
+  confirm: ((message: string) => boolean) | undefined,
   options: SkillsInstallOptions = {},
   config: EngineConfig = resolveDefaultConfig(),
   env: NodeJS.ProcessEnv = process.env,
 ): number {
+  const tier: EnvironmentTier = options.global === true ? 'user' : 'project'
   const paths = skillsLockPaths(config)
   const environment = loadEnvironment(config)
-  const reads: SkillsLockReads = {
-    user: readSkillsLock(paths.user, 'user'),
-    project: readSkillsLock(paths.project, 'project'),
-  }
-  let exitCode = 0
-  for (const location of environmentFiles(config)) {
-    const tier = location.tier
+  const location = environmentFiles(config).find((item) => item.tier === tier)
+  if (location !== undefined) {
     const refusal = environment.refusals.find((item) => path.resolve(item.source) === path.resolve(location.file))
     if (refusal !== undefined) {
-      warn(`${printable(refusal.source)}:${refusal.line}:${refusal.column}: refused environment: ${printable(refusal.reason)}; skipping ${tier} skills\n`)
-      reads[tier] = { skills: [], warnings: [] }
-      exitCode = 1
-      continue
+      warn(`${printable(refusal.source)}:${refusal.line}:${refusal.column}: refused environment: ${printable(refusal.reason)}\n`)
+      return 1
     }
-    for (const warning of reads[tier].warnings) warn(`${printable(warning)}\n`)
-    if (reads[tier].skills.length === 0 && reads[tier].warnings.length === 0) {
+  }
+  // The harness gate: a tier that declares no harnesses — absent file or absent key — never
+  // reaches the command builder, so no install can guess which agent directories to write.
+  if (environment.harnessesByTier[tier].length === 0) {
+    warn(`${printable(location?.file ?? path.join(config.projectRoot, 'agents_environ.toml'))}: the ${tier} tier declares no harnesses; add harnesses = [...] to its environment file before installing skills for it\n`)
+    return 1
+  }
+  const read = readSkillsLock(paths[tier], tier)
+  for (const warning of read.warnings) warn(`${printable(warning)}\n`)
+  if (read.skills.length === 0) {
+    if (read.warnings.length === 0) {
       warn(`${printable(paths[tier])}: no skills installed for the ${tier} tier\n`)
     }
+    return 0
   }
   const commands = skillsCommands(
-    reads,
-    environment.harnessesByTier,
-    { user: config.home, project: config.projectRoot },
+    tier,
+    read,
+    environment.harnessesByTier[tier],
+    tier === 'user' ? config.home : config.projectRoot,
   )
+  for (const command of commands) write(`${commandText(command)}\n`)
   if (options.dryRun === true) {
-    for (const command of commands) write(`${commandText(command)}\n`)
     write('dry run: nothing was run\n')
-    return exitCode
+    return 0
   }
+  if (options.yes !== true) {
+    if (confirm === undefined) return 0
+    if (!confirm(`run these ${commands.length} command(s)? [y/N] `)) return 0
+  }
+  let exitCode = 0
   for (const command of commands) {
-    write(`${commandText(command)}\n`)
     const status = runCommand(command, env)
     if (status === 0) {
       write('  exit 0\n')

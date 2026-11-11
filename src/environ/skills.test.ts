@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { parseSkillsLock, readSkillsLock, skillsCommands } from './skills.ts'
-import type { SkillsLockReads } from './skills.ts'
+import type { SkillsLockRead } from './skills.ts'
 
 // Seam B: the lockfile reader is a pure function over bytes, so every shape the `skills` CLI can
 // write — and the ones it cannot — is a test here, with no `npx` and no filesystem at all.
@@ -117,19 +117,16 @@ test('readSkillsLock is the filesystem wrapper: a missing file warns with its ti
 })
 
 test('skillsCommands groups by source in first-seen order and spells the argv', () => {
-  const reads = {
-    user: {
-      skills: [
-        { name: 'a', source: 'repo/one' },
-        { name: 'b', source: 'repo/two' },
-        { name: 'c', source: 'repo/one' },
-      ],
-      warnings: [],
-    },
-    project: { skills: [{ name: 'd', source: 'repo/three' }], warnings: [] },
-  } satisfies SkillsLockReads
-  const commands = skillsCommands(reads, { user: ['pi', 'codex'], project: [] }, { user: '/home/u', project: '/repo' })
-  assert.equal(commands.length, 3)
+  const read = {
+    skills: [
+      { name: 'a', source: 'repo/one' },
+      { name: 'b', source: 'repo/two' },
+      { name: 'c', source: 'repo/one' },
+    ],
+    warnings: [],
+  } satisfies SkillsLockRead
+  const commands = skillsCommands('user', read, ['pi', 'codex'], '/home/u')
+  assert.equal(commands.length, 2)
   assert.deepEqual(commands[0].argv, [
     '-y', 'skills@latest', 'add', 'repo/one',
     '--skill', 'a', '--skill', 'c',
@@ -143,20 +140,22 @@ test('skillsCommands groups by source in first-seen order and spells the argv', 
     '--agent', 'pi', '--agent', 'codex',
     '-g', '-y',
   ])
-  // A tier with no declared harnesses omits --agent entirely.
-  assert.deepEqual(commands[2].argv, [
-    '-y', 'skills@latest', 'add', 'repo/three',
-    '--skill', 'd',
+  // The project tier runs from the project root without -g; --agent spells the same names.
+  const project = skillsCommands('project', read, ['opencode'], '/repo')
+  assert.deepEqual(project[0].argv, [
+    '-y', 'skills@latest', 'add', 'repo/one',
+    '--skill', 'a', '--skill', 'c',
+    '--agent', 'opencode',
     '-y',
   ])
-  assert.equal(commands[2].cwd, '/repo')
+  assert.equal(project[0].cwd, '/repo')
 })
 
 
 // Seam A: the installer against a fixture — a temp home, a temp project root, hand-written
-// environment files and lockfiles, and a fake `npx` on PATH that records its argv and cwd. The
-// assertions are the printed commands, the recorded argv order, and the exit status; nothing here
-// inspects how the installer grouped the entries.
+// environment files and lockfiles, and a fake `npx` on PATH that records its argv and cwd. One
+// run covers one tier: the project tier by default, the user tier with `-g`. The confirm prompt
+// is an injected callback, so the prompt's yes/no paths are tested without a TTY.
 
 import { skillsInstallRun } from './skills.ts'
 import type { EngineConfig } from '../engine/config.ts'
@@ -251,12 +250,18 @@ interface Observation {
   exitCode: number
 }
 
-function run(f: Fixture, options: { dryRun?: boolean } = {}, env: NodeJS.ProcessEnv = f.env): Observation {
+function run(
+  f: Fixture,
+  options: { dryRun?: boolean; yes?: boolean; global?: boolean } = {},
+  env: NodeJS.ProcessEnv = f.env,
+  confirm?: (message: string) => boolean,
+): Observation {
   const writes: string[] = []
   const warnings: string[] = []
   const exitCode = skillsInstallRun(
     (text) => writes.push(text),
     (text) => warnings.push(text),
+    confirm,
     options,
     f.config,
     env,
@@ -264,135 +269,163 @@ function run(f: Fixture, options: { dryRun?: boolean } = {}, env: NodeJS.Process
   return { printed: writes.join(''), warned: warnings.join(''), exitCode }
 }
 
-test('user lockfile skills install at user scope with -g, grouped by source, with the user file\'s harnesses', () => {
-  const f = fixture()
-  environment(f, `version = 1
+const HARNESS_ENV = 'version = 1\n\nharnesses = ["opencode", "pi"]\n'
 
-harnesses = ["pi", "codex"]
-`)
-  userLock(f, {
-    alpha: { source: 'repo/one', sourceType: 'github' },
-    beta: { source: 'repo/two', sourceType: 'github' },
-    gamma: { source: 'repo/one', sourceType: 'github' },
+test('the default run installs the project tier: grouped by source, the project file harnesses, no -g', () => {
+  const f = fixture()
+  projectEnvironment(f, HARNESS_ENV)
+  projectLock(f, {
+    one: { source: 'repo/one', sourceType: 'github' },
+    two: { source: 'repo/two', sourceType: 'github' },
+    three: { source: 'repo/one', sourceType: 'github' },
   })
-  const { printed, warned, exitCode } = run(f)
+  const { printed, exitCode } = run(f, { yes: true })
   const ran = calls(f)
   assert.equal(ran.length, 2)
-  // User groups first, one per source, in first-seen order; --skill repeats per name in file order.
   assert.deepEqual(ran[0].argv, [
     '-y', 'skills@latest', 'add', 'repo/one',
-    '--skill', 'alpha', '--skill', 'gamma',
-    '--agent', 'pi', '--agent', 'codex',
-    '-g', '-y',
-  ])
-  assert.equal(ran[0].cwd, f.home)
-  assert.deepEqual(ran[1].argv, [
-    '-y', 'skills@latest', 'add', 'repo/two',
-    '--skill', 'beta',
-    '--agent', 'pi', '--agent', 'codex',
-    '-g', '-y',
-  ])
-  assert.match(printed, /^npx -y skills@latest add repo\/one --skill alpha --skill gamma --agent pi --agent codex -g -y$/m)
-  assert.match(printed, /exit 0/)
-  // The project lockfile is absent here, so its tier warns and installs nothing.
-  assert.match(warned, /no skills lockfile for the project tier/)
-  assert.doesNotMatch(warned, /user tier/)
-  assert.equal(exitCode, 0)
-})
-
-test('the project lockfile installs from the Project root without -g, with the project file\'s harnesses', () => {
-  const f = fixture()
-  projectEnvironment(f, `version = 1
-
-harnesses = ["opencode"]
-`)
-  projectLock(f, {
-    local: { source: 'repo/proj', sourceType: 'github' },
-  })
-  const { exitCode } = run(f)
-  const ran = calls(f)
-  assert.equal(ran.length, 1)
-  assert.deepEqual(ran[0].argv, [
-    '-y', 'skills@latest', 'add', 'repo/proj',
-    '--skill', 'local',
-    '--agent', 'opencode',
+    '--skill', 'one', '--skill', 'three',
+    '--agent', 'opencode', '--agent', 'pi',
     '-y',
   ])
   assert.equal(ran[0].cwd, f.projectRoot)
+  assert.deepEqual(ran[1].argv, [
+    '-y', 'skills@latest', 'add', 'repo/two',
+    '--skill', 'two',
+    '--agent', 'opencode', '--agent', 'pi',
+    '-y',
+  ])
+  assert.match(printed, /^npx -y skills@latest add repo\/one --skill one --skill three --agent opencode --agent pi -y$/m)
+  assert.match(printed, /exit 0/)
   assert.equal(exitCode, 0)
 })
 
-test('a tier with no declared harnesses omits --agent; user groups still run before project groups', () => {
+test('-g selects the user tier: the user lockfile with -g, cwd the home, the user file harnesses', () => {
   const f = fixture()
-  environment(f, 'version = 1\n')
-  projectEnvironment(f, 'version = 1\n')
+  environment(f, HARNESS_ENV)
   userLock(f, { u: { source: 'repo/u', sourceType: 'github' } })
-  projectLock(f, { p: { source: 'repo/p', sourceType: 'github' } })
-  const { exitCode } = run(f)
+  const { exitCode } = run(f, { global: true, yes: true })
   const ran = calls(f)
-  assert.equal(ran.length, 2)
-  assert.deepEqual(ran[0].argv, ['-y', 'skills@latest', 'add', 'repo/u', '--skill', 'u', '-g', '-y'])
-  assert.deepEqual(ran[1].argv, ['-y', 'skills@latest', 'add', 'repo/p', '--skill', 'p', '-y'])
+  assert.equal(ran.length, 1)
+  assert.deepEqual(ran[0].argv, [
+    '-y', 'skills@latest', 'add', 'repo/u',
+    '--skill', 'u',
+    '--agent', 'opencode', '--agent', 'pi',
+    '-g', '-y',
+  ])
   assert.equal(ran[0].cwd, f.home)
-  assert.equal(ran[1].cwd, f.projectRoot)
   assert.equal(exitCode, 0)
+})
+
+test('a selected tier with no declared harnesses — absent file or absent key — warns and exits 1 before any spawn', () => {
+  // No environment file at all for the selected tier.
+  const absent = fixture()
+  projectLock(absent, { p: { source: 'repo/p', sourceType: 'github' } })
+  const first = run(absent)
+  assert.equal(first.exitCode, 1)
+  assert.equal(calls(absent).length, 0)
+  assert.equal(first.printed, '')
+  assert.match(first.warned, /declares no harnesses/)
+
+  // A file that exists but declares no harnesses key; the unselected user tier has a file, a
+  // list and a lockfile, and none of it is read because the tier was never selected.
+  const noKey = fixture()
+  environment(noKey, HARNESS_ENV)
+  userLock(noKey, { u: { source: 'repo/u', sourceType: 'github' } })
+  projectEnvironment(noKey, 'version = 1\n')
+  projectLock(noKey, { p: { source: 'repo/p', sourceType: 'github' } })
+  const second = run(noKey)
+  assert.equal(second.exitCode, 1)
+  assert.equal(calls(noKey).length, 0)
+  assert.doesNotMatch(second.printed, /npx/)
+  assert.doesNotMatch(second.warned, /user tier/)
+  assert.match(second.warned, /declares no harnesses/)
+})
+
+test('a refused environment file for the selected tier warns and exits 1 without spawning', () => {
+  const f = fixture()
+  projectEnvironment(f, 'version = 1\nharnesses = [42]\n')
+  projectLock(f, { p: { source: 'repo/p', sourceType: 'github' } })
+  const result = run(f)
+  assert.equal(result.exitCode, 1)
+  assert.equal(calls(f).length, 0)
+  assert.match(result.warned, /refused environment/)
 })
 
 test('--dry-run prints every command and runs nothing', () => {
   const f = fixture()
-  userLock(f, { a: { source: 'repo/one', sourceType: 'github' } })
+  projectEnvironment(f, HARNESS_ENV)
   projectLock(f, { b: { source: 'repo/two', sourceType: 'github' } })
   const { printed, exitCode } = run(f, { dryRun: true })
   assert.equal(calls(f).length, 0)
-  assert.match(printed, /^npx -y skills@latest add repo\/one --skill a -g -y$/m)
-  assert.match(printed, /^npx -y skills@latest add repo\/two --skill b -y$/m)
+  assert.match(printed, /^npx -y skills@latest add repo\/two --skill b --agent opencode --agent pi -y$/m)
   assert.match(printed, /dry run: nothing was run/)
   assert.equal(exitCode, 0)
 })
 
-test('a refused environment skips only its own tier and fails real and dry runs', () => {
-  for (const refusedTier of ['user', 'project'] as const) {
-    for (const dryRun of [false, true]) {
-      const f = fixture()
-      userLock(f, { userSkill: { source: 'repo/user' } })
-      projectLock(f, { projectSkill: { source: 'repo/project' } })
-      const invalid = 'version = 1\nharnesses = [42]\n'
-      if (refusedTier === 'user') environment(f, invalid)
-      else projectEnvironment(f, invalid)
-      const result = run(f, { dryRun })
-      assert.equal(result.exitCode, 1)
-      assert.match(result.warned, /refused environment/)
-      assert.match(result.warned, new RegExp(`skipping ${refusedTier} skills`))
-      assert.doesNotMatch(result.printed, new RegExp(`repo/${refusedTier}`))
-      assert.match(result.printed, new RegExp(`repo/${refusedTier === 'user' ? 'project' : 'user'}`))
-      assert.equal(calls(f).length, dryRun ? 0 : 1)
-    }
-  }
+test('-y prints and runs without asking; no -y and no prompt prints and stops', () => {
+  const withYes = fixture()
+  projectEnvironment(withYes, HARNESS_ENV)
+  projectLock(withYes, { b: { source: 'repo/two', sourceType: 'github' } })
+  const yes = run(withYes, { yes: true })
+  assert.equal(calls(withYes).length, 1)
+  assert.equal(yes.exitCode, 0)
+
+  // A run with neither -y nor a confirm callback is the non-TTY case: the commands print, and
+  // nothing spawns.
+  const nonTty = fixture()
+  projectEnvironment(nonTty, HARNESS_ENV)
+  projectLock(nonTty, { b: { source: 'repo/two', sourceType: 'github' } })
+  const stopped = run(nonTty)
+  assert.equal(calls(nonTty).length, 0)
+  assert.match(stopped.printed, /^npx -y skills@latest add repo\/two/m)
+  assert.doesNotMatch(stopped.printed, /exit/)
+  assert.equal(stopped.exitCode, 0)
 })
 
-test('a missing user lockfile still installs the project skills, and the reverse', () => {
+test('a yes answer runs everything; a no answer runs nothing and exits 0', () => {
   const f = fixture()
-  projectLock(f, { p: { source: 'repo/p', sourceType: 'github' } })
-  const first = run(f)
-  assert.equal(calls(f).length, 1)
-  assert.match(first.warned, /no skills lockfile for the user tier/)
-  assert.equal(first.exitCode, 0)
+  projectEnvironment(f, HARNESS_ENV)
+  projectLock(f, {
+    a: { source: 'repo/one', sourceType: 'github' },
+    b: { source: 'repo/two', sourceType: 'github' },
+  })
+  const asked: string[] = []
+  const yes = run(f, {}, f.env, (message) => {
+    asked.push(message)
+    return true
+  })
+  assert.match(asked.join(''), /run these 2 command\(s\)/)
+  assert.equal(calls(f).length, 2)
+  assert.equal(yes.exitCode, 0)
 
-  const g = fixture()
-  userLock(g, { u: { source: 'repo/u', sourceType: 'github' } })
-  const second = run(g)
-  assert.equal(calls(g).length, 1)
-  assert.match(second.warned, /no skills lockfile for the project tier/)
-  assert.equal(second.exitCode, 0)
+  const declined = fixture()
+  projectEnvironment(declined, HARNESS_ENV)
+  projectLock(declined, { b: { source: 'repo/two', sourceType: 'github' } })
+  const no = run(declined, {}, declined.env, () => false)
+  assert.equal(calls(declined).length, 0)
+  assert.equal(no.exitCode, 0)
+  // The commands were printed before the ask.
+  assert.match(no.printed, /^npx -y skills@latest add repo\/two/m)
+})
+
+test('a missing selected lockfile warns and installs nothing, exit 0', () => {
+  const f = fixture()
+  projectEnvironment(f, HARNESS_ENV)
+  const result = run(f)
+  assert.match(result.warned, /no skills lockfile for the project tier/)
+  assert.equal(calls(f).length, 0)
+  assert.equal(result.exitCode, 0)
 })
 
 test('an entry with no source is skipped with a warning and the rest still install', () => {
   const f = fixture()
-  userLock(f, {
+  projectEnvironment(f, HARNESS_ENV)
+  projectLock(f, {
     good: { source: 'repo/one', sourceType: 'github' },
     bad: { sourceType: 'github' },
   })
-  const { warned, exitCode } = run(f)
+  const { warned, exitCode } = run(f, { yes: true })
   const ran = calls(f)
   assert.equal(ran.length, 1)
   assert.deepEqual(ran[0].argv.slice(0, 6), ['-y', 'skills@latest', 'add', 'repo/one', '--skill', 'good'])
@@ -402,16 +435,12 @@ test('an entry with no source is skipped with a warning and the rest still insta
 
 test('one failed command does not stop the rest, and the exit status is non-zero', () => {
   const f = fixture()
-  userLock(f, {
-    broken: { source: 'repo/bad', sourceType: 'github' },
-    fine: { source: 'repo/good', sourceType: 'github' },
-  })
-  // fail-me is one of the recorded argv words only if a source spells it; put it in the source.
-  userLock(f, {
+  projectEnvironment(f, HARNESS_ENV)
+  projectLock(f, {
     broken: { source: 'fail-me', sourceType: 'github' },
     fine: { source: 'repo/good', sourceType: 'github' },
   })
-  const { printed, exitCode } = run(f)
+  const { printed, exitCode } = run(f, { yes: true })
   const ran = calls(f)
   assert.equal(ran.length, 2)
   assert.match(printed, /exit 7/)
@@ -421,11 +450,10 @@ test('one failed command does not stop the rest, and the exit status is non-zero
 
 // The user lockfile's path is fixed by the spec: ~/.agents/.skill-lock.json. XDG_STATE_HOME is
 // not consulted — a variable that moved the file would install a different set of skills.
-test('global installs use config.home as the child home without moving project installs', () => {
+test('a -g run uses config.home as the child home, not the process home', () => {
   const f = fixture()
-  f.config.home = path.relative(process.cwd(), f.home)
+  environment(f, HARNESS_ENV)
   userLock(f, { userSkill: { source: 'repo/user' } })
-  projectLock(f, { projectSkill: { source: 'repo/project' } })
   const homes = path.join(path.dirname(f.log), 'homes.jsonl')
   const fake = path.join(path.dirname(f.log), 'bin', 'npx')
   fs.writeFileSync(fake, `#!/usr/bin/env node
@@ -435,13 +463,10 @@ fs.appendFileSync(${JSON.stringify(homes)}, JSON.stringify({ home: os.homedir(),
 `)
   const processHome = path.join(path.dirname(f.home), 'process-home')
   fs.mkdirSync(processHome)
-  const result = run(f, {}, { ...f.env, HOME: processHome, USERPROFILE: processHome })
+  const result = run(f, { global: true, yes: true }, { ...f.env, HOME: processHome, USERPROFILE: processHome })
   assert.equal(result.exitCode, 0)
   const actual = fs.readFileSync(homes, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
-  assert.deepEqual(actual, [
-    { home: f.home, profile: f.home, global: true },
-    { home: processHome, profile: processHome, global: false },
-  ])
+  assert.deepEqual(actual, [{ home: f.home, profile: f.home, global: true }])
 })
 
 test('XDG_STATE_HOME does not move the user lockfile', () => {
@@ -452,8 +477,9 @@ test('XDG_STATE_HOME does not move the user lockfile', () => {
     path.join(xdg, 'skills', '.skill-lock.json'),
     JSON.stringify({ version: 3, skills: { decoy: { source: 'repo/decoy', sourceType: 'github' } } }),
   )
+  environment(f, HARNESS_ENV)
   userLock(f, { real: { source: 'repo/real', sourceType: 'github' } })
-  const { warned } = run(f, {}, { ...f.env, XDG_STATE_HOME: xdg })
+  const { warned } = run(f, { global: true, yes: true }, { ...f.env, XDG_STATE_HOME: xdg })
   const ran = calls(f)
   assert.equal(ran.length, 1)
   assert.deepEqual(ran[0].argv.slice(0, 6), ['-y', 'skills@latest', 'add', 'repo/real', '--skill', 'real'])
@@ -464,11 +490,12 @@ test('XDG_STATE_HOME does not move the user lockfile', () => {
 // failure, not the run's: the groups after it still execute and the exit status says so.
 test('a spawn that throws does not stop the groups after it', () => {
   const f = fixture()
+  environment(f, HARNESS_ENV)
   userLock(f, {
     bad: { source: 'repo/bad\u0000source', sourceType: 'github' },
     good: { source: 'repo/good', sourceType: 'github' },
   })
-  const { printed, exitCode } = run(f)
+  const { printed, exitCode } = run(f, { global: true, yes: true })
   const ran = calls(f)
   // The NUL group never reached npx; the next group did.
   assert.equal(ran.length, 1)
@@ -482,7 +509,8 @@ test('a spawn that throws does not stop the groups after it', () => {
 // is a line a human reads, so it prints the printable spelling; the argv that runs is untouched.
 test('the printed command strips control characters the argv still carries', () => {
   const f = fixture()
-  userLock(f, {
+  projectEnvironment(f, HARNESS_ENV)
+  projectLock(f, {
     sneaky: { source: 'repo/one\nignored', sourceType: 'github' },
   })
   const { printed } = run(f, { dryRun: true })

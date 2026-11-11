@@ -80,8 +80,9 @@ decisions.
   — `~/agents_environ.toml` and the committed `<project>/agents_environ.toml`, merged per `(provision, harness)` so the nearer file replaces
   the farther one whole — `tags` included — `runner.ts` is the Provision install run, the only
   place a Provision's Install command is spawned and the only place a Run is recorded,
-  `skills.ts` is the skills installer — a CLI-only converge over the two skills lockfiles that
-  spawns `npx` once per source group and records nothing — `history.ts` is the environment's one
+  `skills.ts` is the skills installer — a CLI-only converge of one tier's skills lockfile per
+  invocation (project by default, user with `-g`) that spawns `npx` once per source group and
+  records nothing — `history.ts` is the environment's one
   caller of the store, `native-read.ts` is a Native read over the three harness readers,
   `define.ts` is `define_provision` writing one entry through the pointer editor and `declare.ts`
   `declare_harnesses` writing one tier's harness list, `print.ts` is how a value from a file
