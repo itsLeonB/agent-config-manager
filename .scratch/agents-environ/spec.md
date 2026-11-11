@@ -25,7 +25,8 @@ by harness, and nothing records which of the hand steps were done.
 ## Solution
 
 One plain file, checked into a dotfiles repository, declares the environment: a **Provision** per thing
-installed, carrying a name, a **Check** per harness, and an **Install command** per harness. The
+installed, carrying a name, **Checks** and an **Install command** shared by every harness entry unless
+an entry needs its own. The
 Check is declared data that ACM evaluates by reading, so it never executes anything and an agent may
 define one. The Install command is idempotent, non-interactive text, written for one harness at one
 tier, and only `acm install` ever runs it.
@@ -47,8 +48,9 @@ unstored input for authoring). Everything else in the mirror engine is deleted, 
    reviewable diff rather than a sequence of remembered commands.
 2. As a human, I want one entry per harness per Provision, so that a thing that is a plugin on one
    harness and an MCP server plus a skill on another is still one Provision.
-3. As a human, I want a Provision's entry to carry both a Check and an Install command, so that the
-   file says both what should be there and how to put it there.
+3. As a human, I want a Provision to declare Checks and an Install command — shared, or per harness
+   entry where the harness needs its own — so that the file says both what should be there and how to
+   put it there.
 4. As a human, I want a Provision with no entry for some harness to be legal, so that harness-specific
    things do not need placeholder entries.
 5. As a human, I want optional tags on a Provision, so that I can filter by a shape (`mcp`, `plugin`,
@@ -200,6 +202,25 @@ unstored input for authoring). Everything else in the mirror engine is deleted, 
 67. As a human, I want `acm status` to name the file each row came from, so that running it in my home
     directory does not quietly relabel my home file as a project file.
 
+### Shared declarations
+
+68. As a human, I want a Provision to declare Checks and an Install command once for every harness, so
+    that a thing installed into a location all harnesses share is written once instead of per harness.
+69. As a human, I want a harness entry to be allowed to carry nothing, so that a harness which uses
+    the shared declaration whole still gets its own Presence row — the empty entry is declared for
+    visibility, not omitted.
+70. As a human, I want an entry's own Checks and Install command to apply beside the shared ones, so
+    that a Provision which is an MCP server on one harness and a plugin on another stays one
+    Provision.
+71. As a human, I want the shared Install command to run at most once per run, so that several harness
+    entries of one Provision do not execute the same command two or three times.
+72. As a human, I want an entry that would end up with no effective Check or no effective Install
+    command refused, so that every declared harness can always be checked and converged.
+73. As an AI agent, I want to define a Provision's shared Checks and Install command through MCP, so
+    that onboarding a shared-location Provision is one call rather than one per harness.
+74. As a human, I want a nearer environment file to own a Provision's shared declarations whole, the
+    way it owns `tags`, so that override semantics need no new rule.
+
 ## Implementation Decisions
 
 ### Vocabulary and entities
@@ -212,18 +233,32 @@ Grade, Scope bucket) must not appear in code, tool output, or docs.
 ### The Environment file
 
 One TOML document per tier. `version = 1` at the root is required; an unknown version refuses to load.
-Provisions are `[provision.<name>.<harness>]` tables, each with `checks` (one or more) and an
-`install`. A Provision may carry `tags`. This shape is the decision, not a sketch:
+A Provision is a `[provision.<name>]` table carrying optional `tags`, `checks`, and `install` shared
+by every harness entry, plus one `[provision.<name>.<harness>]` table per harness. This shape is the
+decision, not a sketch:
 
 ```toml
 version = 1
 
 [provision.serena]
-tags = ["mcp"]
+tags    = ["mcp"]
+install = "uv tool install -p 3.13 serena-agent"
 
-[provision.serena.codex]
-checks  = [{ file = "~/.codex/config.toml", pointer = "mcp_servers.serena" }]
-install = { payload = "install/codex-mcp.sh", args = ["serena"] }
+[provision.serena.pi]
+checks  = [{ file = "~/.pi/agent/mcp.json", pointer = "mcp_servers.serena.command", equals = "serena" }]
+install = "pi mcp add serena -- serena start-mcp-server --context ide --project-from-cwd"
+
+[provision.serena.opencode]
+checks  = [{ file = "~/.config/opencode/opencode.json", pointer = "mcp.servers.serena.type", equals = "local" }]
+install = "opencode mcp add serena --global -- serena start-mcp-server --context ide --project-from-cwd"
+
+[provision.skills-mattpocock]
+tags    = ["skills"]
+checks  = [{ file = "~/.agents/.skill-lock.json", contains = "mattpocock/skills" }]
+install = "npx -y skills add mattpocock/skills -g -y --skill grilling --skill grill-me"
+
+[provision.skills-mattpocock.pi]
+[provision.skills-mattpocock.opencode]
 
 [provision.i-have-adhd.pi]
 checks  = [{ file = "~/.config/opencode/opencode.json", pointer = "plugins", includes = "i-have-adhd" }]
@@ -244,13 +279,21 @@ install = "grep -q OPENCODE_DISABLE_CLAUDE_CODE ~/.zshrc || echo 'export OPENCOD
   schema change.
 - **An entry's `checks` all have to hold**, and `check = { … }` stays legal as a one-element list, so
   a file written before this slice keeps loading at `version = 1`.
-- **Install is one of three shapes**: a string, required and the only text ACM ever executes;
+- **Shared declarations.** A Provision's own `checks` and `install` apply to every harness entry:
+  an entry's effective Checks are the shared ones plus its own, all of which must hold, and its
+  effective Install command is the shared one plus its own. An entry may be an empty table — it
+  then means the harness takes the shared declaration whole, and exists so the Provision's rows
+  show that harness. Entry-level `checks` and `install` are optional.
+- **Install is one of three shapes**: a string, the only text ACM ever executes;
   `{ payload = "<path>" [, args = [ … ]] }`, whose Payload is read at run time and whose arguments
   reach it as argv; or `{ file = "<native file>", section = "<payload>" }`, which rewrites one Section
   and nothing else of that file.
-- **Validation is total.** An unknown key, a missing `install`, an empty `checks` list, an unknown
+- **Validation is total.** An unknown key, an empty `checks` list, an unknown
   harness id, an unknown predicate kind, an empty `contains`, or an address that cannot be spelled
-  refuses the whole file with line and column. A file that does not parse contributes nothing; the
+  refuses the whole file with line and column. `checks` and `install` are optional at both levels,
+  but every entry must end up with at least one effective Check and at least one effective Install
+  command once the shared declarations are applied — so a Provision with no shared `install` needs
+  one on every entry. A file that does not parse contributes nothing; the
   other tiers still load.
 - **A relative path in `file`, a Payload path, or an `install` string resolves against the tier
   root** — `$HOME` for `user`, the Project root for `project` and `project-local`. A leading `~` or
@@ -259,11 +302,12 @@ install = "grep -q OPENCODE_DISABLE_CLAUDE_CODE ~/.zshrc || echo 'export OPENCOD
 
 ### Loading and merging
 
-One loader answers with a list of resolved Provisions, each carrying its Tier, harness, name, Check,
-Install command, and source file. It reads `user` always, and the two project files when the Project
+One loader answers with a list of resolved Provisions, each carrying its Tier, harness, name, the
+shared and entry Checks and Install command, and source file. It reads `user` always, and the two project files when the Project
 root has them. Merge is per `(provision, harness)` key with `project-local` > `project` > `user`; a
 Provision's `tags` merge the same way, replaced rather than unioned, so a nearer file owns its entry
-whole. Ordering for a run is file order of the winning entry, `user` file first, which keeps a
+whole — and the Provision's shared `checks` and `install` merge the same way too: the nearest file
+that declares the Provision owns them whole, with no field-level merging. Ordering for a run is file order of the winning entry, `user` file first, which keeps a
 human-editable sequence without inventing a dependency syntax. A file is read once: when two tiers
 resolve to one path — a Project root that is `$HOME` — the `user` tier keeps it, so the home file is
 never relabelled as a project declaration.
@@ -276,7 +320,8 @@ entry that declared several Checks, every Check that did not answer `present` na
 reason. Checks read; they never spawn. `onPath` walks `PATH` and requires a regular executable file. `pointer` presence means a value
 exists at that address; with `equals`, the value must also match by deep equality; with `includes`,
 the array at that address must hold an element deeply equal to it. An entry's Presence folds its
-Checks: any `absent` answers `absent`, otherwise any `unknown` answers `unknown`, otherwise
+effective Checks — the shared ones plus its own: any `absent` answers `absent`, otherwise any
+`unknown` answers `unknown`, otherwise
 `present`, and `detail` names every Check that did not answer `present`. Presence is never stored
 between runs — `acm status` always re-evaluates.
 
@@ -286,6 +331,11 @@ A run is a pure function of the Environment plus the filesystem: it prints each 
 Tier, and command, then starts the commands whose Presence is not `present` (or all of them under
 `--force`), in loader order.
 
+- A Provision's shared Install command runs **at most once per Provision per run**: it runs before
+  the first entry that needs it, later entries of the same Provision do not run it again, and it is
+  skipped entirely when no entry of the Provision runs. Its Run is recorded once, attributed to the
+  harness entry whose run triggered it, and the preview prints it once, labeled as the Provision's
+  shared command.
 - Each command starts via the POSIX shell, with `cwd` = the Tier root, stdin from `/dev/null`,
   inherited stdout/stderr, and the parent environment unchanged. ACM adds no variables.
 - A Payload starts as `sh <payload> <args…>` from that same root, so its text is read at run time and
@@ -315,16 +365,20 @@ Three tools, identical on all three clients, registered with zod input schemas:
 |---|---|---|---|
 | `list_provisions` | `tier?`, `harness?`, `name?` | Provision rows with per-harness Presence and `detail` | `readOnlyHint: true` |
 | `read_native_config` | `harness`, `tier?` | secret-free declarations with native locations, or a parse error | `readOnlyHint: true` |
-| `define_provision` | `name`, `harness`, `tier?`, `check`, `install`, `tags?` | the written pointer and the file's digest | `readOnlyHint: false` |
+| `define_provision` | `name`, `harness`, `tier?`, `check`, `install`, `tags?`, plus optional shared `checks`/`install` | the written pointer and the file's digest | `readOnlyHint: false` |
 
 - `define_provision`'s `checks` and `install` are discriminated unions of the shapes above, so a
   client sees every predicate and every install form in the tool schema instead of a free-form object.
+  The same unions serve the optional shared `checks` and `install`, which the tool writes on the
+  Provision's own table — so an agent can declare a shared-location Provision in one call and a
+  harness-specific one by filling the entry.
 - No tool deletes a Provision: the environment file is the interface, and removal is an edit to it.
 - No tool runs a command and no tool runs a Check that spawns anything, by construction: Checks cannot
   spawn.
 - `define_provision` defaults to `project-local`, so an agent's unreviewed addition never lands in a
   committed file. It writes through the pointer-level native editor, so comments and sibling
-  Provisions survive; a same-key write replaces that Provision's harness subtree only.
+  Provisions survive; a same-key write replaces that Provision's harness subtree only, and a shared
+  write replaces the Provision's own `checks`/`install` keys only.
 - `read_native_config` reuses the existing harness readers. It answers for every path a harness's read
   lookup declares at that tier, and it applies the secret classifier and credential pointers before
   anything reaches the result.
@@ -373,8 +427,9 @@ passes after the merge rule were inverted is worthless.
   writes (`true`, `exit 1`, `echo >> file`, a script that reads stdin), so a run's behaviour — order,
   cwd, skipped presents, continued failures, exit status, recorded Presence — is asserted without a
   real harness. Merge and shadowing, tier resolution of relative paths, `unknown` derivation, every
-  Check predicate, `--dry-run` defaulting, `--only`, `--force`, and the `define_provision` round trip
-  all live here.
+  Check predicate, `--dry-run` defaulting, `--only`, `--force`, the shared Install command running
+  once across several entries of one Provision, empty entries reporting Presence from shared Checks,
+  and the `define_provision` round trip all live here.
 - **Seam B — pure functions over bytes (unit).** The environment-file parser and validator (every
   refusal case, line and column), the Check evaluator over fixture bytes and a fake `PATH`, and the
   secret classifier's rule table including its false-positive guards. This is where the predicate set
@@ -422,8 +477,9 @@ them.
    new path is proven before the old one is removed.
 
 **What to check first if the slice looks wrong.** The environment file is the contract. If a Provision
-that is real on this machine cannot be written as a name, a Check per harness, and an Install command
-per harness, that is a spec failure — amend the predicate set or the shape before writing more code.
+that is real on this machine cannot be written as a name, shared or per-harness Checks, and a shared
+or per-harness Install command, that is a spec failure — amend the predicate set or the shape before
+writing more code.
 
 **Risk stated once.** A run reports `present` after a Check passes, and a Check is only as good as its
 author. A Provision with a weak Check reports success while the machine is half-configured, and

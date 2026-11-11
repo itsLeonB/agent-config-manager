@@ -2,7 +2,8 @@
 
 A reproducible, local-first environment for AI coding agent configuration: every harness's plugins,
 MCP servers, skills, hooks, and instruction files are declared once, in a plain file, as a named
-**Provision** with one check and one idempotent install command per harness — and `acm install`
+**Provision** — Checks and an install command shared by every harness entry, plus a per-harness
+entry where a harness needs its own — and `acm install`
 reproduces the whole environment on another machine. Native config stays native; ACM writes it only
 through the commands the environment declares. This file holds the vocabulary the code, the specs,
 and the docs must agree on.
@@ -12,13 +13,17 @@ and the docs must agree on.
 **Provision**: one named thing the environment should have, whatever form it takes in each harness —
 the same Provision may be a plugin on one harness and an MCP server plus a skill on another. Named by
 a human (`serena`, `rtk`, `i-have-adhd`), never by a native address. Keyed by
-`(provision name, harness)` within one environment file.
+`(provision name, harness)` within one environment file. A Provision may declare Checks and an
+Install command shared by all its harness entries; each harness's table is an entry, and an empty
+entry means the harness takes the shared declaration whole — it is declared so the Provision's rows
+show that harness.
 _Avoid_: component, plugin, entry, package, item, installation
 
 **Check**: the declared predicate that answers whether part of a Provision is present in one harness —
 a file that exists, a file that contains a pattern, a value at a native location, a value among the
-elements of an array at one, a Section that matches its Payload, a name on `PATH`. An entry declares one
-or more of them and all of them must hold. A Check is data, never code: it is evaluated by reading, so
+elements of an array at one, a Section that matches its Payload, a name on `PATH`. A Provision or an
+entry declares one or more of them and all of them must hold — an entry's effective Checks are the
+shared ones plus its own. A Check is data, never code: it is evaluated by reading, so
 declaring one executes nothing.
 _Avoid_: detection, probe, test, health check
 
@@ -28,8 +33,11 @@ be evaluated (a file or Payload it reads is missing or unparseable, an address i
 unanswered question is never reported as an absence.
 _Avoid_: status, state, installed flag, health, verdict
 
-**Install command**: the idempotent, non-interactive command that puts a Provision into one harness.
-Its text is either spelled in the file or kept in a Payload, and a Payload may be given arguments. It
+**Install command**: the idempotent, non-interactive command that puts a Provision — wholly, when
+shared, or into one harness, when declared on an entry — into place. Declared on the Provision it runs
+at most once per run, before the first entry that needs it; declared on an entry it runs for that
+entry alone. Its text is either spelled in the file or kept in a Payload, and a Payload may be given
+arguments. It
 is written for one Tier: it runs from that Tier's root, a relative path in it means that root, and ACM
 passes it no environment variables and no standard input. It carries no credential. Run only by
 `acm install`, which a human starts.
@@ -98,6 +106,8 @@ _Avoid_: store location, install root, repository root, working directory when t
 - An Install command is static text: no placeholders, no environment variables, no credential. The
   same Provision at two tiers therefore has two commands, and that duplication is intended. Arguments
   are passed to a Payload as argv, never substituted into it.
+- A shared Install command runs at most once per run, before the first entry that needs it; an empty
+  harness entry means the harness uses the Provision's shared declaration, and exists for visibility.
 - Nothing is declared absent and nothing is removed: a Provision says what should be present, an
   entry's Section is the only text ACM may overwrite, and retiring a Provision is an edit to the file.
 - Two Tiers that resolve to one file are one environment file: the nearer Tier wins and the farther
