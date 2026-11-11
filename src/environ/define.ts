@@ -3,7 +3,8 @@ import path from 'node:path'
 import { resolveDefaultConfig } from '../engine/config.ts'
 import type { EngineConfig } from '../engine/config.ts'
 import { digestOfBytes } from '../engine/digest.ts'
-import { readPointer, tomlPath, writePointer } from '../engine/edit.ts'
+import { ensureTomlTable, readPointer, tomlPath, writePointer } from '../engine/edit.ts'
+import type { EditResult } from '../engine/edit.ts'
 import type { NativeValue } from '../engine/native-value.ts'
 import { environmentFiles } from './loader.ts'
 import { parseEnvironmentFile } from './parse.ts'
@@ -27,12 +28,15 @@ export interface DefineRequest {
   // `check` replaces that singular Check. A request names one of the two; the validator after
   // the write refuses one that names both or neither, with that reason.
   checks?: Record<string, NativeValue>[]
-  // Required, and never optional: an entry is a Check and an Install command, so a definition that
-  // named only the Check would write a subtree the loader refuses and an existing command would
-  // survive a write that said it replaced the entry. A Payload form `{ payload [, args] }` or a
-  // Section form `{ file, section }` is written as the table the file spells, and the validator
-  // after the write owns both shapes.
-  install: InstallCommand
+  // Optional because the Provision's shared Install command or the entry's existing one can cover
+  // it; the parser after the write refuses a definition that leaves the entry with no effective
+  // Install command. A Payload form `{ payload [, args] }` or a Section form `{ file, section }` is
+  // written as the table the file spells, and the validator after the write owns both shapes.
+  install?: InstallCommand
+  // The Provision's shared declarations, written on `[provision.<name>]` rather than the entry:
+  // every harness entry inherits them, and a same-key write replaces those keys only.
+  sharedChecks?: Record<string, NativeValue>[]
+  sharedInstall?: InstallCommand
   tags?: string[]
 }
 
@@ -68,6 +72,7 @@ export function defineProvision(
 
   const provision = ['provision', request.name]
   const entry = [...provision, request.harness]
+  const hasEntryFields = request.check !== undefined || request.checks !== undefined || request.install !== undefined
   let written = text
   // The editor's own reader answers which spelling the entry's Checks have now. A brand-new entry
   // takes the request's spelling; an existing one keeps the file's: `check` found means the singular
@@ -85,6 +90,24 @@ export function defineProvision(
     const tagged = writePointer(written, 'toml', [...provision, 'tags'], request.tags)
     if (tagged.kind === 'failed') return tagged
     written = tagged.text
+  }
+
+  // The shared declarations sit on the Provision's own table and every entry inherits them. They
+  // keep the file's Check spelling the way an entry does: a singular `check` takes one element, and
+  // several against it is a hand edit because the pointer editor cannot delete the old key.
+  if (request.sharedChecks !== undefined) {
+    const declaredProvision = before.provisions.find((candidate) => candidate.name === request.name)
+    const spelledSingular =
+      declaredProvision !== undefined &&
+      readPointer(written, 'toml', tomlPath([...provision, 'check'])).kind === 'found'
+    const checks = writeChecks(written, provision, request.sharedChecks, spelledSingular)
+    if (checks.kind === 'failed') return checks
+    written = checks.text
+  }
+  if (request.sharedInstall !== undefined) {
+    const install = writePointer(written, 'toml', [...provision, 'install'], request.sharedInstall)
+    if (install.kind === 'failed') return install
+    written = install.text
   }
 
   // Two addresses, one entry: the Checks are tables and `install` a string, so each is written as
@@ -111,28 +134,21 @@ export function defineProvision(
     if (check.kind === 'failed') return check
     written = check.text
   } else if (request.checks !== undefined) {
-    if (declared !== undefined && spelledSingular) {
-      // Several Checks cannot replace a singular spelling: the `check` key would have to be deleted,
-      // which the pointer editor does not do, so that write is refused as a hand edit.
-      const one = request.checks[0]
-      if (request.checks.length !== 1 || one === undefined) {
-        return {
-          kind: 'failed',
-          reason: `${tomlPath(entry)} spells its Check as one check = { … }; replacing it with several Checks is a hand edit`,
-        }
-      }
-      const check = writePointer(written, 'toml', [...entry, 'check'], one)
-      if (check.kind === 'failed') return check
-      written = check.text
-    } else {
-      const checks = writePointer(written, 'toml', [...entry, 'checks'], request.checks)
-      if (checks.kind === 'failed') return checks
-      written = checks.text
-    }
+    const checks = writeChecks(written, entry, request.checks, spelledSingular)
+    if (checks.kind === 'failed') return checks
+    written = checks.text
   }
-  const install = writePointer(written, 'toml', [...entry, 'install'], request.install)
-  if (install.kind === 'failed') return install
-  written = install.text
+  if (request.install !== undefined) {
+    const install = writePointer(written, 'toml', [...entry, 'install'], request.install)
+    if (install.kind === 'failed') return install
+    written = install.text
+  } else if (!hasEntryFields) {
+    // An entry with no fields of its own is still declared: the empty table is what makes the
+    // harness's Presence row exist when the shared declarations cover it.
+    const table = ensureTomlTable(written, entry)
+    if (table.kind === 'failed') return table
+    written = table.text
+  }
 
   // The same parser the loader runs, over the bytes that would land: a definition the loader would
   // refuse is refused here, with that reason, and the file is left as it was.
@@ -148,6 +164,27 @@ export function defineProvision(
     pointer: tomlPath(entry),
     digest: digestOfBytes(Buffer.from(written)),
   }
+}
+
+// A checks list keeps the spelling the table already has: `checks = [ … ]` stays a list, and a
+// singular `check = { … }` takes the list's one element. Several Checks against the singular
+// spelling cannot be written, because replacing it would need a delete the pointer editor does not
+// do — that is a hand edit, not a definition.
+function writeChecks(
+  written: string,
+  base: string[],
+  checks: Record<string, NativeValue>[],
+  spelledSingular: boolean,
+): EditResult {
+  if (!spelledSingular) return writePointer(written, 'toml', [...base, 'checks'], checks)
+  const one = checks[0]
+  if (checks.length !== 1 || one === undefined) {
+    return {
+      kind: 'failed',
+      reason: `${tomlPath(base)} spells its Check as one check = { … }; replacing it with several Checks is a hand edit`,
+    }
+  }
+  return writePointer(written, 'toml', [...base, 'check'], one)
 }
 
 function declaredTags(provisions: ProvisionDeclaration[], name: string): string[] {
