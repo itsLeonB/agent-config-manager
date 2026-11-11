@@ -27,7 +27,14 @@ write a root key at all (it appended a `[]` table header), so a `parent.length =
 replaces an existing root key in place — comment kept — or inserts before the first table header
 (and its leading comment/blank lines), or appends when the document is all root keys; and
 `deleteTomlKey` removes a root key plus every line a multi-line value runs over, bounded to the
-region before the first table header so a same-named key inside a table is untouched.
+region before the first table header so a same-named key inside a table is untouched. The
+value-end scan is a TOML-state walk — basic, literal, and multi-line strings plus comments — so a
+`[` or `#` inside a string or comment never extends a root key's span, and `tomlLineKey` reads
+literal-quoted `'key'` spellings alongside bare and `"quoted"` ones.
+
+Review fixes: the read-parse-write-validate-write sequence `defineProvision` and
+`declareHarnesses` duplicated is now `openEnvironmentForWrite`/`commitEnvironmentWrite` in
+`define.ts`, which `declare.ts` calls.
 
 The MCP face registers `declare_harnesses` in `src/mcp/router.ts` with a required `tier` enum
 (`user`, `project`) and a `harnesses` string array; a refusal answers `not declared: <line>:<col>:

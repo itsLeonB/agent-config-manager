@@ -3,33 +3,32 @@ import assert from 'node:assert'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readSkillsLock, skillsCommands } from './skills.ts'
+import { parseSkillsLock, readSkillsLock, skillsCommands } from './skills.ts'
 import type { SkillsLockReads } from './skills.ts'
 
 // Seam B: the lockfile reader is a pure function over bytes, so every shape the `skills` CLI can
-// write — and the ones it cannot — is a test here, with no `npx` and no filesystem beyond a temp
-// file. `skillsCommands` is the grouping half: one command per source, in file order.
+// write — and the ones it cannot — is a test here, with no `npx` and no filesystem at all.
+// `skillsCommands` is the grouping half: one command per source, in file order.
+
+const LOCK = 'skills-lock.json'
 
 function somewhere(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'acm-skills-'))
 }
 
-function lockfile(text: string): string {
-  const file = path.join(somewhere(), 'lock.json')
-  fs.writeFileSync(file, text)
-  return file
+function lockBytes(text: string): Uint8Array {
+  return new TextEncoder().encode(text)
 }
 
 test('a version 3 global lockfile reads every entry with a source, in file order', () => {
-  const file = lockfile(JSON.stringify({
+  const read = parseSkillsLock(lockBytes(JSON.stringify({
     version: 3,
     skills: {
       'web-design': { source: 'vercel-labs/agent-skills', sourceType: 'github', skillFolderHash: 'abc' },
       tdd: { source: 'mattpocock/skills', sourceType: 'github' },
     },
     lastSelectedAgents: ['pi'],
-  }))
-  const read = readSkillsLock(file, 'user')
+  })), LOCK)
   assert.deepEqual(read.skills, [
     { name: 'web-design', source: 'vercel-labs/agent-skills' },
     { name: 'tdd', source: 'mattpocock/skills' },
@@ -38,54 +37,65 @@ test('a version 3 global lockfile reads every entry with a source, in file order
 })
 
 test('a version 1 project lockfile reads the same shape', () => {
-  const file = lockfile(JSON.stringify({
+  const read = parseSkillsLock(lockBytes(JSON.stringify({
     version: 1,
     skills: {
       pdf: { source: 'contoso/pdf-tools', sourceType: 'github', computedHash: 'f3bc' },
     },
-  }))
-  const read = readSkillsLock(file, 'project')
+  })), LOCK)
   assert.deepEqual(read.skills, [{ name: 'pdf', source: 'contoso/pdf-tools' }])
   assert.deepEqual(read.warnings, [])
 })
 
 test('a missing skills key warns and reads nothing', () => {
-  const file = lockfile(JSON.stringify({ version: 3, dismissed: {} }))
-  const read = readSkillsLock(file, 'user')
+  const read = parseSkillsLock(lockBytes(JSON.stringify({ version: 3, dismissed: {} })), LOCK)
   assert.deepEqual(read.skills, [])
   assert.equal(read.warnings.length, 1)
   assert.match(read.warnings[0], /has no 'skills' map/)
 })
 
 test('invalid JSON warns and reads nothing', () => {
-  const file = lockfile('{ "version": 3, "skills": ')
-  const read = readSkillsLock(file, 'user')
+  const read = parseSkillsLock(lockBytes('{ "version": 3, "skills": '), LOCK)
   assert.deepEqual(read.skills, [])
   assert.equal(read.warnings.length, 1)
   assert.match(read.warnings[0], /is not valid JSON/)
 })
 
-test('a missing lockfile warns and reads nothing', () => {
-  const missing = path.join(somewhere(), 'never.json')
-  const read = readSkillsLock(missing, 'project')
+test('bytes that are not UTF-8 warn and read nothing', () => {
+  const read = parseSkillsLock(new Uint8Array([0xff, 0xfe, 0x00, 0x41]), LOCK)
   assert.deepEqual(read.skills, [])
-  assert.deepEqual(read.warnings, [`${missing}: no skills lockfile for the project tier`])
+  assert.equal(read.warnings.length, 1)
 })
 
 test('an entry with no source is skipped with a warning, the rest still read', () => {
-  const file = lockfile(JSON.stringify({
+  const read = parseSkillsLock(lockBytes(JSON.stringify({
     version: 1,
     skills: {
       good: { source: 'owner/repo', sourceType: 'github' },
       bad: { sourceType: 'github' },
       worse: 'not-an-object',
     },
-  }))
-  const read = readSkillsLock(file, 'project')
+  })), LOCK)
   assert.deepEqual(read.skills, [{ name: 'good', source: 'owner/repo' }])
   assert.equal(read.warnings.length, 2)
   assert.match(read.warnings[0], /'bad'.*has no source/)
   assert.match(read.warnings[1], /'worse'.*has no source/)
+})
+
+// JSON.parse orders integer-like keys numerically, but the lockfile's file order is the truth:
+// "10" before "2" is what the file says, and the install must keep it.
+test('integer-like skill names keep the file order the bytes spell', () => {
+  // The bytes are spelled out, not stringified: a JS object already orders "2" before "10", so
+  // only literal text can put "10" first the way a hand-edited or older lockfile might.
+  const read = parseSkillsLock(lockBytes(`{"version":3,"skills":{"10":{"source":"repo/ten"},"2":{"source":"repo/two"},"abc":{"source":"repo/abc"}}}`), LOCK)
+  assert.deepEqual(read.skills.map((skill) => skill.name), ['10', '2', 'abc'])
+})
+
+test('readSkillsLock is the filesystem wrapper: a missing file warns with its tier', () => {
+  const missing = path.join(somewhere(), 'never.json')
+  const read = readSkillsLock(missing, 'project')
+  assert.deepEqual(read.skills, [])
+  assert.deepEqual(read.warnings, [`${missing}: no skills lockfile for the project tier`])
 })
 
 test('skillsCommands groups by source in first-seen order and spells the argv', () => {
@@ -223,7 +233,7 @@ interface Observation {
   exitCode: number
 }
 
-function run(f: Fixture, options: { dryRun?: boolean } = {}): Observation {
+function run(f: Fixture, options: { dryRun?: boolean } = {}, env: NodeJS.ProcessEnv = f.env): Observation {
   const writes: string[] = []
   const warnings: string[] = []
   const exitCode = skillsInstallRun(
@@ -231,7 +241,7 @@ function run(f: Fixture, options: { dryRun?: boolean } = {}): Observation {
     (text) => warnings.push(text),
     options,
     f.config,
-    f.env,
+    env,
   )
   return { printed: writes.join(''), warned: warnings.join(''), exitCode }
 }
@@ -369,4 +379,52 @@ test('one failed command does not stop the rest, and the exit status is non-zero
   assert.match(printed, /exit 7/)
   assert.match(printed, /exit 0/)
   assert.equal(exitCode, 1)
+})
+
+// The user lockfile's path is fixed by the spec: ~/.agents/.skill-lock.json. XDG_STATE_HOME is
+// not consulted — a variable that moved the file would install a different set of skills.
+test('XDG_STATE_HOME does not move the user lockfile', () => {
+  const f = fixture()
+  const xdg = path.join(f.home, 'xdg-state')
+  fs.mkdirSync(path.join(xdg, 'skills'), { recursive: true })
+  fs.writeFileSync(
+    path.join(xdg, 'skills', '.skill-lock.json'),
+    JSON.stringify({ version: 3, skills: { decoy: { source: 'repo/decoy', sourceType: 'github' } } }),
+  )
+  userLock(f, { real: { source: 'repo/real', sourceType: 'github' } })
+  const { warned } = run(f, {}, { ...f.env, XDG_STATE_HOME: xdg })
+  const ran = calls(f)
+  assert.equal(ran.length, 1)
+  assert.deepEqual(ran[0].argv.slice(0, 6), ['-y', 'skills@latest', 'add', 'repo/real', '--skill', 'real'])
+  assert.doesNotMatch(warned, /no skills lockfile for the user tier/)
+})
+
+// A NUL byte in a lockfile value makes spawnSync throw synchronously. That is one command's
+// failure, not the run's: the groups after it still execute and the exit status says so.
+test('a spawn that throws does not stop the groups after it', () => {
+  const f = fixture()
+  userLock(f, {
+    bad: { source: 'repo/bad\u0000source', sourceType: 'github' },
+    good: { source: 'repo/good', sourceType: 'github' },
+  })
+  const { printed, exitCode } = run(f)
+  const ran = calls(f)
+  // The NUL group never reached npx; the next group did.
+  assert.equal(ran.length, 1)
+  assert.deepEqual(ran[0].argv.slice(0, 6), ['-y', 'skills@latest', 'add', 'repo/good', '--skill', 'good'])
+  assert.match(printed, /failed to start/)
+  assert.match(printed, /exit 0/)
+  assert.equal(exitCode, 1)
+})
+
+// A lockfile value is file bytes, and file bytes can hold control characters. The printed command
+// is a line a human reads, so it prints the printable spelling; the argv that runs is untouched.
+test('the printed command strips control characters the argv still carries', () => {
+  const f = fixture()
+  userLock(f, {
+    sneaky: { source: 'repo/one\nignored', sourceType: 'github' },
+  })
+  const { printed } = run(f, { dryRun: true })
+  assert.doesNotMatch(printed, /\nignored/)
+  assert.match(printed, /repo\/one\?ignored/)
 })

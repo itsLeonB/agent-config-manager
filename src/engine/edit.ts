@@ -398,25 +398,62 @@ const FIRST_TABLE = /^\s*(?!#)\[\[?[^\]]+\]\]?/
 // A key with no owning table is removed whole: its line, plus every line a multi-line value runs
 // over. Comments and siblings stay, and a key that is not there is a no-op.
 // The lines one root-level key's value runs over: the assignment line, plus every line an
-// unbalanced `[`/`{` keeps open. A `#` inside a string does not end the scan.
+// unbalanced `[`/`{` keeps open. Brackets and `#` inside a string or a comment are not structure,
+// so the scan walks the bytes with TOML's own states — basic `"…"`, literal `'…'`, and the two
+// multi-line spellings — rather than counting characters.
 function rootKeyEnd(lines: string[], found: number): number {
   let last = found
   let depth = 0
+  // Where the scan sits inside a value: a string's quote style, or a comment's rest of line. A
+  // comment ends at the newline; a string can run over lines.
+  let state: 'normal' | 'basic' | 'literal' | 'multi-basic' | 'multi-literal' | 'comment' = 'normal'
   for (let index = found; index < lines.length; index += 1) {
     const line = lines[index] ?? ''
     for (let at = 0; at < line.length; at += 1) {
       const char = line[at]
-      if (char === '"') {
-        while (at + 1 < line.length && line[at + 1] !== '"') at += line[at + 1] === '\\' ? 2 : 1
-        at += 1
-        continue
+      const next = line[at + 1]
+      const next2 = line[at + 2]
+      switch (state) {
+        case 'comment':
+          break
+        case 'basic':
+          if (char === '\\') at += 1
+          else if (char === '"') state = 'normal'
+          break
+        case 'literal':
+          if (char === "'") state = 'normal'
+          break
+        case 'multi-basic':
+          if (char === '\\') at += 1
+          else if (char === '"' && next === '"' && next2 === '"') {
+            at += 2
+            state = 'normal'
+          }
+          break
+        case 'multi-literal':
+          if (char === "'" && next === "'" && next2 === "'") {
+            at += 2
+            state = 'normal'
+          }
+          break
+        case 'normal':
+          if (char === '#') state = 'comment'
+          else if (char === '"' && next === '"' && next2 === '"') {
+            state = 'multi-basic'
+            at += 2
+          } else if (char === '"') state = 'basic'
+          else if (char === "'" && next === "'" && next2 === "'") {
+            state = 'multi-literal'
+            at += 2
+          } else if (char === "'") state = 'literal'
+          else if (char === '[' || char === '{') depth += 1
+          else if (char === ']' || char === '}') depth -= 1
+          break
       }
-      if (char === '#' && depth === 0) break
-      if (char === '[' || char === '{') depth += 1
-      if (char === ']' || char === '}') depth -= 1
     }
+    if (state === 'comment') state = 'normal'
     last = index
-    if (depth <= 0) break
+    if (state === 'normal' && depth <= 0) break
   }
   return last
 }
@@ -546,11 +583,13 @@ function samePath(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((segment, index) => segment === right[index])
 }
 
-// The bare key a table-body line assigns, unquoted; null for a line that assigns nothing.
+// The bare or quoted key a table-body line assigns; null for a line that assigns nothing. A
+// literal-quoted key `'name'` spells the same key as `"name"`, with no escapes to undo.
 function tomlLineKey(line: string): string | null {
-  const match = /^\s*(?:"((?:[^"\\]|\\.)*)"|([A-Za-z0-9_-]+))\s*=/.exec(line)
+  const match = /^\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*=/.exec(line)
   if (match === null) return null
-  return match[1] === undefined ? (match[2] ?? null) : JSON.parse(`"${match[1]}"`)
+  if (match[1] !== undefined) return JSON.parse(`"${match[1]}"`)
+  return match[2] ?? match[3] ?? null
 }
 
 // The `#` comment after a value, if it is outside a string: `command = "a # b"` has none.

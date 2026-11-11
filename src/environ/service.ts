@@ -159,7 +159,7 @@ export function formatRefusal(refusal: FileRefusal): string {
 function footer(status: Status): string {
   const entries = status.provisions.reduce((total, row) => total + row.harnesses.length, 0)
   const harnesses = ENVIRONMENT_TIERS.map(
-    (tier) => `${tier} ${status.harnesses[tier].length > 0 ? status.harnesses[tier].join(', ') : 'none declared'}`,
+    (tier) => `${tier} ${status.harnesses[tier].length > 0 ? status.harnesses[tier].map(printable).join(', ') : 'none declared'}`,
   ).join('; ')
   return `${counted(entries, 'entry', 'entries')} over ${counted(status.provisions.length, 'provision', 'provisions')} · project ${shorten(status.projectRoot, status.home)} · store ${shorten(status.storePath, status.home)} · harnesses: ${harnesses}`
 }

@@ -28,8 +28,8 @@ export interface SkillsLockRead {
   warnings: string[]
 }
 
-// The `skills` CLI's global lock lives under `$XDG_STATE_HOME/skills/` when that variable is set,
-// otherwise `~/.agents/`; the project lock is always `<project>/skills-lock.json`.
+// The `skills` CLI's global lock lives at `~/.agents/.skill-lock.json` — a fixed path the spec
+// names, so no environment variable moves it; the project lock is `<project>/skills-lock.json`.
 // The two per-tier answers the installer reads: keyed by the closed tier names so a file can never
 // answer for the other scope's lockfile or harness list.
 export interface SkillsLockPaths {
@@ -41,28 +41,25 @@ export interface SkillsLockReads {
   project: SkillsLockRead
 }
 
-export function skillsLockPaths(config: EngineConfig, env: NodeJS.ProcessEnv = process.env): SkillsLockPaths {
-  const xdg = env.XDG_STATE_HOME
-  const user =
-    xdg === undefined
-      ? path.join(config.home, '.agents', '.skill-lock.json')
-      : path.join(xdg, 'skills', '.skill-lock.json')
-  return { user, project: path.join(config.projectRoot, 'skills-lock.json') }
+export function skillsLockPaths(config: EngineConfig): SkillsLockPaths {
+  return {
+    user: path.join(config.home, '.agents', '.skill-lock.json'),
+    project: path.join(config.projectRoot, 'skills-lock.json'),
+  }
 }
 
 // The reader is a pure function over bytes: every lockfile shape is testable without `npx`. The
 // global lock is schema v3 and the project lock schema v1, and both share `{ version, skills: {
 // <name>: { source, ... } } }`, so a `version` the file spells is accepted as written — a newer
 // schema's extra fields survive for the CLI that owns them. A `skills` map entry without a string
-// `source` has nothing to install and is skipped with a warning.
-export function readSkillsLock(file: string, tier: EnvironmentTier): SkillsLockRead {
-  if (!existsSync(file)) return { skills: [], warnings: [`${file}: no skills lockfile for the ${tier} tier`] }
+// `source` has nothing to install and is skipped with a warning. `file` is only the label the
+// warnings carry.
+export function parseSkillsLock(bytes: Uint8Array, file: string): SkillsLockRead {
   let text: string
   try {
-    text = readFileSync(file, 'utf8')
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
-    return { skills: [], warnings: [`${file}: could not be read: ${reason}`] }
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    return { skills: [], warnings: [`${file}: is not valid UTF-8`] }
   }
   let parsed: unknown
   try {
@@ -80,7 +77,18 @@ export function readSkillsLock(file: string, tier: EnvironmentTier): SkillsLockR
   }
   const skills: SkillsLockSkill[] = []
   const warnings: string[] = []
-  for (const [name, entry] of Object.entries(map)) {
+  // The byte walk reads the same bytes the parse did, so it cannot miss a member; the seen-set
+  // only collapses a duplicate key's repeated spelling, and the tail keeps the map's order for
+  // anything the walk could not see.
+  const seen = new Set<string>()
+  const names = (skillsKeyOrder(text) ?? Object.keys(map)).filter((name) => {
+    if (seen.has(name) || !(name in map)) return false
+    seen.add(name)
+    return true
+  })
+  for (const name of Object.keys(map)) if (!seen.has(name)) names.push(name)
+  for (const name of names) {
+    const entry = map[name]
     const record = z.record(z.string(), z.unknown()).safeParse(entry)
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- a lock entry's source is the discriminator
     const source = record.success && typeof record.data.source === 'string' ? record.data.source : undefined
@@ -91,6 +99,115 @@ export function readSkillsLock(file: string, tier: EnvironmentTier): SkillsLockR
     skills.push({ name, source })
   }
   return { skills, warnings }
+}
+
+// The filesystem half of the reader: whether the file is there and readable is a warning of its
+// own, and the bytes it holds go to the pure parser.
+export function readSkillsLock(file: string, tier: EnvironmentTier): SkillsLockRead {
+  if (!existsSync(file)) return { skills: [], warnings: [`${file}: no skills lockfile for the ${tier} tier`] }
+  try {
+    return parseSkillsLock(readFileSync(file), file)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    return { skills: [], warnings: [`${file}: could not be read: ${reason}`] }
+  }
+}
+
+// The member names of the `skills` object in file order, or null when the bytes cannot be walked
+// — a document JSON.parse accepted cannot produce that, so null only ever means "use the map's
+// order". JSON.parse orders integer-like keys numerically — "2" before "10" — but the lockfile's
+// order is what the file spells, so the names are read off the bytes and each entry's value
+// still comes from the parsed map.
+function skillsKeyOrder(text: string): string[] | null {
+  const members = jsonObjectMembers(text)
+  const skills = members?.find((member) => member.key === 'skills')
+  if (skills === undefined) return null
+  return jsonObjectMembers(text, skills.start)?.map((member) => member.key) ?? null
+}
+
+interface JsonMember {
+  key: string
+  // The value's first and last byte offsets, so a member's object can be walked again.
+  start: number
+  end: number
+}
+
+function skipJsonWhitespace(text: string, at: number): number {
+  while (at < text.length && ' \t\r\n'.includes(text[at] ?? '')) at += 1
+  return at
+}
+
+// The index just past the string that opens at `at`, escapes honoured; -1 when unterminated.
+function jsonStringEnd(text: string, at: number): number {
+  for (let index = at + 1; index < text.length; index += 1) {
+    if (text[index] === '\\') index += 1
+    else if (text[index] === '"') return index + 1
+  }
+  return -1
+}
+
+// The index just past the value that opens at `at`: a string, an object or array walked with
+// strings skipped, or a bare token out to its delimiter.
+function jsonValueEnd(text: string, at: number): number {
+  const char = text[at]
+  if (char === '"') return jsonStringEnd(text, at)
+  if (char !== '{' && char !== '[') {
+    let index = at
+    while (index < text.length && !',}] \t\r\n'.includes(text[index] ?? '')) index += 1
+    return index
+  }
+  let depth = 0
+  for (let index = at; index < text.length; index += 1) {
+    const current = text[index]
+    if (current === '"') {
+      const end = jsonStringEnd(text, index)
+      if (end === -1) return -1
+      index = end - 1
+      continue
+    }
+    if (current === '{' || current === '[') depth += 1
+    else if (current === '}' || current === ']') {
+      depth -= 1
+      if (depth === 0) return index + 1
+    }
+  }
+  return -1
+}
+
+// The members of the JSON object that opens at `start` (default: the document's first byte), in
+// file order. The document already parsed, so a null here means the walk disagreed with the
+// parser — the caller falls back rather than invent an order.
+function jsonObjectMembers(text: string, start?: number): JsonMember[] | null {
+  let at = skipJsonWhitespace(text, start ?? 0)
+  if (text[at] !== '{') return null
+  at += 1
+  const members: JsonMember[] = []
+  for (;;) {
+    at = skipJsonWhitespace(text, at)
+    if (text[at] === '}') return members
+    if (text[at] !== '"') return null
+    const keyEnd = jsonStringEnd(text, at)
+    if (keyEnd === -1) return null
+    let key: string
+    try {
+      key = JSON.parse(text.slice(at, keyEnd))
+    } catch {
+      return null
+    }
+    at = skipJsonWhitespace(text, keyEnd)
+    if (text[at] !== ':') return null
+    at = skipJsonWhitespace(text, at + 1)
+    const valueStart = at
+    const valueEnd = jsonValueEnd(text, at)
+    if (valueEnd === -1) return null
+    members.push({ key, start: valueStart, end: valueEnd })
+    at = skipJsonWhitespace(text, valueEnd)
+    if (text[at] === ',') {
+      at += 1
+      continue
+    }
+    return text[at] === '}' ? members : null
+  }
 }
 
 export interface SkillsCommand {
@@ -132,17 +249,25 @@ export function skillsCommands(
   return commands
 }
 
-// The shell spelling of one command, for the line a real run and a dry run both print.
+// The shell spelling of one command, for the line a real run and a dry run both print. The
+// words are file bytes, so the printed line goes through `printable` like every file-derived
+// value; the argv that actually runs is the untouched one.
 function commandText(command: SkillsCommand): string {
-  return `npx ${command.argv.map(shellWord).join(' ')}`
+  return `npx ${command.argv.map((word) => shellWord(printable(word))).join(' ')}`
 }
 
 // The one spawn in the skills installer: argv goes to `npx` untouched — no shell, so a source or a
 // skill name is data, never text a shell could read. stdin is /dev/null like every ACM command.
-// `env` reaches the child as given so a test can put a fake `npx` first on PATH.
+// `env` reaches the child as given so a test can put a fake `npx` first on PATH. A spawn that
+// throws — a NUL byte in an argument, say — is one command's failure, reported the same as a
+// non-zero exit, and the groups after it still run.
 function runCommand(command: SkillsCommand, env: NodeJS.ProcessEnv): number | null {
-  const result = spawnSync('npx', command.argv, { cwd: command.cwd, env, stdio: ['ignore', 'inherit', 'inherit'] })
-  return result.status
+  try {
+    const result = spawnSync('npx', command.argv, { cwd: command.cwd, env, stdio: ['ignore', 'inherit', 'inherit'] })
+    return result.status
+  } catch {
+    return null
+  }
 }
 
 export function skillsInstallRun(
@@ -152,7 +277,7 @@ export function skillsInstallRun(
   config: EngineConfig = resolveDefaultConfig(),
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const paths = skillsLockPaths(config, env)
+  const paths = skillsLockPaths(config)
   const environment = loadEnvironment(config)
   const reads: SkillsLockReads = {
     user: readSkillsLock(paths.user, 'user'),

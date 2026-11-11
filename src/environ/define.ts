@@ -8,7 +8,7 @@ import type { EditResult } from '../engine/edit.ts'
 import type { NativeValue } from '../engine/native-value.ts'
 import { environmentFiles } from './loader.ts'
 import { harnessesKeyPlace, parseEnvironmentFile } from './parse.ts'
-import type { EnvironmentTier, InstallCommand, ProvisionDeclaration, Refusal } from './types.ts'
+import type { EnvironmentTier, InstallCommand, ParseResult, ProvisionDeclaration, Refusal } from './types.ts'
 
 // One Provision's Check and Install command for one harness, written into the environment file its
 // tier names. Nothing here runs the command or evaluates the Check: the only effect is bytes in a
@@ -51,15 +51,27 @@ export type DefineOutcome =
 
 const VERSION_ROOT = 'version = 1\n'
 
-export function defineProvision(
-  request: DefineRequest,
+// The write sequence a definition and a declaration share: the tier's file, its bytes or the
+// empty root a missing file reads as, and the file's own parse before a byte is touched. The
+// caller edits the returned text and lands it with commitEnvironmentWrite, so the read-validate-
+// write-validate steps cannot drift apart between the two faces' writes.
+export interface EnvironmentWriteTarget {
+  file: string
+  text: string
+  // The file as the loader reads it now, so a request is checked against what is declared before
+  // anything is written.
+  environment: Extract<ParseResult, { ok: true }>
+}
+
+export function openEnvironmentForWrite(
+  tier: EnvironmentTier,
   config: EngineConfig = resolveDefaultConfig(),
-): DefineOutcome {
-  const location = environmentFiles(config).find((candidate) => candidate.tier === request.tier)
-  // A tier outside the closed list names no file, so the definition is refused rather than thrown:
-  // every other bad definition answers with a reason, and this one does too.
+): EnvironmentWriteTarget | Exclude<DefineOutcome, { kind: 'defined' }> {
+  const location = environmentFiles(config).find((candidate) => candidate.tier === tier)
+  // A tier outside the closed list names no file, so the write is refused rather than thrown:
+  // every other bad write answers with a reason, and this one does too.
   if (location === undefined) {
-    return { kind: 'failed', reason: `no environment file for tier ${request.tier}` }
+    return { kind: 'failed', reason: `no environment file for tier ${tier}` }
   }
 
   const existing = existsSync(location.file) ? readFileSync(location.file, 'utf8') : ''
@@ -70,8 +82,41 @@ export function defineProvision(
 
   // The file as it stands is the loader's business first: a file it refuses is not one to add a
   // definition to, and its refusal already names the line to fix.
-  const before = parseEnvironmentFile(text)
-  if (!before.ok) return { kind: 'refused', refusal: before.refusal }
+  const parsed = parseEnvironmentFile(text)
+  if (!parsed.ok) return { kind: 'refused', refusal: parsed.refusal }
+  return { file: location.file, text, environment: parsed }
+}
+
+// The second half of the sequence: the candidate bytes get the same parse the loader runs, and
+// only what it would accept reaches disk — as one file write, never a partial one.
+export function commitEnvironmentWrite(
+  target: EnvironmentWriteTarget,
+  written: string,
+  tier: EnvironmentTier,
+  pointer: string,
+): DefineOutcome {
+  const after = parseEnvironmentFile(written)
+  if (!after.ok) return { kind: 'refused', refusal: after.refusal }
+
+  mkdirSync(path.dirname(target.file), { recursive: true })
+  writeFileSync(target.file, written)
+  return {
+    kind: 'defined',
+    tier,
+    file: target.file,
+    pointer,
+    digest: digestOfBytes(Buffer.from(written)),
+  }
+}
+
+export function defineProvision(
+  request: DefineRequest,
+  config: EngineConfig = resolveDefaultConfig(),
+): DefineOutcome {
+  const target = openEnvironmentForWrite(request.tier, config)
+  if ('kind' in target) return target
+  const before = target.environment
+  const text = target.text
 
   // The file's own harness list is the constraint the parser enforces on a hand edit, so a
   // definition is held to it before anything is written: a name the list does not carry is a
@@ -168,20 +213,7 @@ export function defineProvision(
     written = table.text
   }
 
-  // The same parser the loader runs, over the bytes that would land: a definition the loader would
-  // refuse is refused here, with that reason, and the file is left as it was.
-  const after = parseEnvironmentFile(written)
-  if (!after.ok) return { kind: 'refused', refusal: after.refusal }
-
-  mkdirSync(path.dirname(location.file), { recursive: true })
-  writeFileSync(location.file, written)
-  return {
-    kind: 'defined',
-    tier: request.tier,
-    file: location.file,
-    pointer: tomlPath(entry),
-    digest: digestOfBytes(Buffer.from(written)),
-  }
+  return commitEnvironmentWrite(target, written, request.tier, tomlPath(entry))
 }
 
 // A checks list keeps the spelling the table already has: `checks = [ … ]` stays a list, and a

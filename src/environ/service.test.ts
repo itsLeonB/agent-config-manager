@@ -406,3 +406,18 @@ install = "true"
     },
   ])
 })
+
+// Harness names come from a file, so the footer prints them through `printable` like every other
+// file-derived value: a control character in a name cannot forge a second line.
+test('the footer prints declared harness names through printable', () => {
+  const printed = formatStatus({
+    provisions: [],
+    refusals: [],
+    harnesses: { user: ['pi\ncodex'], project: [] },
+    home: '/home/u',
+    projectRoot: '/repo',
+    storePath: '/store/dashboard.db',
+    readFiles: [],
+  })
+  assert.match(printed, /harnesses: user pi\?codex; project none declared/)
+})

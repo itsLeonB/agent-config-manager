@@ -160,3 +160,102 @@ install = "y"
   assert.equal(nested, '[provision.x.pi]\nharnesses = ["pi"]\n')
   assert.equal(parses(after, 'toml'), true)
 })
+
+// A root key's value can hold brackets a scanner must not count: inside a literal string, inside a
+// comment, or inside a multi-line string. The key's lines end where its value ends, and the tables
+// after it are somebody else's bytes.
+test('deleteTomlKey stops a root value at brackets inside strings and comments', () => {
+  const before = `version = 1
+harnesses = ['[', "pi"] # a [ in a comment opens nothing
+
+[provision.demo.pi]
+check = { file = "x" }
+install = "y"
+`
+  const after = deleteTomlKey(before, 'harnesses')
+  assert.equal(
+    after,
+    `version = 1
+
+[provision.demo.pi]
+check = { file = "x" }
+install = "y"
+`,
+  )
+  assert.equal(parses(after, 'toml'), true)
+
+  const multiline = `version = 1
+harnesses = [
+  "pi", # [ this comment bracket is not a bracket
+  "codex",
+]
+
+[provision.demo.pi]
+check = { file = "x" }
+`
+  const cleared = deleteTomlKey(multiline, 'harnesses')
+  assert.equal(
+    cleared,
+    `version = 1
+
+[provision.demo.pi]
+check = { file = "x" }
+`,
+  )
+  assert.equal(parses(cleared, 'toml'), true)
+})
+
+test('a root key with a multi-line string value ends where the string ends', () => {
+  const before = `version = 1
+notes = '''
+a [ bracket
+] another
+'''
+harnesses = ["pi"]
+
+[provision.demo.pi]
+check = { file = "x" }
+`
+  const after = deleteTomlKey(before, 'notes')
+  assert.equal(
+    after,
+    `version = 1
+harnesses = ["pi"]
+
+[provision.demo.pi]
+check = { file = "x" }
+`,
+  )
+  assert.equal(parses(after, 'toml'), true)
+})
+
+// A TOML key may be literal-quoted: `'harnesses'` names the same key as `harnesses`, so a write and
+// a delete must find it — and a replace must not leave a second spelling behind.
+test('a literal-quoted root key is found, replaced, and deleted like a bare one', () => {
+  const before = `version = 1
+'harnesses' = ["pi"]
+
+[provision.demo.pi]
+check = { file = "x" }
+`
+  const replaced = toml(before, 'harnesses', ['codex'])
+  assert.equal(
+    replaced,
+    `version = 1
+harnesses = ["codex"]
+
+[provision.demo.pi]
+check = { file = "x" }
+`,
+  )
+  const cleared = deleteTomlKey(before, 'harnesses')
+  assert.equal(
+    cleared,
+    `version = 1
+
+[provision.demo.pi]
+check = { file = "x" }
+`,
+  )
+  assert.equal(parses(cleared, 'toml'), true)
+})

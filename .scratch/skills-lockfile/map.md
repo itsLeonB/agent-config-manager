@@ -24,9 +24,11 @@ Spec: [spec.md](../spec.md). Tickets: [issues/](issues/).
 - [04 Install skills from the lockfiles](issues/04-install-skills-from-the-lockfiles.md): resolved
   on `66e19c2` — `acm skills install [--dry-run]` reads both skills lockfiles, groups by source,
   and runs `npx -y skills@latest add` per group with the tier's harness list; user groups run with
-  `-g`, project groups from the Project root; failures warn and never stop the rest. Note: the
-  lockfile paths follow the Answer's `$XDG_STATE_HOME`/`~/.agents` layout — the final review will
-  assess that deviation.
+  `-g`, project groups from the Project root; failures warn and never stop the rest. Review fixes:
+  the user lockfile path is the fixed `~/.agents/.skill-lock.json` (the `$XDG_STATE_HOME` lookup
+  is gone), the reader split into pure `parseSkillsLock(bytes)` plus an fs wrapper, skill order
+  follows the bytes rather than `JSON.parse`'s integer-key ordering, a throwing spawn is one
+  command's failure, and printed commands go through `printable`.
 - [03 The declare_harnesses MCP tool](issues/03-declare-harnesses-mcp-tool.md): resolved on
   `d71b052` (merged `c9d9c58`) — `src/environ/declare.ts` replaces or clears one tier's
   `harnesses` key through the pointer editor, validates the candidate bytes before writing, and
@@ -35,5 +37,8 @@ Spec: [spec.md](../spec.md). Tickets: [issues/](issues/).
 
 ## Fog
 
-- All tickets are resolved; the two-axis review is pending. The lockfile-path deviation noted
-  under 04 is pending the final review.
+- All tickets are resolved and the two-axis review's findings are fixed on this branch: the
+  root-key scanner is TOML-state aware and reads literal-quoted keys, the skills reader is a
+  pure bytes function at the spec's fixed path, spawn failures are per-command, printed
+  file-derived text goes through `printable`, and the define/declare write sequence is shared.
+  No real `npx skills` install has been run — the fake-`npx` fixture is the coverage.

@@ -19,12 +19,15 @@
 `src/environ/skills.ts` owns the lockfile reader and the installer; `acm skills install [--dry-run]`
 in `src/cli/main.ts` is the only caller, re-exported through `src/environ/service.ts` like the run.
 
-The reader (`readSkillsLock`) is a pure function over bytes: it accepts the shared `{ version,
-skills }` shape both lockfiles use (global v3, project v1 — the version field is not gated, so a
-newer schema's entries still read), warns on a missing file, unreadable bytes, invalid JSON, or a
-missing/non-map `skills` key, and skips an entry without a string `source` with a warning. The root
-and per-entry shapes parse through zod at the I/O boundary. The global path honours
-`$XDG_STATE_HOME/skills/.skill-lock.json`, falling back to `~/.agents/.skill-lock.json`; the project
+The reader is a pure function over bytes (`parseSkillsLock`), with `readSkillsLock(file, tier)`
+as the thin filesystem wrapper for existence and readability: it accepts the shared
+`{ version, skills }` shape both lockfiles use (global v3, project v1 — the version field is not
+gated, so a newer schema's entries still read), warns on unreadable bytes, invalid JSON, or a
+missing/non-map `skills` key, and skips an entry without a string `source` with a warning. Member
+order comes from a byte-level walk, not `Object.entries`, because `JSON.parse` orders
+integer-like keys numerically and the lockfile's file order is the truth. The root and per-entry
+shapes parse through zod at the I/O boundary. The global path is the fixed
+`~/.agents/.skill-lock.json` — the spec names it and no environment variable moves it; the project
 path is `<project>/skills-lock.json`.
 
 `skillsCommands` is the pure grouping half: entries group by `source` in first-seen order, names keep
@@ -34,9 +37,10 @@ a tier with no declared harnesses omits `--agent`. The harness lists come from
 `loadEnvironment(config).harnessesByTier`, the per-file lists ticket 02 added.
 
 `skillsInstallRun` prints warnings to stderr, prints each command (shell-quoted via
-`installCommand`'s `shellWord`, now exported from `command.ts`), spawns `npx` with argv — no shell —
-and prints `exit <status>` per command; any non-zero status or a spawn failure makes the exit status
-1 while every group still runs. `--dry-run` prints the commands and `dry run: nothing was run`.
+`installCommand`'s `shellWord`, now exported from `command.ts`, and printed through `printable` so
+file bytes cannot forge a line — the argv itself is untouched), spawns `npx` with argv — no shell —
+and prints `exit <status>` per command; a non-zero status, a spawn error, or a spawn that throws
+(a NUL byte in an argument, say) makes the exit status 1 while every group still runs. `--dry-run` prints the commands and `dry run: nothing was run`.
 Nothing touches the store.
 
 Tests: `src/environ/skills.test.ts` covers Seam B (reader shapes) and Seam A (a fixture with a fake
